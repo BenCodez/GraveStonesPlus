@@ -1,0 +1,8 @@
+com\bencodez\gravestonesplus\GraveStonesPlus.class
+com\bencodez\gravestonesplus\graves\GravesConfig.class
+com\bencodez\gravestonesplus\config\GraveLocations.class
+com\bencodez\gravestonesplus\listeners\PlayerBreakBlock.class
+com\bencodez\gravestonesplus\graves\Grave.class
+com\bencodez\gravestonesplus\listeners\PlayerDeathListener.class
+com\bencodez\gravestonesplus\config\Config.class
+com\bencodez\gravestonesplus\listeners\PlayerInteract.class

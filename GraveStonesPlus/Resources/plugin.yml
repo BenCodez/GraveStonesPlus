@@ -1,0 +1,6 @@
+name: ${project.name}
+version: ${project.version}
+main: com.bencodez.gravestonesplus.GraveStonesPlus
+description: Description
+author: BenCodez
+api-version: 1.13

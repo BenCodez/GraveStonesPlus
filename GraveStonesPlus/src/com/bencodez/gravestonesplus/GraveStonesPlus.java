@@ -7,6 +7,10 @@ import org.bukkit.Bukkit;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
+import com.bencodez.advancedcore.api.command.CommandHandler;
+import com.bencodez.gravestonesplus.commands.CommandLoader;
+import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
+import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
 import com.bencodez.gravestonesplus.config.Config;
 import com.bencodez.gravestonesplus.config.GraveLocations;
 import com.bencodez.gravestonesplus.graves.Grave;
@@ -22,6 +26,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	static {
 		ConfigurationSerialization.registerClass(GravesConfig.class);
 	}
+
+	@Getter
+	private ArrayList<CommandHandler> commands = new ArrayList<CommandHandler>();
+
+	@Getter
+	private CommandLoader commandLoader;
 
 	@Getter
 	private List<Grave> graves;
@@ -53,9 +63,15 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			}
 		}
 
+		commandLoader = new CommandLoader(this);
+		commandLoader.loadCommands();
+
 		Bukkit.getPluginManager().registerEvents(new PlayerDeathListener(this), this);
 		Bukkit.getPluginManager().registerEvents(new PlayerInteract(this), this);
 		Bukkit.getPluginManager().registerEvents(new PlayerBreakBlock(this), this);
+
+		getCommand("gravestonesplus").setExecutor(new CommandGraveStonesPlus(this));
+		getCommand("gravestonesplus").setTabCompleter(new GraveStonesPlusTabCompleter(this));
 	}
 
 	@Override
@@ -81,6 +97,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	public void reload() {
 		configFile.reloadData();
 		updateAdvancedCoreHook();
+		reloadAdvancedCore(false);
 	}
 
 	private void updateAdvancedCoreHook() {

@@ -4,3 +4,8 @@ main: com.bencodez.gravestonesplus.GraveStonesPlus
 description: Description
 author: BenCodez
 api-version: 1.13
+libraries:
+  - org.openjdk.nashorn:nashorn-core:15.2
+commands:
+  gravestonesplus:
+    description: Main plugin command

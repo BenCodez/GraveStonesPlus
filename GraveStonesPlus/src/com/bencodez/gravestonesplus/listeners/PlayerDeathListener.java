@@ -1,7 +1,6 @@
 package com.bencodez.gravestonesplus.listeners;
 
-import java.util.ArrayList;
-import java.util.List;
+import java.util.HashMap;
 
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -12,6 +11,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
@@ -59,10 +59,22 @@ public class PlayerDeathListener implements Listener {
 			skull.update();
 		}
 
-		List<ItemStack> drops = new ArrayList<ItemStack>(event.getDrops());
+		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>();
+		PlayerInventory inv = event.getEntity().getInventory();
+		for (int i = 0; i < 36; i++) {
+			ItemStack item = inv.getItem(i);
+			if (item != null) {
+				itemsWithSlot.put(i, item);
+			}
+		}
+		itemsWithSlot.put(-1, inv.getHelmet());
+		itemsWithSlot.put(-2, inv.getChestplate());
+		itemsWithSlot.put(-3, inv.getLeggings());
+		itemsWithSlot.put(-4, inv.getBoots());
+		itemsWithSlot.put(-5, inv.getItemInOffHand());
 
 		Grave grave = new Grave(new GravesConfig(event.getEntity().getUniqueId(), event.getEntity().getName(),
-				emptyBlock, drops, event.getDroppedExp(), event.getDeathMessage(), System.currentTimeMillis()));
+				emptyBlock, itemsWithSlot, event.getDroppedExp(), event.getDeathMessage(), System.currentTimeMillis()));
 		grave.createHologram();
 		plugin.addGrave(grave);
 

@@ -1,7 +1,6 @@
 package com.bencodez.gravestonesplus.graves;
 
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
@@ -16,7 +15,7 @@ import lombok.Getter;
 public class GravesConfig implements ConfigurationSerializable {
 
 	@Getter
-	private List<ItemStack> items;
+	private HashMap<Integer, ItemStack> items;
 
 	@Getter
 	private int exp;
@@ -33,8 +32,8 @@ public class GravesConfig implements ConfigurationSerializable {
 	@Getter
 	private long time;
 
-	public GravesConfig(UUID uuid, String playerName, Location loc, List<ItemStack> items, int exp, String deathMessage,
-			long time) {
+	public GravesConfig(UUID uuid, String playerName, Location loc, HashMap<Integer, ItemStack> items, int exp,
+			String deathMessage, long time) {
 		this.uuid = uuid;
 		this.location = loc;
 		this.items = items;
@@ -67,7 +66,7 @@ public class GravesConfig implements ConfigurationSerializable {
 				new Location(Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString())),
 						NumberConversions.toInt(deserialize.get("X")), NumberConversions.toInt(deserialize.get("Y")),
 						NumberConversions.toInt(deserialize.get("Z"))),
-				(List<ItemStack>) deserialize.get("Items"), NumberConversions.toInt(deserialize.get("EXP")),
+				(HashMap<Integer, ItemStack>) deserialize.get("Items"), NumberConversions.toInt(deserialize.get("EXP")),
 				deserialize.get("DeathMessage").toString(), NumberConversions.toLong(deserialize.get("Time")));
 	}
 

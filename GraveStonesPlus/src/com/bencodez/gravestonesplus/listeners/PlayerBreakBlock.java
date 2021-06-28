@@ -39,7 +39,7 @@ public class PlayerBreakBlock implements Listener {
 	 * @param event the event
 	 */
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
-	public void onPlayerInteract(BlockBreakEvent event) {
+	public void onBlockBreak(BlockBreakEvent event) {
 		if (event.getPlayer() != null) {
 			if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
 				for (Grave grave : plugin.getGraves()) {
@@ -54,7 +54,7 @@ public class PlayerBreakBlock implements Listener {
 								PlayerInventory currentInv = event.getPlayer().getInventory();
 								if (item.getKey().intValue() >= 0) {
 									ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
-									if (currentItem == null) {
+									if (isSlotAvailable(currentItem)) {
 										currentInv.setItem(item.getKey().intValue(), item.getValue());
 									} else {
 										user.giveItem(item.getValue());
@@ -62,35 +62,35 @@ public class PlayerBreakBlock implements Listener {
 								} else {
 									switch (item.getKey().intValue()) {
 									case -1:
-										if (currentInv.getHelmet() == null) {
+										if (isSlotAvailable(currentInv.getHelmet())) {
 											currentInv.setHelmet(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
 										}
 										break;
 									case -2:
-										if (currentInv.getChestplate() == null) {
+										if (isSlotAvailable(currentInv.getChestplate())) {
 											currentInv.setChestplate(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
 										}
 										break;
 									case -3:
-										if (currentInv.getLeggings() == null) {
+										if (isSlotAvailable(currentInv.getLeggings())) {
 											currentInv.setLeggings(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
 										}
 										break;
 									case -4:
-										if (currentInv.getBoots() == null) {
+										if (isSlotAvailable(currentInv.getBoots())) {
 											currentInv.setBoots(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
 										}
 										break;
 									case -5:
-										if (currentInv.getItemInOffHand() == null) {
+										if (isSlotAvailable(currentInv.getItemInOffHand())) {
 											currentInv.setItemInOffHand(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
@@ -110,5 +110,12 @@ public class PlayerBreakBlock implements Listener {
 				}
 			}
 		}
+	}
+
+	public boolean isSlotAvailable(ItemStack slot) {
+		if (slot == null || slot.getType().isAir()) {
+			return true;
+		}
+		return false;
 	}
 }

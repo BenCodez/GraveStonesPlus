@@ -72,4 +72,10 @@ public class Grave {
 		return gravesConfig.getLocation().getBlock().getType().equals(Material.PLAYER_HEAD);
 	}
 
+	public String getGraveMessage() {
+		Location loc = gravesConfig.getLocation();
+		return "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ()
+				+ ") Time of death: " + new Date(gravesConfig.getTime());
+	}
+
 }

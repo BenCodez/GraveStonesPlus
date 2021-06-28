@@ -5,6 +5,7 @@ import java.util.List;
 
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
+import org.bukkit.entity.Player;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
@@ -110,5 +111,28 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	private GraveLocations gravesConfig;
+
+	public List<Grave> getGraves(Player player) {
+		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
+		for (Grave grave : getGraves()) {
+			if (grave.isOwner(player)) {
+				ownedGraves.add(grave);
+			}
+		}
+		return ownedGraves;
+	}
+
+	public Grave getLatestGrave(Player player) {
+		long time = 0;
+		Grave cGrave = null;
+		for (Grave grave : getGraves(player)) {
+			long cTime = grave.getGravesConfig().getTime();
+			if (cTime > time) {
+				time = cTime;
+				cGrave = grave;
+			}
+		}
+		return cGrave;
+	}
 
 }

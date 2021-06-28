@@ -37,6 +37,10 @@ public class PlayerDeathListener implements Listener {
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onPlayerDeath(PlayerDeathEvent event) {
 		Location deathLocation = event.getEntity().getLocation();
+		if (plugin.getConfigFile().getDisabledWorlds().contains(deathLocation.getWorld().getName())) {
+			plugin.debug("Graves in " + deathLocation.getWorld().getName() + " are disabled");
+			return;
+		}
 		Location emptyBlock = null;
 		if (deathLocation.getBlock().isEmpty()) {
 			emptyBlock = deathLocation;
@@ -45,10 +49,12 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		if (emptyBlock == null) {
-			plugin.getLogger().info("Failed to find air block");
+			plugin.getLogger().info("Failed to find air block, can't make grave");
+			return;
 		}
 		if (event.getKeepInventory()) {
-			plugin.getLogger().info("Inventory was not dropped");
+			plugin.getLogger().info("Inventory was not dropped, not making grave");
+			return;
 		}
 
 		Block block = emptyBlock.getBlock();
@@ -59,6 +65,7 @@ public class PlayerDeathListener implements Listener {
 			skull.update();
 		}
 
+		// store items with slot number
 		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>();
 		PlayerInventory inv = event.getEntity().getInventory();
 		for (int i = 0; i < 36; i++) {
@@ -67,6 +74,8 @@ public class PlayerDeathListener implements Listener {
 				itemsWithSlot.put(i, item);
 			}
 		}
+
+		// store items outside of inventory
 		itemsWithSlot.put(-1, inv.getHelmet());
 		itemsWithSlot.put(-2, inv.getChestplate());
 		itemsWithSlot.put(-3, inv.getLeggings());
@@ -90,10 +99,21 @@ public class PlayerDeathListener implements Listener {
 	public Location getAirBlock(Location loc) {
 		for (int i = loc.getBlockY(); i < loc.getWorld().getMaxHeight(); i++) {
 			Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
-			if (b.isEmpty()) {
+			if (b.isEmpty() || isReplaceable(b.getType())) {
 				return b.getLocation();
 			}
 		}
 		return null;
+	}
+
+	public boolean isReplaceable(Material material) {
+		switch (material) {
+		case TALL_GRASS:
+			return true;
+		case GRASS:
+			return true;
+		default:
+			return false;
+		}
 	}
 }

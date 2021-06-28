@@ -1,0 +1,8 @@
+DebugLevel: NONE
+
+# if enabled, you can break other graves with permission:
+# GraveStonesPlus.BreakOtherGraves
+BreakOtherGravesWithPermission: false
+
+# List of worlds with graves disabled
+DisabledWorlds: []

@@ -44,7 +44,9 @@ public class PlayerBreakBlock implements Listener {
 			if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
 				for (Grave grave : plugin.getGraves()) {
 					if (grave.isGrave(event.getBlock())) {
-						if (grave.isOwner(event.getPlayer())) {
+						if (grave.isOwner(event.getPlayer())
+								|| (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")
+										&& plugin.getConfigFile().isBreakOtherGravesWithPermission())) {
 							AdvancedCoreUser user = UserManager.getInstance().getUser(event.getPlayer());
 							user.giveExp(grave.getGravesConfig().getExp());
 

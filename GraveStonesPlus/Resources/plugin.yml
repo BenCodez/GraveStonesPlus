@@ -9,3 +9,7 @@ libraries:
 commands:
   gravestonesplus:
     description: Main plugin command
+permissions:
+  GraveStonesPlus.BreakOtherGraves:
+    description: Allows you to break other graves
+    

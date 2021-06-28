@@ -30,7 +30,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		graves.add(grave);
 		gravesConfig.setGraves(graves);
 	}
-	
+
 	public void removeGrave(Grave grave) {
 		graves.remove(grave);
 		gravesConfig.setGraves(graves);
@@ -43,7 +43,14 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	public void onPostLoad() {
 		graves = new ArrayList<Grave>();
 		for (GravesConfig gr : gravesConfig.loadGraves()) {
-			graves.add(new Grave(gr));
+			Grave grave = new Grave(gr);
+			if (grave.isValid()) {
+				grave.createHologram();
+				graves.add(grave);
+				debug("Grave loaded: " + grave.getGravesConfig().getLocation());
+			} else {
+				debug("Grave at " + grave.getGravesConfig().getLocation() + " is not valid");
+			}
 		}
 
 		Bukkit.getPluginManager().registerEvents(new PlayerDeathListener(this), this);
@@ -63,6 +70,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Override
 	public void onUnLoad() {
 		gravesConfig.setGraves(graves);
+		for (Grave grave : graves) {
+			grave.removeHologram();
+		}
 
 		plugin = null;
 	}

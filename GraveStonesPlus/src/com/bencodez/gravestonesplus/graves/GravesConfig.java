@@ -52,9 +52,9 @@ public class GravesConfig implements ConfigurationSerializable {
 		serialized.put("UUID", uuid.toString());
 		serialized.put("PlayerName", playerName);
 		serialized.put("World", location.getWorld().getUID().toString());
-		serialized.put("X", location.getX());
-		serialized.put("Y", location.getY());
-		serialized.put("Z", location.getZ());
+		serialized.put("X", location.getBlockX());
+		serialized.put("Y", location.getBlockY());
+		serialized.put("Z", location.getBlockZ());
 		serialized.put("Items", items);
 		serialized.put("EXP", exp);
 		return serialized;

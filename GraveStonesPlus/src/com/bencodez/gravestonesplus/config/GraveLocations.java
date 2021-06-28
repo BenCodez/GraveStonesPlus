@@ -3,8 +3,6 @@ package com.bencodez.gravestonesplus.config;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
-import java.util.stream.Collectors;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.yml.YMLFile;
@@ -39,10 +37,9 @@ public class GraveLocations extends YMLFile {
 	@SuppressWarnings("unchecked")
 	public List<GravesConfig> loadGraves() {
 		if (getData() != null) {
-			return getData().getMapList("graves").stream()
-					.map(serializedStat -> GravesConfig.deserialize((Map<String, Object>) serializedStat))
-					.collect(Collectors.toList());
+			return (List<GravesConfig>) getData().getList("graves");
 		} else {
+			getPlugin().debug("Graves.yml: Data == null");
 			return new ArrayList<GravesConfig>();
 		}
 	}

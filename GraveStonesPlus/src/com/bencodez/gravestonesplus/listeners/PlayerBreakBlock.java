@@ -44,11 +44,14 @@ public class PlayerBreakBlock implements Listener {
 						if (grave.isOwner(event.getPlayer())) {
 							AdvancedCoreUser user = UserManager.getInstance().getUser(event.getPlayer());
 							user.giveExp(grave.getGravesConfig().getExp());
+
 							for (ItemStack item : grave.getGravesConfig().getItems()) {
 								user.giveItem(item);
 							}
 							user.sendMessage("You broke your grave!");
-							plugin.removeGrave(grave);	
+							grave.removeHologram();
+							plugin.removeGrave(grave);
+							return;
 						}
 						event.getPlayer().sendMessage("Not your grave!");
 						return;

@@ -123,6 +123,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private void updateAdvancedCoreHook() {
 		getJavascriptEngine().put("GraveStonesPlus", this);
 		setConfigData(configFile.getData());
+		setLoadUserData(false);
 	}
 
 	@Getter

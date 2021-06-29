@@ -166,4 +166,11 @@ public class Grave {
 		}
 	}
 
+	public String getAllGraveMessage() {
+		Location loc = gravesConfig.getLocation();
+		return "Player: " + gravesConfig.getPlayerName() + ", Location: " + loc.getWorld().getName() + " ("
+				+ loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ() + ") Time of death: "
+				+ new Date(gravesConfig.getTime());
+	}
+
 }

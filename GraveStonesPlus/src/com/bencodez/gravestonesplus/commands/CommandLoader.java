@@ -45,6 +45,23 @@ public class CommandLoader {
 					}
 				});
 
+		plugin.getCommands().add(new CommandHandler(new String[] { "AllGraves" }, "GraveStonesPlus.AllGraves",
+				"See all current graves") {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				List<Grave> graves = plugin.getGraves();
+				ArrayList<String> msg = new ArrayList<String>();
+				msg.add("All graves:");
+				int num = 1;
+				for (Grave gr : graves) {
+					msg.add(num + ": " + gr.getAllGraveMessage());
+					num++;
+				}
+				sendMessage(sender, msg);
+			}
+		});
+
 		plugin.getCommands().add(new CommandHandler(new String[] { "Graves", "(player)" },
 				"GraveStonesPlus.Graves.Other", "See current graves", false) {
 

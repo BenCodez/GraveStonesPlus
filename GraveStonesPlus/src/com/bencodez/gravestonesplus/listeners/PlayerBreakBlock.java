@@ -50,6 +50,7 @@ public class PlayerBreakBlock implements Listener {
 							AdvancedCoreUser user = UserManager.getInstance().getUser(event.getPlayer());
 							user.giveExp(grave.getGravesConfig().getExp());
 
+							boolean notInCorrectSlot = false;
 							for (Entry<Integer, ItemStack> item : grave.getGravesConfig().getItems().entrySet()) {
 								PlayerInventory currentInv = event.getPlayer().getInventory();
 								if (item.getKey().intValue() >= 0) {
@@ -57,6 +58,7 @@ public class PlayerBreakBlock implements Listener {
 									if (isSlotAvailable(currentItem)) {
 										currentInv.setItem(item.getKey().intValue(), item.getValue());
 									} else {
+										notInCorrectSlot = true;
 										user.giveItem(item.getValue());
 									}
 								} else {
@@ -66,6 +68,7 @@ public class PlayerBreakBlock implements Listener {
 											currentInv.setHelmet(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
+											notInCorrectSlot = true;
 										}
 										break;
 									case -2:
@@ -73,6 +76,7 @@ public class PlayerBreakBlock implements Listener {
 											currentInv.setChestplate(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
+											notInCorrectSlot = true;
 										}
 										break;
 									case -3:
@@ -80,6 +84,7 @@ public class PlayerBreakBlock implements Listener {
 											currentInv.setLeggings(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
+											notInCorrectSlot = true;
 										}
 										break;
 									case -4:
@@ -87,6 +92,7 @@ public class PlayerBreakBlock implements Listener {
 											currentInv.setBoots(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
+											notInCorrectSlot = true;
 										}
 										break;
 									case -5:
@@ -94,12 +100,16 @@ public class PlayerBreakBlock implements Listener {
 											currentInv.setItemInOffHand(item.getValue());
 										} else {
 											user.giveItem(item.getValue());
+											notInCorrectSlot = true;
 										}
 										break;
 									}
 								}
 							}
 							user.sendMessage("You broke your grave!");
+							if (notInCorrectSlot) {
+								user.sendMessage("Some items didn't return to their correct slot");
+							}
 							grave.removeHologram();
 							plugin.removeGrave(grave);
 							return;

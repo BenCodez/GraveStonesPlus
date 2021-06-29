@@ -1,6 +1,8 @@
 package com.bencodez.gravestonesplus.graves;
 
 import java.util.Date;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -27,6 +29,9 @@ public class Grave {
 
 	@Getter
 	private Hologram glowingHologram;
+
+	@Getter
+	private Timer timer;
 
 	public Grave(GravesConfig gravesConfig) {
 		this.gravesConfig = gravesConfig;
@@ -89,6 +94,49 @@ public class Grave {
 		return gravesConfig.getPlayerName().equalsIgnoreCase(player);
 	}
 
+	public void removeGrave() {
+		Bukkit.getScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				gravesConfig.getLocation().getBlock().setType(Material.AIR);
+			}
+		});
+		removeHologram();
+		removeTimer();
+		GraveStonesPlus.plugin.removeGrave(this);
+	}
+
+	private void schedule(int timeLimit) {
+		if (timer != null) {
+			timer.cancel();
+		}
+		timer = new Timer();
+		timer.schedule(new TimerTask() {
+
+			@Override
+			public void run() {
+				long deathTime = gravesConfig.getTime();
+				long timedPassed = deathTime += (timeLimit * 60 * 1000);
+				if (timedPassed < System.currentTimeMillis()) {
+					removeGrave();
+				}
+			}
+		}, timeLimit * 60 * 1000 + 500);
+	}
+
+	public void checkTimeLimit(int timeLimit) {
+		if (timeLimit > 0) {
+			long deathTime = gravesConfig.getTime();
+			long timedPassed = deathTime + (timeLimit * 60 * 1000);
+			if (timedPassed < System.currentTimeMillis()) {
+				removeGrave();
+			} else {
+				schedule(timeLimit);
+			}
+		}
+	}
+
 	public void checkGlowing() {
 		if (gravesConfig.getUuid() != null) {
 			Player p = Bukkit.getPlayer(gravesConfig.getUuid());
@@ -96,7 +144,8 @@ public class Grave {
 				if (p.getLocation().distance(gravesConfig.getLocation()) < GraveStonesPlus.plugin.getConfigFile()
 						.getGlowingEffectDistance()) {
 					if (glowingHologram == null) {
-						glowingHologram = new Hologram(gravesConfig.getLocation().clone().add(.5, -2, .5), "", false,
+						glowingHologram = new Hologram(
+								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
 								true);
 					}
 					glowingHologram.glow(true);
@@ -107,6 +156,13 @@ public class Grave {
 					}
 				}
 			}
+		}
+	}
+
+	public void removeTimer() {
+		if (timer != null) {
+			timer.cancel();
+			timer = null;
 		}
 	}
 

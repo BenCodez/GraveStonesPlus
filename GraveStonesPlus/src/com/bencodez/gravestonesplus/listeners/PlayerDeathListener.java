@@ -85,6 +85,7 @@ public class PlayerDeathListener implements Listener {
 		Grave grave = new Grave(new GravesConfig(event.getEntity().getUniqueId(), event.getEntity().getName(),
 				emptyBlock, itemsWithSlot, event.getDroppedExp(), event.getDeathMessage(), System.currentTimeMillis()));
 		grave.createHologram();
+		grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
 		plugin.addGrave(grave);
 
 		event.setDroppedExp(0);

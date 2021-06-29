@@ -59,6 +59,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			Grave grave = new Grave(gr);
 			if (grave.isValid()) {
 				grave.createHologram();
+				grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
 				graves.add(grave);
 				debug("Grave loaded: " + grave.getGravesConfig().getLocation());
 			} else {
@@ -77,7 +78,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		getCommand("gravestonesplus").setTabCompleter(new GraveStonesPlusTabCompleter(this));
 
 		new Timer().schedule(new TimerTask() {
-			
+
 			@Override
 			public void run() {
 				if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
@@ -88,7 +89,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 					cancel();
 				}
 			}
-		}, 1000*10, 1000*5);
+		}, 1000 * 10, 1000 * 5);
 	}
 
 	@Override
@@ -105,6 +106,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		gravesConfig.setGraves(graves);
 		for (Grave grave : graves) {
 			grave.removeHologram();
+			grave.removeTimer();
 		}
 
 		plugin = null;
@@ -113,6 +115,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Override
 	public void reload() {
 		configFile.reloadData();
+		gravesConfig.reloadData();
 		updateAdvancedCoreHook();
 		reloadAdvancedCore(false);
 	}

@@ -11,3 +11,7 @@ DisabledWorlds: []
 GlowingEffectNearGrave: true
 # Distance for glowing effect
 GlowingEffectDistance: 30
+
+# Timelimit in minutes before grave is removed
+# -1 is disabled
+GraveTimeLimit: -1

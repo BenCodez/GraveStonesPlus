@@ -2,12 +2,14 @@ package com.bencodez.gravestonesplus.graves;
 
 import java.util.Date;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
+import com.bencodez.gravestonesplus.GraveStonesPlus;
 
 import lombok.Getter;
 
@@ -22,6 +24,9 @@ public class Grave {
 	private Hologram middleHologram;
 	@Getter
 	private Hologram bottomHologram;
+
+	@Getter
+	private Hologram glowingHologram;
 
 	public Grave(GravesConfig gravesConfig) {
 		this.gravesConfig = gravesConfig;
@@ -59,13 +64,15 @@ public class Grave {
 		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
 				"Died at " + new Date(gravesConfig.getTime()));
 		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
-				"Died from " + gravesConfig.getDeathMessage());
+				"Reason: " + gravesConfig.getDeathMessage());
+		checkGlowing();
 	}
 
 	public void removeHologram() {
 		topHologram.kill();
 		middleHologram.kill();
 		bottomHologram.kill();
+		glowingHologram.kill();
 	}
 
 	public boolean isValid() {
@@ -74,8 +81,33 @@ public class Grave {
 
 	public String getGraveMessage() {
 		Location loc = gravesConfig.getLocation();
-		return "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ()
-				+ ") Time of death: " + new Date(gravesConfig.getTime());
+		return "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY() + ","
+				+ loc.getBlockZ() + ") Time of death: " + new Date(gravesConfig.getTime());
+	}
+
+	public boolean isOwner(String player) {
+		return gravesConfig.getPlayerName().equalsIgnoreCase(player);
+	}
+
+	public void checkGlowing() {
+		if (gravesConfig.getUuid() != null) {
+			Player p = Bukkit.getPlayer(gravesConfig.getUuid());
+			if (p != null) {
+				if (p.getLocation().distance(gravesConfig.getLocation()) < GraveStonesPlus.plugin.getConfigFile()
+						.getGlowingEffectDistance()) {
+					if (glowingHologram == null) {
+						glowingHologram = new Hologram(gravesConfig.getLocation().clone().add(.5, -2, .5), "", false,
+								true);
+					}
+					glowingHologram.glow(true);
+				} else {
+					if (glowingHologram != null) {
+						glowingHologram.kill();
+						glowingHologram = null;
+					}
+				}
+			}
+		}
 	}
 
 }

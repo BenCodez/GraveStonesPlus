@@ -2,6 +2,8 @@ package com.bencodez.gravestonesplus;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 
 import org.bukkit.Bukkit;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
@@ -73,6 +75,20 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 		getCommand("gravestonesplus").setExecutor(new CommandGraveStonesPlus(this));
 		getCommand("gravestonesplus").setTabCompleter(new GraveStonesPlusTabCompleter(this));
+
+		new Timer().schedule(new TimerTask() {
+			
+			@Override
+			public void run() {
+				if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
+					for (Grave grave : getGraves()) {
+						grave.checkGlowing();
+					}
+				} else {
+					cancel();
+				}
+			}
+		}, 1000*10, 1000*5);
 	}
 
 	@Override
@@ -113,6 +129,16 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private GraveLocations gravesConfig;
 
 	public List<Grave> getGraves(Player player) {
+		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
+		for (Grave grave : getGraves()) {
+			if (grave.isOwner(player)) {
+				ownedGraves.add(grave);
+			}
+		}
+		return ownedGraves;
+	}
+
+	public List<Grave> getGraves(String player) {
 		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
 		for (Grave grave : getGraves()) {
 			if (grave.isOwner(player)) {

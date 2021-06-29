@@ -6,3 +6,8 @@ BreakOtherGravesWithPermission: false
 
 # List of worlds with graves disabled
 DisabledWorlds: []
+
+# Enable a glowing effect near grave
+GlowingEffectNearGrave: true
+# Distance for glowing effect
+GlowingEffectDistance: 30

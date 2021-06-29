@@ -7,6 +7,7 @@ import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.yml.YMLFile;
 import com.bencodez.advancedcore.api.yml.annotation.AnnotationHandler;
 import com.bencodez.advancedcore.api.yml.annotation.ConfigDataBoolean;
+import com.bencodez.advancedcore.api.yml.annotation.ConfigDataInt;
 import com.bencodez.advancedcore.api.yml.annotation.ConfigDataListString;
 
 import lombok.Getter;
@@ -33,4 +34,12 @@ public class Config extends YMLFile {
 	@Getter
 	@ConfigDataListString(path = "DisabledWorlds")
 	private ArrayList<String> disabledWorlds = new ArrayList<String>();
+
+	@Getter
+	@ConfigDataBoolean(path = "GlowingEffectNearGrave")
+	private boolean glowingEffectNearGrave = true;
+
+	@Getter
+	@ConfigDataInt(path = "GlowingEffectDistance")
+	private int glowingEffectDistance = 30;
 }

@@ -11,6 +11,7 @@ import org.bukkit.entity.Player;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
+import com.bencodez.advancedcore.api.metrics.BStatsMetrics;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
@@ -90,6 +91,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 				}
 			}
 		}, 1000 * 10, 1000 * 5);
+
+		new BStatsMetrics(plugin, 11838);
 	}
 
 	@Override

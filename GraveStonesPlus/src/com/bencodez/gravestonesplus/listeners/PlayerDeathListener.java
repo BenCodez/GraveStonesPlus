@@ -13,6 +13,7 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
+import com.bencodez.advancedcore.api.messages.StringParser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GravesConfig;
@@ -91,8 +92,13 @@ public class PlayerDeathListener implements Listener {
 		event.setDroppedExp(0);
 		event.getDrops().clear();
 
-		event.getEntity().sendMessage("Your grave is at: " + emptyBlock.getBlockX() + ", " + emptyBlock.getBlockY()
-				+ ", " + emptyBlock.getBlockZ());
+		HashMap<String, String> placeholders = new HashMap<String, String>();
+		placeholders.put("x", "" + emptyBlock.getBlockX());
+		placeholders.put("y", "" + emptyBlock.getBlockY());
+		placeholders.put("z", "" + emptyBlock.getBlockZ());
+
+		event.getEntity().sendMessage(StringParser.getInstance().colorize(
+				StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders)));
 
 		plugin.getLogger().info("Grave: " + emptyBlock.toString());
 	}

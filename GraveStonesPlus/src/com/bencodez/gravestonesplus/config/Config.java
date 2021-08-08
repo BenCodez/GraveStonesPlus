@@ -9,6 +9,7 @@ import com.bencodez.advancedcore.api.yml.annotation.AnnotationHandler;
 import com.bencodez.advancedcore.api.yml.annotation.ConfigDataBoolean;
 import com.bencodez.advancedcore.api.yml.annotation.ConfigDataInt;
 import com.bencodez.advancedcore.api.yml.annotation.ConfigDataListString;
+import com.bencodez.advancedcore.api.yml.annotation.ConfigDataString;
 
 import lombok.Getter;
 
@@ -46,4 +47,18 @@ public class Config extends YMLFile {
 	@Getter
 	@ConfigDataInt(path = "GraveTimeLimit")
 	private int GraveTimeLimit = -1;
+
+	@Getter
+	@ConfigDataString(path = "Format.Death")
+	private String formatDeath = "Your grave is at %x%, %y%, %z%";
+	@Getter
+	@ConfigDataString(path = "Format.GraveBroke")
+	private String formatGraveBroke = "You broke your grave!";
+	@Getter
+	@ConfigDataString(path = "Format.ItemsNotInCorrectSite")
+	private String formatItemsNotInGrave = "Some items didn't return to the correct slot";
+	@Getter
+	@ConfigDataString(path = "Format.NotYourGrave")
+	private String formatNotYourGrave = "Not your grave!";
+
 }

@@ -11,7 +11,6 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
 import com.bencodez.advancedcore.api.user.AdvancedCoreUser;
-import com.bencodez.advancedcore.api.user.UserManager;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 
@@ -47,7 +46,7 @@ public class PlayerBreakBlock implements Listener {
 						if (grave.isOwner(event.getPlayer())
 								|| (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")
 										&& plugin.getConfigFile().isBreakOtherGravesWithPermission())) {
-							AdvancedCoreUser user = UserManager.getInstance().getUser(event.getPlayer());
+							AdvancedCoreUser user = plugin.getUserManager().getUser(event.getPlayer());
 							user.giveExp(grave.getGravesConfig().getExp());
 
 							boolean notInCorrectSlot = false;
@@ -106,15 +105,15 @@ public class PlayerBreakBlock implements Listener {
 									}
 								}
 							}
-							user.sendMessage("You broke your grave!");
+							user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
 							if (notInCorrectSlot) {
-								user.sendMessage("Some items didn't return to their correct slot");
+								user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
 							}
 							grave.removeHologram();
 							plugin.removeGrave(grave);
 							return;
 						}
-						event.getPlayer().sendMessage("Not your grave!");
+						event.getPlayer().sendMessage(plugin.getConfigFile().getFormatNotYourGrave());
 						return;
 					}
 				}

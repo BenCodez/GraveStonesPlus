@@ -15,3 +15,10 @@ GlowingEffectDistance: 30
 # Timelimit in minutes before grave is removed
 # -1 is disabled
 GraveTimeLimit: -1
+
+Format:
+  Death: 'Your grave is at %x%, %y%, %z%'
+  GraveBroke: 'You broke your grave!'
+  ItemsNotInCorrectSlot: "Some items didn't return to the correct slot"
+  NotYourGrave: 'Not your grave!'
+  

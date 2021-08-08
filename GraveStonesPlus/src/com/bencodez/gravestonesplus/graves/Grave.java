@@ -14,6 +14,7 @@ import com.bencodez.advancedcore.api.hologram.Hologram;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 
 import lombok.Getter;
+import lombok.Setter;
 
 public class Grave {
 
@@ -32,6 +33,10 @@ public class Grave {
 
 	@Getter
 	private Timer timer;
+
+	@Getter
+	@Setter
+	private long lastClick = 0;
 
 	public Grave(GravesConfig gravesConfig) {
 		this.gravesConfig = gravesConfig;

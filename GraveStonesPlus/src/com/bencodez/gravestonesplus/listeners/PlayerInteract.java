@@ -41,7 +41,12 @@ public class PlayerInteract implements Listener {
 			if (clicked.getType().equals(Material.PLAYER_HEAD)) {
 				for (Grave grave : plugin.getGraves()) {
 					if (grave.isGrave(clicked)) {
-						grave.onClick(event.getPlayer());
+						long lastClick = grave.getLastClick();
+						long cTime = System.currentTimeMillis();
+						grave.setLastClick(cTime);
+						if (cTime - lastClick > 500) {
+							grave.onClick(event.getPlayer());
+						}
 					}
 				}
 			}

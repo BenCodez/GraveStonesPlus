@@ -12,6 +12,7 @@ import org.bukkit.entity.Player;
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
 import com.bencodez.advancedcore.api.metrics.BStatsMetrics;
+import com.bencodez.advancedcore.api.updater.Updater;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
@@ -24,6 +25,7 @@ import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
 
 import lombok.Getter;
+import lombok.Setter;
 
 public class GraveStonesPlus extends AdvancedCorePlugin {
 
@@ -52,6 +54,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	public static GraveStonesPlus plugin;
+
+	@Getter
+	@Setter
+	private Updater updater;
 
 	@Override
 	public void onPostLoad() {
@@ -93,6 +99,37 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}, 1000 * 10, 1000 * 5);
 
 		new BStatsMetrics(plugin, 11838);
+
+		Bukkit.getScheduler().runTaskAsynchronously(this, new Runnable() {
+
+			@Override
+			public void run() {
+				setUpdater(new Updater(plugin, 95132, false));
+				Updater.UpdateResult result = plugin.getUpdater().getResult();
+				switch (result) {
+				case FAIL_SPIGOT: {
+					plugin.getLogger().info("Failed to check for update for " + plugin.getName() + "!");
+					break;
+				}
+				case NO_UPDATE: {
+					plugin.getLogger()
+							.info(plugin.getName() + " is up to date! Version: " + plugin.getUpdater().getVersion());
+					break;
+				}
+				case UPDATE_AVAILABLE: {
+					plugin.getLogger()
+							.info(plugin.getName() + " has an update available! Your Version: "
+									+ plugin.getDescription().getVersion() + " New Version: "
+									+ plugin.getUpdater().getVersion());
+					break;
+				}
+				default: {
+					break;
+				}
+				}
+			}
+		});
+
 	}
 
 	@Override

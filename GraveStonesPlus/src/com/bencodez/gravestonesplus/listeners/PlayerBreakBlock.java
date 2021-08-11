@@ -114,6 +114,7 @@ public class PlayerBreakBlock implements Listener {
 							return;
 						}
 						event.getPlayer().sendMessage(plugin.getConfigFile().getFormatNotYourGrave());
+						event.setCancelled(true);
 						return;
 					}
 				}

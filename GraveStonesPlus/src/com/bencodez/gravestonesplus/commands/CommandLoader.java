@@ -146,6 +146,24 @@ public class CommandLoader {
 			}
 		});
 
+		plugin.getCommands().add(new CommandHandler(new String[] { "CheckValidGraves" },
+				"GraveStonesPlus.CheckValidGraves", "Check and remove invalid graves") {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				sendMessage(sender, "&aChecking and removing invalid graves");
+				List<Grave> graves = plugin.getGraves();
+
+				for (Grave gr : graves) {
+					if (!gr.isValid()) {
+						sendMessage(sender, "&aRemoving grave: " + gr.getAllGraveMessage());
+						gr.removeGrave();
+					}
+				}
+
+			}
+		});
+
 		plugin.getCommands().add(new CommandHandler(new String[] { "Graves", "(player)" },
 				"GraveStonesPlus.Graves.Other", "See current graves", false) {
 

@@ -231,6 +231,10 @@
 			<id>velocity</id>
 			<url>https://nexus.velocitypowered.com/repository/maven-public/</url>
 		</repository>
+		<repository>
+			<id>bencodez repo</id>
+			<url>https://nexus.bencodez.com/repository/maven-public/</url>
+		</repository>
 	</repositories>
 	<dependencies>
 		<dependency>
@@ -281,7 +285,7 @@
 			<dependencies>
 				<dependency>
 					<groupId>com.bencodez</groupId>
-					<artifactId>AdvancedCore</artifactId>
+					<artifactId>advancedcore</artifactId>
 					<version>LATEST</version>
 					<scope>compile</scope>
 				</dependency>
@@ -295,7 +299,7 @@
 			<dependencies>
 				<dependency>
 					<groupId>com.bencodez</groupId>
-					<artifactId>AdvancedCore</artifactId>
+					<artifactId>advancedcore</artifactId>
 					<version>LATEST</version>
 					<scope>compile</scope>
 				</dependency>

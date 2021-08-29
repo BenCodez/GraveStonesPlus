@@ -1,6 +1,9 @@
 package com.bencodez.gravestonesplus.graves;
 
+import java.time.Duration;
+import java.time.LocalDateTime;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -11,6 +14,8 @@ import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
+import com.bencodez.advancedcore.api.messages.StringParser;
+import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 
 import lombok.Getter;
@@ -38,7 +43,10 @@ public class Grave {
 	@Setter
 	private long lastClick = 0;
 
-	public Grave(GravesConfig gravesConfig) {
+	private GraveStonesPlus plugin;
+
+	public Grave(GraveStonesPlus plugin, GravesConfig gravesConfig) {
+		this.plugin = plugin;
 		this.gravesConfig = gravesConfig;
 	}
 
@@ -70,11 +78,16 @@ public class Grave {
 
 	public void createHologram() {
 		Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
-		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0), gravesConfig.getPlayerName() + " died here!");
-		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
-				"Died at " + new Date(gravesConfig.getTime()));
-		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
-				"Reason: " + gravesConfig.getDeathMessage());
+		HashMap<String, String> placeholders = new HashMap<String, String>();
+		placeholders.put("player", gravesConfig.getPlayerName());
+		placeholders.put("time", "" + new Date(gravesConfig.getTime()));
+		placeholders.put("reason", gravesConfig.getDeathMessage());
+		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0), StringParser.getInstance()
+				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders));
+		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
+				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders));
+		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
+				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders));
 		checkGlowing();
 	}
 
@@ -82,7 +95,9 @@ public class Grave {
 		topHologram.kill();
 		middleHologram.kill();
 		bottomHologram.kill();
-		glowingHologram.kill();
+		if (glowingHologram != null) {
+			glowingHologram.kill();
+		}
 	}
 
 	public boolean isValid() {

@@ -60,10 +60,21 @@ public class Config extends YMLFile {
 	@Getter
 	@ConfigDataString(path = "Format.NotYourGrave")
 	private String formatNotYourGrave = "Not your grave!";
-	
+
 	@Getter
 	@ConfigDataBoolean(path = "Format.Help.RequirePermission")
 	private boolean formatHelpRequirePermission = true;
-	
+
+	@Getter
+	@ConfigDataString(path = "Format.Grave.Top")
+	private String formatGraveTop = "%player% died here!";
+
+	@Getter
+	@ConfigDataString(path = "Format.Grave.Middle")
+	private String formatGraveMiddle = "Died at %time%";
+
+	@Getter
+	@ConfigDataString(path = "Format.Grave.Bottom")
+	private String formatGraveBottom = "Reason: %reason%";
 
 }

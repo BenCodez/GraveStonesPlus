@@ -21,4 +21,8 @@ Format:
   GraveBroke: 'You broke your grave!'
   ItemsNotInCorrectSlot: "Some items didn't return to the correct slot"
   NotYourGrave: 'Not your grave!'
+  Grave:
+    Top: '%player% died here!'
+    Middle: 'Died at %time%'
+    Bottom: 'Reason: %reason%'
   

@@ -65,7 +65,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		List<GravesConfig> graves1 = gravesConfig.loadGraves();
 		if (graves1 != null) {
 			for (GravesConfig gr : graves1) {
-				Grave grave = new Grave(gr);
+				Grave grave = new Grave(this, gr);
 				if (grave.isValid()) {
 					grave.createHologram();
 					grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());

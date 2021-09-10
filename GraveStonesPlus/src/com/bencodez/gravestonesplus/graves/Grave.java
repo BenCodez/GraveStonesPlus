@@ -190,4 +190,12 @@ public class Grave {
 				+ new Date(gravesConfig.getTime());
 	}
 
+	public double getDistance(Player p) {
+		if (p.getWorld().getUID().equals(gravesConfig.getLocation().getWorld().getUID())) {
+			return gravesConfig.getLocation().distance(p.getLocation());
+		} else {
+			return -1;
+		}
+	}
+
 }

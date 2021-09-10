@@ -179,6 +179,25 @@ public class CommandLoader {
 			}
 		});
 
+		plugin.getCommands().add(new CommandHandler(new String[] { "KillGravesRadius" },
+				"GraveStonesPlus.KillGravesRadius", "Kills armor stands/graves from the plugin within a radius of 10", false) {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				Player p = (Player) sender;
+				int amount = 0;
+				for (Grave gr : plugin.getGraves()) {
+					double distance = gr.getDistance(p);
+					if (distance < 10 && distance >= 0) {
+						gr.removeGrave();
+						amount++;
+					}
+				}
+				sendMessage(sender,
+						"Finished removing armor stands in a radius of 10, removed " + amount + " armor stands");
+			}
+		});
+
 		plugin.getCommands().add(new CommandHandler(new String[] { "Teleport" }, "GraveStonesPlus.Teleport",
 				"Teleport to latest grave", false) {
 

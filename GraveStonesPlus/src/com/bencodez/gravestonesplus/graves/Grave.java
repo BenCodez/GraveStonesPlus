@@ -42,6 +42,9 @@ public class Grave {
 
 	private GraveStonesPlus plugin;
 
+	@Getter
+	private boolean remove = false;
+
 	public Grave(GraveStonesPlus plugin, GravesConfig gravesConfig) {
 		this.plugin = plugin;
 		this.gravesConfig = gravesConfig;
@@ -112,6 +115,7 @@ public class Grave {
 	}
 
 	public void removeGrave() {
+		remove = true;
 		Bukkit.getScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
 
 			@Override

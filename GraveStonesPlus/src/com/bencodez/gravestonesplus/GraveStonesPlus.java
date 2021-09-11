@@ -93,10 +93,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			public void run() {
 				if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
 					for (Grave grave : getGraves()) {
-						if (grave.isValid()) {
-							grave.checkGlowing();
-						} else {
-							grave.removeGrave();
+						if (!grave.isRemove()) {
+							if (grave.isValid()) {
+								grave.checkGlowing();
+							} else {
+								grave.removeGrave();
+							}
 						}
 					}
 				} else {

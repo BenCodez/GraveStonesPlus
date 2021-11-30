@@ -10,12 +10,14 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
+import org.bukkit.event.inventory.ClickType;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
 import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.inventory.BInventory.ClickEvent;
 import com.bencodez.advancedcore.api.item.ItemBuilder;
 import com.bencodez.advancedcore.api.messages.StringParser;
+import com.bencodez.advancedcore.api.misc.StringUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 
 import lombok.Getter;
@@ -210,22 +212,28 @@ public class Grave {
 		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(new ItemBuilder(Material.PLAYER_HEAD)
 				.setSkullOwner(gravesConfig.getPlayerName()).setName("&3&l" + gravesConfig.getPlayerName())
-				.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY()
-						+ "," + loc.getBlockZ() + ")")
-				.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime())).addLoreLine("&b" + "Click to Teleport")) {
+				.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
+						+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+				.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
+				.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to remove")) {
 
 			@Override
 			public void onClick(ClickEvent clickEvent) {
 				Grave grave = (Grave) getData("grave");
-				Location loc = grave.getGravesConfig().getLocation();
-				Player p = clickEvent.getWhoClicked();
-				Bukkit.getScheduler().runTask(plugin, new Runnable() {
+				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
+					grave.removeGrave();
+					clickEvent.getWhoClicked().sendMessage(StringUtils.getInstance().colorize("&cGrave removed"));
+				} else {
+					Location loc = grave.getGravesConfig().getLocation();
+					Player p = clickEvent.getWhoClicked();
+					Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
-					@Override
-					public void run() {
-						p.teleport(loc.clone().add(0, 1, 0));
-					}
-				});
+						@Override
+						public void run() {
+							p.teleport(loc.clone().add(0, 1, 0));
+						}
+					});
+				}
 			}
 		};
 		b.addData("grave", this);

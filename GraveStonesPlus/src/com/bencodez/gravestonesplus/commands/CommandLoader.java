@@ -14,6 +14,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.permissions.Permission;
 
 import com.bencodez.advancedcore.api.command.CommandHandler;
+import com.bencodez.advancedcore.api.inventory.BInventory;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 
@@ -130,19 +131,17 @@ public class CommandLoader {
 				});
 
 		plugin.getCommands().add(new CommandHandler(new String[] { "AllGraves" }, "GraveStonesPlus.AllGraves",
-				"See all current graves") {
+				"See all current graves", false) {
 
 			@Override
 			public void execute(CommandSender sender, String[] args) {
 				List<Grave> graves = plugin.getGraves();
-				ArrayList<String> msg = new ArrayList<String>();
-				msg.add("All graves:");
-				int num = 1;
+				BInventory inv = new BInventory("All Graves");
 				for (Grave gr : graves) {
-					msg.add(num + ": " + gr.getAllGraveMessage());
-					num++;
+					inv.addButton(gr.getGUIItem());
 				}
-				sendMessage(sender, msg);
+
+				inv.openInventory((Player) sender);
 			}
 		});
 
@@ -179,24 +178,25 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "KillGravesRadius" },
-				"GraveStonesPlus.KillGravesRadius", "Kills armor stands/graves from the plugin within a radius of 10", false) {
+		plugin.getCommands()
+				.add(new CommandHandler(new String[] { "KillGravesRadius" }, "GraveStonesPlus.KillGravesRadius",
+						"Kills armor stands/graves from the plugin within a radius of 10", false) {
 
-			@Override
-			public void execute(CommandSender sender, String[] args) {
-				Player p = (Player) sender;
-				int amount = 0;
-				for (Grave gr : plugin.getGraves()) {
-					double distance = gr.getDistance(p);
-					if (distance < 10 && distance >= 0) {
-						gr.removeGrave();
-						amount++;
+					@Override
+					public void execute(CommandSender sender, String[] args) {
+						Player p = (Player) sender;
+						int amount = 0;
+						for (Grave gr : plugin.getGraves()) {
+							double distance = gr.getDistance(p);
+							if (distance < 10 && distance >= 0) {
+								gr.removeGrave();
+								amount++;
+							}
+						}
+						sendMessage(sender, "Finished removing armor stands in a radius of 10, removed " + amount
+								+ " armor stands");
 					}
-				}
-				sendMessage(sender,
-						"Finished removing armor stands in a radius of 10, removed " + amount + " armor stands");
-			}
-		});
+				});
 
 		plugin.getCommands().add(new CommandHandler(new String[] { "Teleport" }, "GraveStonesPlus.Teleport",
 				"Teleport to latest grave", false) {

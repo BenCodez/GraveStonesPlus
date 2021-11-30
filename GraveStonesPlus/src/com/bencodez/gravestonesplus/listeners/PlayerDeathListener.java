@@ -76,7 +76,7 @@ public class PlayerDeathListener implements Listener {
 			}
 		}
 
-		// store items outside of inventory
+		// store items outside of player inventory
 		itemsWithSlot.put(-1, inv.getHelmet());
 		itemsWithSlot.put(-2, inv.getChestplate());
 		itemsWithSlot.put(-3, inv.getLeggings());

@@ -9,12 +9,15 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.persistence.PersistentDataType;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
-import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.inventory.BInventory.ClickEvent;
+import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.item.ItemBuilder;
 import com.bencodez.advancedcore.api.messages.StringParser;
 import com.bencodez.advancedcore.api.misc.StringUtils;
@@ -81,18 +84,43 @@ public class Grave {
 				+ gravesConfig.getDeathMessage());
 	}
 
+	public void removeHologramsAround() {
+		// try/catch to prevent unexpected issues
+		try {
+			Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
+			for (Entity entity : hologramLocation.getWorld().getNearbyEntities(hologramLocation, 2, 3, 2)) {
+				if (entity.getType().equals(EntityType.ARMOR_STAND)) {
+					if (entity.getPersistentDataContainer().has(plugin.getKey(), PersistentDataType.INTEGER)) {
+						int value = entity.getPersistentDataContainer().get(plugin.getKey(),
+								PersistentDataType.INTEGER);
+						if (value == 1) {
+							entity.remove();
+						}
+					}
+
+				}
+			}
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+
 	public void createHologram() {
 		Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
+
 		HashMap<String, String> placeholders = new HashMap<String, String>();
 		placeholders.put("player", gravesConfig.getPlayerName());
 		placeholders.put("time", "" + new Date(gravesConfig.getTime()));
 		placeholders.put("reason", gravesConfig.getDeathMessage());
 		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0), StringParser.getInstance()
 				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders));
+		topHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
 		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
 				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders));
+		middleHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
 		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
 				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders));
+		bottomHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
 		checkGlowing();
 	}
 
@@ -173,6 +201,7 @@ public class Grave {
 						glowingHologram = new Hologram(
 								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
 								true);
+						glowingHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
 					}
 					glowingHologram.glow(true);
 				} else {

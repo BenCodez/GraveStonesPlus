@@ -6,6 +6,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 
 import org.bukkit.Bukkit;
+import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
 import org.bukkit.entity.Player;
 
@@ -37,6 +38,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private ArrayList<CommandHandler> commands = new ArrayList<CommandHandler>();
 
 	@Getter
+	private NamespacedKey key = new NamespacedKey(this, "gravestoneplusholograms");
+
+	@Getter
 	private CommandLoader commandLoader;
 
 	@Getter
@@ -66,6 +70,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (graves1 != null) {
 			for (GravesConfig gr : graves1) {
 				Grave grave = new Grave(this, gr);
+				grave.removeHologramsAround();
 				if (grave.isValid()) {
 					grave.createHologram();
 					grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());

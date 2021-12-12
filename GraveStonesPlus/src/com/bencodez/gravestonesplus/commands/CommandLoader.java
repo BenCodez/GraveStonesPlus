@@ -10,8 +10,11 @@ import java.util.regex.Pattern;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.command.CommandSender;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.permissions.Permission;
+import org.bukkit.persistence.PersistentDataType;
 
 import com.bencodez.advancedcore.api.command.CommandHandler;
 import com.bencodez.advancedcore.api.inventory.BInventory;
@@ -191,6 +194,20 @@ public class CommandLoader {
 							if (distance < 10 && distance >= 0) {
 								gr.removeGrave();
 								amount++;
+							}
+						}
+						for (Entity entity : p.getNearbyEntities(10, 10, 10)) {
+							if (entity.getType().equals(EntityType.ARMOR_STAND)) {
+								if (entity.getPersistentDataContainer().has(plugin.getKey(),
+										PersistentDataType.INTEGER)) {
+									int value = entity.getPersistentDataContainer().get(plugin.getKey(),
+											PersistentDataType.INTEGER);
+									if (value == 1) {
+										entity.remove();
+										amount++;
+									}
+								}
+
 							}
 						}
 						sendMessage(sender, "Finished removing armor stands in a radius of 10, removed " + amount

@@ -188,7 +188,7 @@ public class CommandLoader {
 					@Override
 					public void execute(CommandSender sender, String[] args) {
 						final Player p = (Player) sender;
-						Bukkit.getScheduler().runTaskAsynchronously(plugin, new Runnable() {
+						Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
 							@Override
 							public void run() {

@@ -1,6 +1,7 @@
 package com.bencodez.gravestonesplus;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -65,7 +66,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Override
 	public void onPostLoad() {
-		graves = new ArrayList<Grave>();
+		graves = Collections.synchronizedList(new ArrayList<Grave>());
 		List<GravesConfig> graves1 = gravesConfig.loadGraves();
 		if (graves1 != null) {
 			for (GravesConfig gr : graves1) {
@@ -97,7 +98,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			@Override
 			public void run() {
 				if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
-					for (Grave grave : getGraves()) {
+					for (int i = graves.size() - 1; i >= 0; i--) {
+						Grave grave = graves.get(i);
 						if (!grave.isRemove()) {
 							if (grave.isValid()) {
 								grave.checkGlowing();

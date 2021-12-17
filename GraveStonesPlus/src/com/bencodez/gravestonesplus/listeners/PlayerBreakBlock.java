@@ -8,6 +8,7 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.event.entity.ItemSpawnEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
@@ -39,6 +40,18 @@ public class PlayerBreakBlock implements Listener {
 		if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
 			for (Grave grave : plugin.getGraves()) {
 				if (grave.isGrave(event.getBlock())) {
+					event.setCancelled(true);
+					return;
+				}
+			}
+		}
+	}
+
+	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	public void onWaterMove(BlockFromToEvent event) {
+		if (event.getBlock().getType().equals(Material.WATER)) {
+			for (Grave grave : plugin.getGraves()) {
+				if (grave.isGrave(event.getToBlock())) {
 					event.setCancelled(true);
 					return;
 				}

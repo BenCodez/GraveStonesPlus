@@ -9,6 +9,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
+import org.bukkit.block.Skull;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
@@ -56,6 +57,22 @@ public class Grave {
 	public Grave(GraveStonesPlus plugin, GravesConfig gravesConfig) {
 		this.plugin = plugin;
 		this.gravesConfig = gravesConfig;
+	}
+
+	public void createSkull() {
+		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				Block block = gravesConfig.getLocation().getBlock();
+				block.setType(Material.PLAYER_HEAD);
+				if (block.getState() instanceof Skull) {
+					Skull skull = (Skull) block.getState();
+					skull.setOwningPlayer(Bukkit.getOfflinePlayer(getGravesConfig().getUuid()));
+					skull.update();
+				}
+			}
+		});
 	}
 
 	public boolean isGrave(Block clicked) {
@@ -201,9 +218,12 @@ public class Grave {
 						glowingHologram = new Hologram(
 								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
 								true);
-						glowingHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+
 					}
 					glowingHologram.glow(true);
+					if (glowingHologram.isCreated()) {
+						glowingHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+					}
 				} else {
 					if (glowingHologram != null) {
 						glowingHologram.kill();

@@ -7,6 +7,8 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.entity.ItemSpawnEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
@@ -32,17 +34,37 @@ public class PlayerBreakBlock implements Listener {
 		this.plugin = plugin;
 	}
 
-	/**
-	 * On player interact.
-	 *
-	 * @param event the event
-	 */
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
-	public void onBlockBreak(BlockBreakEvent event) {
+	public void onBlockExplode(BlockExplodeEvent event) {
 		if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
 			for (Grave grave : plugin.getGraves()) {
 				if (grave.isGrave(event.getBlock())) {
-					if (event.getPlayer() != null) {
+					event.setCancelled(true);
+					return;
+				}
+			}
+		}
+	}
+
+	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	public void onBlockBreakItemDrop(ItemSpawnEvent event) {
+		if (event.getEntity().getItemStack().getType().equals(Material.PLAYER_HEAD)) {
+			for (Grave grave : plugin.getGraves()) {
+				if (grave.isGrave(event.getLocation().getBlock())) {
+					event.setCancelled(true);
+					grave.createSkull();
+					return;
+				}
+			}
+		}
+	}
+
+	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	public void onBlockBreak(BlockBreakEvent event) {
+		if (event.getPlayer() != null) {
+			if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
+				for (Grave grave : plugin.getGraves()) {
+					if (grave.isGrave(event.getBlock())) {
 						if (grave.isOwner(event.getPlayer())
 								|| (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")
 										&& plugin.getConfigFile().isBreakOtherGravesWithPermission())) {
@@ -114,9 +136,6 @@ public class PlayerBreakBlock implements Listener {
 							return;
 						}
 						event.getPlayer().sendMessage(plugin.getConfigFile().getFormatNotYourGrave());
-						event.setCancelled(true);
-						return;
-					} else {
 						event.setCancelled(true);
 						return;
 					}

@@ -187,31 +187,39 @@ public class CommandLoader {
 
 					@Override
 					public void execute(CommandSender sender, String[] args) {
-						Player p = (Player) sender;
-						int amount = 0;
-						for (Grave gr : plugin.getGraves()) {
-							double distance = gr.getDistance(p);
-							if (distance < 10 && distance >= 0) {
-								gr.removeGrave();
-								amount++;
-							}
-						}
-						for (Entity entity : p.getNearbyEntities(10, 10, 10)) {
-							if (entity.getType().equals(EntityType.ARMOR_STAND)) {
-								if (entity.getPersistentDataContainer().has(plugin.getKey(),
-										PersistentDataType.INTEGER)) {
-									int value = entity.getPersistentDataContainer().get(plugin.getKey(),
-											PersistentDataType.INTEGER);
-									if (value == 1) {
-										entity.remove();
+						final Player p = (Player) sender;
+						Bukkit.getScheduler().runTaskAsynchronously(plugin, new Runnable() {
+
+							@Override
+							public void run() {
+
+								int amount = 0;
+								for (Grave gr : plugin.getGraves()) {
+									double distance = gr.getDistance(p);
+									if (distance < 10 && distance >= 0) {
+										gr.removeGrave();
 										amount++;
 									}
 								}
+								for (Entity entity : p.getNearbyEntities(10, 10, 10)) {
+									if (entity.getType().equals(EntityType.ARMOR_STAND)) {
+										if (entity.getPersistentDataContainer().has(plugin.getKey(),
+												PersistentDataType.INTEGER)) {
+											int value = entity.getPersistentDataContainer().get(plugin.getKey(),
+													PersistentDataType.INTEGER);
+											if (value == 1) {
+												entity.remove();
+												amount++;
+											}
+										}
 
+									}
+								}
+								sendMessage(sender, "Finished removing armor stands in a radius of 10, removed "
+										+ amount + " armor stands");
 							}
-						}
-						sendMessage(sender, "Finished removing armor stands in a radius of 10, removed " + amount
-								+ " armor stands");
+						});
+
 					}
 				});
 

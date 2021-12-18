@@ -9,7 +9,6 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockFromToEvent;
-import org.bukkit.event.entity.ItemSpawnEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
@@ -59,7 +58,7 @@ public class PlayerBreakBlock implements Listener {
 		}
 	}
 
-	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	/*@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onBlockBreakItemDrop(ItemSpawnEvent event) {
 		if (event.getEntity().getItemStack().getType().equals(Material.PLAYER_HEAD)) {
 			for (Grave grave : plugin.getGraves()) {
@@ -70,7 +69,7 @@ public class PlayerBreakBlock implements Listener {
 				}
 			}
 		}
-	}
+	}*/
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onBlockBreak(BlockBreakEvent event) {
@@ -83,6 +82,7 @@ public class PlayerBreakBlock implements Listener {
 										&& plugin.getConfigFile().isBreakOtherGravesWithPermission())) {
 							AdvancedCoreUser user = plugin.getUserManager().getUser(event.getPlayer());
 							user.giveExp(grave.getGravesConfig().getExp());
+							event.setDropItems(false);
 
 							boolean notInCorrectSlot = false;
 							for (Entry<Integer, ItemStack> item : grave.getGravesConfig().getItems().entrySet()) {

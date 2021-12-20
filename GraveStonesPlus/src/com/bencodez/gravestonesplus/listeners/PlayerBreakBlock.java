@@ -1,14 +1,17 @@
 package com.bencodez.gravestonesplus.listeners;
 
+import java.util.ArrayList;
 import java.util.Map.Entry;
 
 import org.bukkit.Material;
+import org.bukkit.block.Block;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
-import org.bukkit.event.block.BlockExplodeEvent;
+import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.block.BlockFromToEvent;
+import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 
@@ -35,7 +38,28 @@ public class PlayerBreakBlock implements Listener {
 	}
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
-	public void onBlockExplode(BlockExplodeEvent event) {
+	public void onBlockExplode(EntityExplodeEvent event) {
+		ArrayList<Block> newBlockList = new ArrayList<Block>();
+		for (Block b : event.blockList().toArray(new Block[event.blockList().size()])) {
+			if (b.getType().equals(Material.PLAYER_HEAD)) {
+				newBlockList.add(b);
+			}
+		}
+		for (Grave grave : plugin.getGraves()) {
+			for (Block b : newBlockList) {
+				if (grave.isGrave(b)) {
+					// event.setCancelled(true);
+					grave.createSkull();
+					plugin.debug("Grave go boom");
+					return;
+				}
+			}
+		}
+
+	}
+
+	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	public void onItemDrop(BlockDropItemEvent event) {
 		if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
 			for (Grave grave : plugin.getGraves()) {
 				if (grave.isGrave(event.getBlock())) {
@@ -58,18 +82,14 @@ public class PlayerBreakBlock implements Listener {
 		}
 	}
 
-	/*@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
-	public void onBlockBreakItemDrop(ItemSpawnEvent event) {
-		if (event.getEntity().getItemStack().getType().equals(Material.PLAYER_HEAD)) {
-			for (Grave grave : plugin.getGraves()) {
-				if (grave.isGrave(event.getLocation().getBlock())) {
-					event.setCancelled(true);
-					grave.createSkull();
-					return;
-				}
-			}
-		}
-	}*/
+	/*
+	 * @EventHandler(priority = EventPriority.LOW, ignoreCancelled = true) public
+	 * void onBlockBreakItemDrop(ItemSpawnEvent event) { if
+	 * (event.getEntity().getItemStack().getType().equals(Material.PLAYER_HEAD)) {
+	 * for (Grave grave : plugin.getGraves()) { if
+	 * (grave.isGrave(event.getLocation().getBlock())) { event.setCancelled(true);
+	 * grave.createSkull(); return; } } } }
+	 */
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onBlockBreak(BlockBreakEvent event) {
@@ -154,6 +174,8 @@ public class PlayerBreakBlock implements Listener {
 					}
 				}
 			}
+		} else {
+			plugin.debug("block broke: " + event.getBlock().getLocation().toString());
 		}
 	}
 

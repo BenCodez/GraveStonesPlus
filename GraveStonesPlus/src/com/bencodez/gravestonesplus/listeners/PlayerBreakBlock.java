@@ -48,9 +48,7 @@ public class PlayerBreakBlock implements Listener {
 		for (Grave grave : plugin.getGraves()) {
 			for (Block b : newBlockList) {
 				if (grave.isGrave(b)) {
-					// event.setCancelled(true);
 					grave.createSkull();
-					plugin.debug("Grave go boom");
 					return;
 				}
 			}
@@ -174,8 +172,6 @@ public class PlayerBreakBlock implements Listener {
 					}
 				}
 			}
-		} else {
-			plugin.debug("block broke: " + event.getBlock().getLocation().toString());
 		}
 	}
 

@@ -12,4 +12,7 @@ commands:
 permissions:
   GraveStonesPlus.BreakOtherGraves:
     description: Allows you to break other graves
+  GraveStonesPlus.AllowGrave:
+    description: Permission to have graves
+    default: true
     

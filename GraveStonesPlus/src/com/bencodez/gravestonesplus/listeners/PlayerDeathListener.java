@@ -42,6 +42,11 @@ public class PlayerDeathListener implements Listener {
 			plugin.debug("Graves in " + deathLocation.getWorld().getName() + " are disabled");
 			return;
 		}
+
+		if (!event.getEntity().hasPermission("GraveStonesPlus.AllowGrave")) {
+			plugin.getLogger().info("Not creating grave for " + event.getEntity().getName() + ", no permission");
+			return;
+		}
 		Location emptyBlock = null;
 		if (deathLocation.getBlock().isEmpty()) {
 			emptyBlock = deathLocation;

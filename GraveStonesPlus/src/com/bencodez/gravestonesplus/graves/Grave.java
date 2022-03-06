@@ -129,15 +129,21 @@ public class Grave {
 		placeholders.put("player", gravesConfig.getPlayerName());
 		placeholders.put("time", "" + new Date(gravesConfig.getTime()));
 		placeholders.put("reason", gravesConfig.getDeathMessage());
-		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0), StringParser.getInstance()
-				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders));
-		topHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
+				StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders),
+				true, false, plugin.getKey(), 1);
+		// topHologram.getPersistentDataHolder().set(plugin.getKey(),
+		// PersistentDataType.INTEGER, 1);
 		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
-				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders));
-		middleHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true, false,
+				plugin.getKey(), 1);
+		// middleHologram.getPersistentDataHolder().set(plugin.getKey(),
+		// PersistentDataType.INTEGER, 1);
 		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
-				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders));
-		bottomHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true, false,
+				plugin.getKey(), 1);
+		// bottomHologram.getPersistentDataHolder().set(plugin.getKey(),
+		// PersistentDataType.INTEGER, 1);
 		checkGlowing();
 	}
 
@@ -166,6 +172,8 @@ public class Grave {
 
 	public void removeGrave() {
 		remove = true;
+		gravesConfig.setDestroyed(true);
+		gravesConfig.setDestroyedTime(System.currentTimeMillis());
 		Bukkit.getScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
 
 			@Override
@@ -217,13 +225,10 @@ public class Grave {
 					if (glowingHologram == null) {
 						glowingHologram = new Hologram(
 								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
-								true);
+								true, plugin.getKey(), 1);
 
 					}
 					glowingHologram.glow(true);
-					if (glowingHologram.isCreated()) {
-						glowingHologram.getPersistentDataHolder().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
-					}
 				} else {
 					if (glowingHologram != null) {
 						glowingHologram.kill();
@@ -272,6 +277,48 @@ public class Grave {
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
 					grave.removeGrave();
 					clickEvent.getWhoClicked().sendMessage(StringUtils.getInstance().colorize("&cGrave removed"));
+				} else {
+					Location loc = grave.getGravesConfig().getLocation();
+					Player p = clickEvent.getWhoClicked();
+					Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+						@Override
+						public void run() {
+							p.teleport(loc.clone().add(0, 1, 0));
+						}
+					});
+				}
+			}
+		};
+		b.addData("grave", this);
+		return b;
+	}
+
+	@SuppressWarnings("deprecation")
+	public BInventoryButton getGUIItemBroken() {
+		Location loc = gravesConfig.getLocation();
+		BInventoryButton b = new BInventoryButton(new ItemBuilder(Material.PLAYER_HEAD)
+				.setSkullOwner(gravesConfig.getPlayerName()).setName("&3&l" + gravesConfig.getPlayerName())
+				.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
+						+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+				.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
+				.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to create")
+				.addLoreLine("Time of removal: " + new Date(gravesConfig.getDestroyedTime()))) {
+
+			@Override
+			public void onClick(ClickEvent clickEvent) {
+				Grave grave = (Grave) getData("grave");
+				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
+					grave.createSkull();
+					Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+						@Override
+						public void run() {
+							grave.createHologram();
+						}
+					});
+					plugin.recreateBrokenGrave(grave);
+					clickEvent.getWhoClicked().sendMessage(StringUtils.getInstance().colorize("&cGrave readded"));
 				} else {
 					Location loc = grave.getGravesConfig().getLocation();
 					Player p = clickEvent.getWhoClicked();

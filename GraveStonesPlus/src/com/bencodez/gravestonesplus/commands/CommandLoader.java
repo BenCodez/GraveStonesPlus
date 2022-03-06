@@ -147,6 +147,21 @@ public class CommandLoader {
 				inv.openInventory((Player) sender);
 			}
 		});
+		
+		plugin.getCommands().add(new CommandHandler(new String[] { "AllBrokenGraves" }, "GraveStonesPlus.AllBrokenGraves",
+				"See all current recent broken graves", false) {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				List<Grave> graves = plugin.getBrokenGraves();
+				BInventory inv = new BInventory("All Broken Graves");
+				for (Grave gr : graves) {
+					inv.addButton(gr.getGUIItemBroken());
+				}
+
+				inv.openInventory((Player) sender);
+			}
+		});
 
 		plugin.getCommands().add(new CommandHandler(new String[] { "CheckValidGraves" },
 				"GraveStonesPlus.CheckValidGraves", "Check and remove invalid graves") {

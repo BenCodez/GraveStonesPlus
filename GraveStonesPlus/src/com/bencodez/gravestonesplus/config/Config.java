@@ -46,7 +46,10 @@ public class Config extends YMLFile {
 
 	@Getter
 	@ConfigDataInt(path = "GraveTimeLimit")
-	private int GraveTimeLimit = -1;
+	private int graveTimeLimit = -1;
+	@Getter
+	@ConfigDataInt(path = "BrokenGraveTimeLimit")
+	private int bokenGraveTimeLimit = 96;
 
 	@Getter
 	@ConfigDataString(path = "Format.Death")

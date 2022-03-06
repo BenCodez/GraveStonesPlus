@@ -47,6 +47,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Getter
 	private List<Grave> graves;
 
+	@Getter
+	private List<Grave> brokenGraves;
+
 	public void addGrave(Grave grave) {
 		graves.add(grave);
 		gravesConfig.setGraves(graves);
@@ -54,7 +57,16 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	public void removeGrave(Grave grave) {
 		graves.remove(grave);
+		brokenGraves.add(grave);
 		gravesConfig.setGraves(graves);
+		gravesConfig.setBrokenGraves(brokenGraves);
+	}
+
+	public void recreateBrokenGrave(Grave grave) {
+		graves.add(grave);
+		brokenGraves.remove(grave);
+		gravesConfig.setGraves(graves);
+		gravesConfig.setBrokenGraves(brokenGraves);
 	}
 
 	@Getter
@@ -67,6 +79,35 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Override
 	public void onPostLoad() {
 		graves = Collections.synchronizedList(new ArrayList<Grave>());
+		brokenGraves = Collections.synchronizedList(new ArrayList<Grave>());
+
+		List<GravesConfig> gravesbroken1 = gravesConfig.loadBrokenGraves();
+		if (gravesbroken1 != null) {
+			for (GravesConfig gr : gravesbroken1) {
+				Grave grave = new Grave(this, gr);
+				grave.removeHologramsAround();
+				if (gr.isDestroyed()) {
+					if (gr.getDestroyedTime() == 0) {
+						gr.setDestroyedTime(System.currentTimeMillis());
+						debug("Fixed broken grave time: " + grave.getGravesConfig().getLocation());
+						debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
+						brokenGraves.add(grave);
+					} else {
+						if (System.currentTimeMillis() - gr.getDestroyedTime() > configFile.getBokenGraveTimeLimit()
+								* 60 * 1000) {
+							debug("Broken Grave at " + grave.getGravesConfig().getLocation()
+									+ " has reached it's time limit and will be removed");
+						} else {
+							debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
+							brokenGraves.add(grave);
+						}
+					}
+				}
+			}
+			// remove graves from file
+			gravesConfig.setBrokenGraves(brokenGraves);
+		}
+
 		List<GravesConfig> graves1 = gravesConfig.loadGraves();
 		if (graves1 != null) {
 			for (GravesConfig gr : graves1) {
@@ -160,6 +201,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Override
 	public void onUnLoad() {
 		gravesConfig.setGraves(graves);
+		gravesConfig.setBrokenGraves(brokenGraves);
 		for (Grave grave : graves) {
 			grave.removeHologram();
 			grave.removeTimer();
@@ -191,6 +233,16 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	public List<Grave> getGraves(Player player) {
 		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
 		for (Grave grave : getGraves()) {
+			if (grave.isOwner(player)) {
+				ownedGraves.add(grave);
+			}
+		}
+		return ownedGraves;
+	}
+
+	public List<Grave> getBrokenGraves(Player player) {
+		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
+		for (Grave grave : getBrokenGraves()) {
 			if (grave.isOwner(player)) {
 				ownedGraves.add(grave);
 			}

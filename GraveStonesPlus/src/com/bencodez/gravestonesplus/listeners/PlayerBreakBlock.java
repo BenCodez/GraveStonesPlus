@@ -91,7 +91,6 @@ public class PlayerBreakBlock implements Listener {
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onBlockBreak(BlockBreakEvent event) {
-
 		if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
 			for (Grave grave : plugin.getGraves()) {
 				if (grave.isGrave(event.getBlock())) {

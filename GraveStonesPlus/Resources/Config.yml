@@ -16,6 +16,10 @@ GlowingEffectDistance: 30
 # -1 is disabled
 GraveTimeLimit: -1
 
+# Number of hours to store borken graves
+# This will allow restoring of graves that break before items can be obtained
+BrokenGraveTimeLimit: 96
+
 Format:
   Death: 'Your grave is at %x%, %y%, %z%'
   GraveBroke: 'You broke your grave!'

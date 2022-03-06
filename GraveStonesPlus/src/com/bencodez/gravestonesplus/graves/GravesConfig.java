@@ -11,6 +11,7 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.NumberConversions;
 
 import lombok.Getter;
+import lombok.Setter;
 
 public class GravesConfig implements ConfigurationSerializable {
 
@@ -32,8 +33,16 @@ public class GravesConfig implements ConfigurationSerializable {
 	@Getter
 	private long time;
 
+	@Getter
+	@Setter
+	private boolean destroyed;
+
+	@Getter
+	@Setter
+	private long destroyedTime;
+
 	public GravesConfig(UUID uuid, String playerName, Location loc, HashMap<Integer, ItemStack> items, int exp,
-			String deathMessage, long time) {
+			String deathMessage, long time, boolean destroyed, long destroyedTime) {
 		this.uuid = uuid;
 		this.location = loc;
 		this.items = items;
@@ -41,6 +50,8 @@ public class GravesConfig implements ConfigurationSerializable {
 		this.playerName = playerName;
 		this.deathMessage = deathMessage;
 		this.time = time;
+		this.destroyed = destroyed;
+		this.destroyedTime = destroyedTime;
 	}
 
 	@Override
@@ -56,6 +67,8 @@ public class GravesConfig implements ConfigurationSerializable {
 		serialized.put("Z", location.getBlockZ());
 		serialized.put("Items", items);
 		serialized.put("EXP", exp);
+		serialized.put("Destroyed", destroyed);
+		serialized.put("DestroyedTime", destroyedTime);
 		return serialized;
 	}
 
@@ -67,7 +80,9 @@ public class GravesConfig implements ConfigurationSerializable {
 						NumberConversions.toInt(deserialize.get("X")), NumberConversions.toInt(deserialize.get("Y")),
 						NumberConversions.toInt(deserialize.get("Z"))),
 				(HashMap<Integer, ItemStack>) deserialize.get("Items"), NumberConversions.toInt(deserialize.get("EXP")),
-				deserialize.get("DeathMessage").toString(), NumberConversions.toLong(deserialize.get("Time")));
+				deserialize.get("DeathMessage").toString(), NumberConversions.toLong(deserialize.get("Time")),
+				Boolean.valueOf(deserialize.get("Destroyed").toString()),
+				NumberConversions.toLong(deserialize.get("DestroyedTime")));
 	}
 
 }

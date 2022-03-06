@@ -34,10 +34,32 @@ public class GraveLocations extends YMLFile {
 		setValue("graves", grave);
 	}
 
+	public void setBrokenGrave(List<GravesConfig> grave) {
+		setValue("brokengraves", grave);
+	}
+
+	public void setBrokenGraves(List<Grave> graves) {
+		ArrayList<GravesConfig> gravesConfig = new ArrayList<GravesConfig>();
+		for (Grave grave : graves) {
+			gravesConfig.add(grave.getGravesConfig());
+		}
+		setBrokenGrave(gravesConfig);
+	}
+
 	@SuppressWarnings("unchecked")
 	public List<GravesConfig> loadGraves() {
 		if (getData() != null) {
 			return (List<GravesConfig>) getData().getList("graves");
+		} else {
+			getPlugin().debug("Graves.yml: Data == null");
+			return new ArrayList<GravesConfig>();
+		}
+	}
+
+	@SuppressWarnings("unchecked")
+	public List<GravesConfig> loadBrokenGraves() {
+		if (getData() != null) {
+			return (List<GravesConfig>) getData().getList("brokengraves");
 		} else {
 			getPlugin().debug("Graves.yml: Data == null");
 			return new ArrayList<GravesConfig>();

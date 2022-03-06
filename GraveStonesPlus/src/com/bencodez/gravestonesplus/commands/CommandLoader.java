@@ -148,6 +148,23 @@ public class CommandLoader {
 			}
 		});
 
+		plugin.getCommands().add(new CommandHandler(new String[] { "AllGraves", "(Player)" },
+				"GraveStonesPlus.AllGraves.Player", "See all current graves of player", false) {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				List<Grave> graves = plugin.getGraves();
+				BInventory inv = new BInventory("All Graves: " + args[1]);
+				for (Grave gr : graves) {
+					if (gr.isOwner(args[1])) {
+						inv.addButton(gr.getGUIItem());
+					}
+				}
+
+				inv.openInventory((Player) sender);
+			}
+		});
+
 		plugin.getCommands().add(new CommandHandler(new String[] { "AllBrokenGraves" },
 				"GraveStonesPlus.AllBrokenGraves", "See all current recent broken graves", false) {
 
@@ -157,6 +174,23 @@ public class CommandLoader {
 				BInventory inv = new BInventory("All Broken Graves");
 				for (Grave gr : graves) {
 					inv.addButton(gr.getGUIItemBroken());
+				}
+
+				inv.openInventory((Player) sender);
+			}
+		});
+
+		plugin.getCommands().add(new CommandHandler(new String[] { "AllBrokenGraves", "(Player)" },
+				"GraveStonesPlus.AllBrokenGraves.Player", "See all current recent broken graves", false) {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				List<Grave> graves = plugin.getBrokenGraves();
+				BInventory inv = new BInventory("All Broken Graves: " + args[1]);
+				for (Grave gr : graves) {
+					if (gr.isOwner(args[1])) {
+						inv.addButton(gr.getGUIItemBroken());
+					}
 				}
 
 				inv.openInventory((Player) sender);

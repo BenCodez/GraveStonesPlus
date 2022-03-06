@@ -4,6 +4,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.Map.Entry;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -14,6 +15,8 @@ import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
+import org.bukkit.inventory.ItemStack;
+import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.persistence.PersistentDataType;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
@@ -22,6 +25,7 @@ import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.item.ItemBuilder;
 import com.bencodez.advancedcore.api.messages.StringParser;
 import com.bencodez.advancedcore.api.misc.StringUtils;
+import com.bencodez.advancedcore.api.user.AdvancedCoreUser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 
 import lombok.Getter;
@@ -71,6 +75,17 @@ public class Grave {
 					skull.setOwningPlayer(Bukkit.getOfflinePlayer(getGravesConfig().getUuid()));
 					skull.update();
 				}
+			}
+		});
+	}
+	
+	public void removeSkull() {
+		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				Block block = gravesConfig.getLocation().getBlock();
+				block.setType(Material.AIR);
 			}
 		});
 	}
@@ -334,6 +349,81 @@ public class Grave {
 		};
 		b.addData("grave", this);
 		return b;
+	}
+
+	public boolean isSlotAvailable(ItemStack slot) {
+		if (slot == null || slot.getType().isAir()) {
+			return true;
+		}
+		return false;
+	}
+
+	public void claim(Player player, PlayerInventory currentInv) {
+		AdvancedCoreUser user = plugin.getUserManager().getUser(player);
+		user.giveExp(getGravesConfig().getExp());
+
+		boolean notInCorrectSlot = false;
+		for (Entry<Integer, ItemStack> item : getGravesConfig().getItems().entrySet()) {
+
+			if (item.getKey().intValue() >= 0) {
+				ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
+				if (isSlotAvailable(currentItem)) {
+					currentInv.setItem(item.getKey().intValue(), item.getValue());
+				} else {
+					notInCorrectSlot = true;
+					user.giveItem(item.getValue());
+				}
+			} else {
+				switch (item.getKey().intValue()) {
+				case -1:
+					if (isSlotAvailable(currentInv.getHelmet())) {
+						currentInv.setHelmet(item.getValue());
+					} else {
+						user.giveItem(item.getValue());
+						notInCorrectSlot = true;
+					}
+					break;
+				case -2:
+					if (isSlotAvailable(currentInv.getChestplate())) {
+						currentInv.setChestplate(item.getValue());
+					} else {
+						user.giveItem(item.getValue());
+						notInCorrectSlot = true;
+					}
+					break;
+				case -3:
+					if (isSlotAvailable(currentInv.getLeggings())) {
+						currentInv.setLeggings(item.getValue());
+					} else {
+						user.giveItem(item.getValue());
+						notInCorrectSlot = true;
+					}
+					break;
+				case -4:
+					if (isSlotAvailable(currentInv.getBoots())) {
+						currentInv.setBoots(item.getValue());
+					} else {
+						user.giveItem(item.getValue());
+						notInCorrectSlot = true;
+					}
+					break;
+				case -5:
+					if (isSlotAvailable(currentInv.getItemInOffHand())) {
+						currentInv.setItemInOffHand(item.getValue());
+					} else {
+						user.giveItem(item.getValue());
+						notInCorrectSlot = true;
+					}
+					break;
+				}
+			}
+		}
+		user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
+		if (notInCorrectSlot) {
+			user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
+		}
+		removeHologram();
+		plugin.removeGrave(this);
 	}
 
 }

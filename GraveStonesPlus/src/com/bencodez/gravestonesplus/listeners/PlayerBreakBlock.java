@@ -1,7 +1,6 @@
 package com.bencodez.gravestonesplus.listeners;
 
 import java.util.ArrayList;
-import java.util.Map.Entry;
 
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -12,10 +11,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.PlayerInventory;
 
-import com.bencodez.advancedcore.api.user.AdvancedCoreUser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 
@@ -98,72 +94,8 @@ public class PlayerBreakBlock implements Listener {
 						if (grave.isOwner(event.getPlayer())
 								|| (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")
 										&& plugin.getConfigFile().isBreakOtherGravesWithPermission())) {
-							AdvancedCoreUser user = plugin.getUserManager().getUser(event.getPlayer());
-							user.giveExp(grave.getGravesConfig().getExp());
 							event.setDropItems(false);
-
-							boolean notInCorrectSlot = false;
-							for (Entry<Integer, ItemStack> item : grave.getGravesConfig().getItems().entrySet()) {
-								PlayerInventory currentInv = event.getPlayer().getInventory();
-								if (item.getKey().intValue() >= 0) {
-									ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
-									if (isSlotAvailable(currentItem)) {
-										currentInv.setItem(item.getKey().intValue(), item.getValue());
-									} else {
-										notInCorrectSlot = true;
-										user.giveItem(item.getValue());
-									}
-								} else {
-									switch (item.getKey().intValue()) {
-									case -1:
-										if (isSlotAvailable(currentInv.getHelmet())) {
-											currentInv.setHelmet(item.getValue());
-										} else {
-											user.giveItem(item.getValue());
-											notInCorrectSlot = true;
-										}
-										break;
-									case -2:
-										if (isSlotAvailable(currentInv.getChestplate())) {
-											currentInv.setChestplate(item.getValue());
-										} else {
-											user.giveItem(item.getValue());
-											notInCorrectSlot = true;
-										}
-										break;
-									case -3:
-										if (isSlotAvailable(currentInv.getLeggings())) {
-											currentInv.setLeggings(item.getValue());
-										} else {
-											user.giveItem(item.getValue());
-											notInCorrectSlot = true;
-										}
-										break;
-									case -4:
-										if (isSlotAvailable(currentInv.getBoots())) {
-											currentInv.setBoots(item.getValue());
-										} else {
-											user.giveItem(item.getValue());
-											notInCorrectSlot = true;
-										}
-										break;
-									case -5:
-										if (isSlotAvailable(currentInv.getItemInOffHand())) {
-											currentInv.setItemInOffHand(item.getValue());
-										} else {
-											user.giveItem(item.getValue());
-											notInCorrectSlot = true;
-										}
-										break;
-									}
-								}
-							}
-							user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
-							if (notInCorrectSlot) {
-								user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
-							}
-							grave.removeHologram();
-							plugin.removeGrave(grave);
+							grave.claim(event.getPlayer(), event.getPlayer().getInventory());
 							return;
 						}
 						event.getPlayer().sendMessage(plugin.getConfigFile().getFormatNotYourGrave());
@@ -178,10 +110,5 @@ public class PlayerBreakBlock implements Listener {
 		}
 	}
 
-	public boolean isSlotAvailable(ItemStack slot) {
-		if (slot == null || slot.getType().isAir()) {
-			return true;
-		}
-		return false;
-	}
+	
 }

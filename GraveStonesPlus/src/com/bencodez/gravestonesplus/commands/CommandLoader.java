@@ -147,9 +147,9 @@ public class CommandLoader {
 				inv.openInventory((Player) sender);
 			}
 		});
-		
-		plugin.getCommands().add(new CommandHandler(new String[] { "AllBrokenGraves" }, "GraveStonesPlus.AllBrokenGraves",
-				"See all current recent broken graves", false) {
+
+		plugin.getCommands().add(new CommandHandler(new String[] { "AllBrokenGraves" },
+				"GraveStonesPlus.AllBrokenGraves", "See all current recent broken graves", false) {
 
 			@Override
 			public void execute(CommandSender sender, String[] args) {
@@ -254,6 +254,27 @@ public class CommandLoader {
 							p.teleport(loc.clone().add(0, 1, 0));
 						}
 					});
+				} else {
+					sendMessage(sender, "&cYou don't have a grave");
+				}
+			}
+		});
+
+		plugin.getCommands().add(new CommandHandler(new String[] { "ClaimGrave" }, "GraveStonesPlus.ClaimGrave",
+				"Claim Grave nearby", false) {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				Player p = (Player) sender;
+				List<Grave> graves = plugin.getGraves(p);
+				if (graves != null) {
+					for (Grave grave : graves) {
+						double distance = grave.getDistance(p);
+						if (distance < 10) {
+							grave.removeSkull();
+							grave.claim(p, p.getInventory());
+						}
+					}
 				} else {
 					sendMessage(sender, "&cYou don't have a grave");
 				}

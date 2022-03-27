@@ -145,7 +145,15 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 							if (grave.isValid()) {
 								grave.checkGlowing();
 							} else {
-								grave.removeGrave();
+								Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+									@Override
+									public void run() {
+										grave.removeGrave();
+										grave.removeHologramsAround();
+									}
+								});
+
 							}
 						}
 					}

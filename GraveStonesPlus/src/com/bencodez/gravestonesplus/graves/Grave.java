@@ -78,7 +78,7 @@ public class Grave {
 			}
 		});
 	}
-	
+
 	public void removeSkull() {
 		Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
@@ -120,7 +120,7 @@ public class Grave {
 		// try/catch to prevent unexpected issues
 		try {
 			Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
-			for (Entity entity : hologramLocation.getWorld().getNearbyEntities(hologramLocation, 2, 3, 2)) {
+			for (Entity entity : hologramLocation.getWorld().getNearbyEntities(hologramLocation, 1, 3, 1)) {
 				if (entity.getType().equals(EntityType.ARMOR_STAND)) {
 					if (entity.getPersistentDataContainer().has(plugin.getKey(), PersistentDataType.INTEGER)) {
 						int value = entity.getPersistentDataContainer().get(plugin.getKey(),
@@ -144,16 +144,25 @@ public class Grave {
 		placeholders.put("player", gravesConfig.getPlayerName());
 		placeholders.put("time", "" + new Date(gravesConfig.getTime()));
 		placeholders.put("reason", gravesConfig.getDeathMessage());
+		if (topHologram != null) {
+			topHologram.kill();
+		}
 		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
 				StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders),
 				true, false, plugin.getKey(), 1);
 		// topHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
+		if (middleHologram != null) {
+			middleHologram.kill();
+		}
 		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
 				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true, false,
 				plugin.getKey(), 1);
 		// middleHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
+		if (bottomHologram != null) {
+			bottomHologram.kill();
+		}
 		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
 				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true, false,
 				plugin.getKey(), 1);
@@ -163,11 +172,21 @@ public class Grave {
 	}
 
 	public void removeHologram() {
-		topHologram.kill();
-		middleHologram.kill();
-		bottomHologram.kill();
+		if (topHologram != null) {
+			topHologram.kill();
+			topHologram = null;
+		}
+		if (middleHologram != null) {
+			middleHologram.kill();
+			middleHologram = null;
+		}
+		if (bottomHologram != null) {
+			bottomHologram.kill();
+			bottomHologram = null;
+		}
 		if (glowingHologram != null) {
 			glowingHologram.kill();
+			glowingHologram = null;
 		}
 	}
 
@@ -423,6 +442,7 @@ public class Grave {
 			user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
 		}
 		removeHologram();
+		removeHologramsAround();
 		plugin.removeGrave(this);
 	}
 

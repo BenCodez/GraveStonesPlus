@@ -2,7 +2,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.bencodez</groupId>
 	<artifactId>GraveStonesPlus</artifactId>
-	<version>1.3.1</version>
+	<version>1.3.2</version>
 	<packaging>jar</packaging>
 	<name>GraveStonesPlus</name>
 	<properties>

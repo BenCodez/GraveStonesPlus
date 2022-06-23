@@ -134,34 +134,36 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		getCommand("gravestonesplus").setExecutor(new CommandGraveStonesPlus(this));
 		getCommand("gravestonesplus").setTabCompleter(new GraveStonesPlusTabCompleter(this));
 
-		new Timer().schedule(new TimerTask() {
+		if (getConfigFile().isGlowingEffectNearGrave()) {
+			new Timer().schedule(new TimerTask() {
 
-			@Override
-			public void run() {
-				if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
-					for (int i = graves.size() - 1; i >= 0; i--) {
-						Grave grave = graves.get(i);
-						if (!grave.isRemove()) {
-							if (grave.isValid()) {
-								grave.checkGlowing();
-							} else {
-								Bukkit.getScheduler().runTask(plugin, new Runnable() {
+				@Override
+				public void run() {
+					if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
+						for (int i = graves.size() - 1; i >= 0; i--) {
+							Grave grave = graves.get(i);
+							if (!grave.isRemove()) {
+								if (grave.isValid()) {
+									grave.checkGlowing();
+								} else {
+									Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
-									@Override
-									public void run() {
-										grave.removeGrave();
-										grave.removeHologramsAround();
-									}
-								});
+										@Override
+										public void run() {
+											grave.removeGrave();
+											grave.removeHologramsAround();
+										}
+									});
 
+								}
 							}
 						}
+					} else {
+						cancel();
 					}
-				} else {
-					cancel();
 				}
-			}
-		}, 1000 * 10, 1000 * 5);
+			}, 1000 * 10, 1000 * 5);
+		}
 
 		new BStatsMetrics(plugin, 11838);
 
@@ -193,6 +195,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 				}
 				}
 			}
+
 		});
 
 	}

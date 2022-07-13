@@ -254,8 +254,10 @@ public class Grave {
 		if (gravesConfig.getUuid() != null) {
 			Player p = Bukkit.getPlayer(gravesConfig.getUuid());
 			if (p != null) {
-				if (p.getLocation().distance(gravesConfig.getLocation()) < GraveStonesPlus.plugin.getConfigFile()
-						.getGlowingEffectDistance()) {
+
+				if (p.getLocation().getWorld().getUID().equals(gravesConfig.getLocation().getWorld().getUID())
+						&& p.getLocation().distance(gravesConfig.getLocation()) < GraveStonesPlus.plugin.getConfigFile()
+								.getGlowingEffectDistance()) {
 					if (glowingHologram == null) {
 						glowingHologram = new Hologram(
 								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
@@ -269,6 +271,7 @@ public class Grave {
 						glowingHologram = null;
 					}
 				}
+
 			}
 		}
 	}

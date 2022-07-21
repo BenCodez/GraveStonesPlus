@@ -82,11 +82,21 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		// store items outside of player inventory
-		itemsWithSlot.put(-1, inv.getHelmet());
-		itemsWithSlot.put(-2, inv.getChestplate());
-		itemsWithSlot.put(-3, inv.getLeggings());
-		itemsWithSlot.put(-4, inv.getBoots());
-		itemsWithSlot.put(-5, inv.getItemInOffHand());
+		if (inv.getHelmet() != null) {
+			itemsWithSlot.put(-1, inv.getHelmet());
+		}
+		if (inv.getChestplate() != null) {
+			itemsWithSlot.put(-2, inv.getChestplate());
+		}
+		if (inv.getLeggings() != null) {
+			itemsWithSlot.put(-3, inv.getLeggings());
+		}
+		if (inv.getBoots() != null) {
+			itemsWithSlot.put(-4, inv.getBoots());
+		}
+		if (inv.getItemInOffHand() != null) {
+			itemsWithSlot.put(-5, inv.getItemInOffHand());
+		}
 
 		Grave grave = new Grave(plugin,
 				new GravesConfig(event.getEntity().getUniqueId(), event.getEntity().getName(), emptyBlock,

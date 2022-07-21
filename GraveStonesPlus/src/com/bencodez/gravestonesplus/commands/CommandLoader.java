@@ -9,6 +9,7 @@ import java.util.regex.Pattern;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -311,6 +312,21 @@ public class CommandLoader {
 					}
 				} else {
 					sendMessage(sender, "&cYou don't have a grave");
+				}
+			}
+		});
+
+		plugin.getCommands().add(new CommandHandler(new String[] { "ViewGrave" }, "GraveStonesPlus.ViewGrave",
+				"View current grave items that you are looking at", false) {
+
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				Player p = (Player) sender;
+				Block b = p.getTargetBlock(null, 7);
+				for (Grave grave : plugin.getGraves()) {
+					if (grave.isGrave(b)) {
+						grave.openGUIWithItems(p);
+					}
 				}
 			}
 		});

@@ -21,6 +21,7 @@ import org.bukkit.persistence.PersistentDataType;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
 import com.bencodez.advancedcore.api.inventory.BInventory.ClickEvent;
+import com.bencodez.advancedcore.api.inventory.BInventory;
 import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.item.ItemBuilder;
 import com.bencodez.advancedcore.api.messages.StringParser;
@@ -306,7 +307,8 @@ public class Grave {
 				.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
 						+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
 				.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
-				.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to remove")) {
+				.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to remove")
+				.addLoreLine("&cShift left click to view items")) {
 
 			@Override
 			public void onClick(ClickEvent clickEvent) {
@@ -314,6 +316,8 @@ public class Grave {
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
 					grave.removeGrave();
 					clickEvent.getWhoClicked().sendMessage(StringUtils.getInstance().colorize("&cGrave removed"));
+				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
+					openGUIWithItems(clickEvent.getPlayer());
 				} else {
 					Location loc = grave.getGravesConfig().getLocation();
 					Player p = clickEvent.getWhoClicked();
@@ -340,7 +344,8 @@ public class Grave {
 						+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
 				.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
 				.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to create")
-				.addLoreLine("Time of removal: " + new Date(gravesConfig.getDestroyedTime()))) {
+				.addLoreLine("&cShift left click to view items")
+				.addLoreLine("&aTime of removal: " + new Date(gravesConfig.getDestroyedTime()))) {
 
 			@Override
 			public void onClick(ClickEvent clickEvent) {
@@ -356,7 +361,10 @@ public class Grave {
 					});
 					plugin.recreateBrokenGrave(grave);
 					clickEvent.getWhoClicked().sendMessage(StringUtils.getInstance().colorize("&cGrave readded"));
+				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
+					openGUIWithItems(clickEvent.getPlayer());
 				} else {
+
 					Location loc = grave.getGravesConfig().getLocation();
 					Player p = clickEvent.getWhoClicked();
 					Bukkit.getScheduler().runTask(plugin, new Runnable() {
@@ -367,10 +375,96 @@ public class Grave {
 						}
 					});
 				}
+
 			}
 		};
 		b.addData("grave", this);
 		return b;
+	}
+
+	public void openGUIWithItems(Player p) {
+		BInventory inv = new BInventory("Grave Items");
+		for (Entry<Integer, ItemStack> entry : getGravesConfig().getItems().entrySet()) {
+			switch (entry.getKey().intValue()) {
+			case -1:
+				inv.addButton(36, new BInventoryButton(entry.getValue()) {
+
+					@Override
+					public void onClick(ClickEvent clickEvent) {
+
+					}
+				});
+				break;
+			case -2:
+				inv.addButton(37, new BInventoryButton(entry.getValue()) {
+
+					@Override
+					public void onClick(ClickEvent clickEvent) {
+
+					}
+				});
+				break;
+			case -3:
+				inv.addButton(38, new BInventoryButton(entry.getValue()) {
+
+					@Override
+					public void onClick(ClickEvent clickEvent) {
+
+					}
+				});
+				break;
+			case -4:
+				inv.addButton(39, new BInventoryButton(entry.getValue()) {
+
+					@Override
+					public void onClick(ClickEvent clickEvent) {
+
+					}
+				});
+				break;
+			case -5:
+				inv.addButton(44, new BInventoryButton(entry.getValue()) {
+
+					@Override
+					public void onClick(ClickEvent clickEvent) {
+
+					}
+				});
+				break;
+			default:
+				int num = entry.getKey().intValue();
+				plugin.getLogger().info("Before: num: " + num);
+				if (num < 9) {
+					num = 27 + num;
+				} else {
+					num = num - 9;
+				}
+				plugin.getLogger().info("After: num: " + num);
+
+				inv.addButton(num, new BInventoryButton(entry.getValue()) {
+
+					@Override
+					public void onClick(ClickEvent clickEvent) {
+
+					}
+				});
+				break;
+
+			}
+		}
+		inv.addButton(53,
+				new BInventoryButton(new ItemBuilder("OAK_SIGN").setName(getGravesConfig().getPlayerName())
+						.addLoreLine("&cDeath: " + getGravesConfig().getDeathMessage())
+						.addLoreLine("&cTime: " + getGravesConfig().getTime())
+						.addLoreLine("&cEXP: " + getGravesConfig().getExp())) {
+
+					@Override
+					public void onClick(ClickEvent clickEvent) {
+
+					}
+				});
+		inv.openInventory(p);
+
 	}
 
 	public boolean isSlotAvailable(ItemStack slot) {

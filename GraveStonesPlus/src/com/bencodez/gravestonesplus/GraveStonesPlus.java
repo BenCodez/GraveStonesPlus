@@ -165,7 +165,13 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			}, 1000 * 10, 1000 * 5);
 		}
 
-		new BStatsMetrics(plugin, 11838);
+		Bukkit.getScheduler().runTaskAsynchronously(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				new BStatsMetrics(plugin, 11838);
+			}
+		});
 
 		Bukkit.getScheduler().runTaskAsynchronously(this, new Runnable() {
 

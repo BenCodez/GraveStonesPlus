@@ -91,16 +91,28 @@ public class PlayerBreakBlock implements Listener {
 			for (Grave grave : plugin.getGraves()) {
 				if (grave.isGrave(event.getBlock())) {
 					if (event.getPlayer() != null) {
-						if (grave.isOwner(event.getPlayer())
-								|| (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")
-										&& plugin.getConfigFile().isBreakOtherGravesWithPermission())) {
+						if (grave.isOwner(event.getPlayer())) {
 							event.setDropItems(false);
 							grave.claim(event.getPlayer(), event.getPlayer().getInventory());
 							return;
 						}
+
+						if (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")) {
+							if (plugin.getConfigFile().isBreakOtherGravesWithPermission()) {
+								event.setDropItems(false);
+								grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+								return;
+							} else {
+								plugin.debug("Config option disabled to break other graves");
+							}
+						} else {
+							plugin.debug("No permission to break other graves");
+						}
+
 						event.getPlayer().sendMessage(plugin.getConfigFile().getFormatNotYourGrave());
 						event.setCancelled(true);
 						return;
+
 					} else {
 						event.setCancelled(true);
 						return;
@@ -110,5 +122,4 @@ public class PlayerBreakBlock implements Listener {
 		}
 	}
 
-	
 }

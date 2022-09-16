@@ -210,6 +210,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	public void onPreLoad() {
 		plugin = this;
 		configFile = new Config(this);
+		configFile.reloadData();
 		gravesConfig = new GraveLocations(this);
 
 		updateAdvancedCoreHook();

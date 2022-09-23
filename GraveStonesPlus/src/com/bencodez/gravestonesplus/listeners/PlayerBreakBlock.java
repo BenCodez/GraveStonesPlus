@@ -87,10 +87,11 @@ public class PlayerBreakBlock implements Listener {
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onBlockBreak(BlockBreakEvent event) {
-		if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
-			for (Grave grave : plugin.getGraves()) {
-				if (grave.isGrave(event.getBlock())) {
-					if (event.getPlayer() != null) {
+		if (event.getPlayer() != null) {
+			if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
+				for (Grave grave : plugin.getGraves()) {
+					if (grave.isGrave(event.getBlock())) {
+
 						if (grave.isOwner(event.getPlayer())) {
 							event.setDropItems(false);
 							grave.claim(event.getPlayer(), event.getPlayer().getInventory());
@@ -113,9 +114,6 @@ public class PlayerBreakBlock implements Listener {
 						event.setCancelled(true);
 						return;
 
-					} else {
-						event.setCancelled(true);
-						return;
 					}
 				}
 			}

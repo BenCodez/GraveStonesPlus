@@ -41,6 +41,10 @@ public class Config extends YMLFile {
 	private boolean glowingEffectNearGrave = true;
 
 	@Getter
+	@ConfigDataBoolean(path = "DisableArmorStands")
+	private boolean disableArmorStands = true;
+
+	@Getter
 	@ConfigDataInt(path = "GlowingEffectDistance")
 	private int glowingEffectDistance = 30;
 

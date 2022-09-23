@@ -20,6 +20,10 @@ GraveTimeLimit: -1
 # This will allow restoring of graves that break before items can be obtained
 BrokenGraveTimeLimit: 96
 
+# If true, armor stands are disabled
+# Use this if performance takes a hit with armor stands
+DisableArmorStands: false
+
 Format:
   Death: 'Your grave is at %x%, %y%, %z%'
   GraveBroke: 'You broke your grave!'

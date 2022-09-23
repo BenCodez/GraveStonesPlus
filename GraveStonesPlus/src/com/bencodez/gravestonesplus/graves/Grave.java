@@ -139,6 +139,9 @@ public class Grave {
 	}
 
 	public void createHologram() {
+		if (plugin.getConfigFile().isDisableArmorStands()) {
+			return;
+		}
 		Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
 
 		HashMap<String, String> placeholders = new HashMap<String, String>();

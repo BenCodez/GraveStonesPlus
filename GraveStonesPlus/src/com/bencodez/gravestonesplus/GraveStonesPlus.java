@@ -113,6 +113,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			for (GravesConfig gr : graves1) {
 				Grave grave = new Grave(this, gr);
 				grave.removeHologramsAround();
+				grave.loadBlockMeta(gr.getLocation().getBlock());
 				if (grave.isValid()) {
 					grave.createHologram();
 					grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());

@@ -8,6 +8,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.player.PlayerInteractEvent;
 
+import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 
@@ -18,6 +19,7 @@ import com.bencodez.gravestonesplus.graves.Grave;
 public class PlayerInteract implements Listener {
 
 	/** The plugin. */
+	@SuppressWarnings("unused")
 	private GraveStonesPlus plugin;
 
 	/**
@@ -39,16 +41,18 @@ public class PlayerInteract implements Listener {
 		if (event.getAction().equals(Action.RIGHT_CLICK_BLOCK)) {
 			Block clicked = event.getClickedBlock();
 			if (clicked.getType().equals(Material.PLAYER_HEAD)) {
-				for (Grave grave : plugin.getGraves()) {
-					if (grave.isGrave(clicked)) {
-						long lastClick = grave.getLastClick();
-						long cTime = System.currentTimeMillis();
-						grave.setLastClick(cTime);
-						if (cTime - lastClick > 500) {
-							grave.onClick(event.getPlayer());
-						}
-					}
+				Object obj = MiscUtils.getInstance().getBlockMeta(clicked, "Grave");
+				if (obj == null) {
+					return;
 				}
+				Grave grave = (Grave) obj;
+				long lastClick = grave.getLastClick();
+				long cTime = System.currentTimeMillis();
+				grave.setLastClick(cTime);
+				if (cTime - lastClick > 500) {
+					grave.onClick(event.getPlayer());
+				}
+
 			}
 		}
 	}

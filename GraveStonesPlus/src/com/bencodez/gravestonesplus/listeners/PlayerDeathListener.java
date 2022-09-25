@@ -105,6 +105,7 @@ public class PlayerDeathListener implements Listener {
 		grave.createHologram();
 		grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
 		plugin.addGrave(grave);
+		grave.loadBlockMeta(emptyBlock.getBlock());
 
 		event.setDroppedExp(0);
 		event.getDrops().clear();

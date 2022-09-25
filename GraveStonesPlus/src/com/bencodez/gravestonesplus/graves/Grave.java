@@ -2,9 +2,9 @@ package com.bencodez.gravestonesplus.graves;
 
 import java.util.Date;
 import java.util.HashMap;
+import java.util.Map.Entry;
 import java.util.Timer;
 import java.util.TimerTask;
-import java.util.Map.Entry;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -20,11 +20,12 @@ import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.persistence.PersistentDataType;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
-import com.bencodez.advancedcore.api.inventory.BInventory.ClickEvent;
 import com.bencodez.advancedcore.api.inventory.BInventory;
+import com.bencodez.advancedcore.api.inventory.BInventory.ClickEvent;
 import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.item.ItemBuilder;
 import com.bencodez.advancedcore.api.messages.StringParser;
+import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.advancedcore.api.misc.StringUtils;
 import com.bencodez.advancedcore.api.user.AdvancedCoreUser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
@@ -64,6 +65,10 @@ public class Grave {
 		this.gravesConfig = gravesConfig;
 	}
 
+	public void loadBlockMeta(Block block) {
+		MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
+	}
+
 	public void createSkull() {
 		Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
@@ -76,6 +81,7 @@ public class Grave {
 					skull.setOwningPlayer(Bukkit.getOfflinePlayer(getGravesConfig().getUuid()));
 					skull.update();
 				}
+				loadBlockMeta(block);
 			}
 		});
 	}

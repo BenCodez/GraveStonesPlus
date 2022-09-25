@@ -42,7 +42,7 @@ public class Config extends YMLFile {
 
 	@Getter
 	@ConfigDataBoolean(path = "DisableArmorStands")
-	private boolean disableArmorStands = true;
+	private boolean disableArmorStands = false;
 
 	@Getter
 	@ConfigDataInt(path = "GlowingEffectDistance")

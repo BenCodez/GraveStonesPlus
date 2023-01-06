@@ -56,6 +56,10 @@ public class Config extends YMLFile {
 	private int bokenGraveTimeLimit = 96;
 
 	@Getter
+	@ConfigDataInt(path = "GraveClaimDistance")
+	private int graveClaimDistance = 10;
+
+	@Getter
 	@ConfigDataString(path = "Format.Death")
 	private String formatDeath = "Your grave is at %x%, %y%, %z%";
 	@Getter

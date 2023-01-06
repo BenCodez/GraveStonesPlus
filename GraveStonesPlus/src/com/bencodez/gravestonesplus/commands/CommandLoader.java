@@ -305,7 +305,7 @@ public class CommandLoader {
 				if (graves != null) {
 					for (Grave grave : graves) {
 						double distance = grave.getDistance(p);
-						if (distance < 10) {
+						if (distance < plugin.getConfigFile().getGraveClaimDistance()) {
 							grave.removeSkull();
 							grave.claim(p, p.getInventory());
 						}

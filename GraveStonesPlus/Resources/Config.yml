@@ -20,6 +20,9 @@ GraveTimeLimit: -1
 # This will allow restoring of graves that break before items can be obtained
 BrokenGraveTimeLimit: 96
 
+# Distance in which /gravestonesplus claimgrave will claim graves
+GraveClaimDistance: 10
+
 # If true, armor stands are disabled
 # Use this if performance takes a hit with armor stands
 DisableArmorStands: false

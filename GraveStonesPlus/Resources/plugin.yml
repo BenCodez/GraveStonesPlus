@@ -6,6 +6,7 @@ author: BenCodez
 api-version: 1.13
 libraries:
   - org.openjdk.nashorn:nashorn-core:15.3
+softdepend: [ProtocolLib, Vault, PvPManager]
 commands:
   gravestonesplus:
     description: Main plugin command

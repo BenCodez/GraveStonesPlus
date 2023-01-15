@@ -62,6 +62,13 @@ public class PlayerDeathListener implements Listener {
 			plugin.getLogger().info("Inventory was not dropped, not making grave");
 			return;
 		}
+		
+		if (plugin.getPvpManager() != null) {
+			if (!plugin.getPvpManager().canHaveGrave(event.getEntity())) {
+				plugin.getLogger().info("Can't create grave, player was in combat");
+				return;
+			}
+		}
 
 		Block block = emptyBlock.getBlock();
 		block.setType(Material.PLAYER_HEAD);

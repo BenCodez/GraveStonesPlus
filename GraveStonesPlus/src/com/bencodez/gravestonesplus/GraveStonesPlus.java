@@ -25,6 +25,7 @@ import com.bencodez.gravestonesplus.graves.GravesConfig;
 import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
+import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -166,6 +167,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			}, 1000 * 10, 1000 * 5);
 		}
 
+		if (Bukkit.getPluginManager().isPluginEnabled("PvPManager")) {
+			pvpManager = new PvpManagerHandle(this);
+		}
+
 		Bukkit.getScheduler().runTaskAsynchronously(plugin, new Runnable() {
 
 			@Override
@@ -206,6 +211,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		});
 
 	}
+
+	@Getter
+	private PvpManagerHandle pvpManager;
 
 	@Override
 	public void onPreLoad() {

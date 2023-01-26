@@ -43,6 +43,11 @@ public class PlayerDeathListener implements Listener {
 			return;
 		}
 
+		if (event.getEntity().hasMetadata("NPC")) {
+			plugin.getLogger().info("Not creating grave for NPC");
+			return;
+		}
+
 		if (!event.getEntity().hasPermission("GraveStonesPlus.AllowGrave")) {
 			plugin.getLogger().info("Not creating grave for " + event.getEntity().getName() + ", no permission");
 			return;
@@ -62,7 +67,7 @@ public class PlayerDeathListener implements Listener {
 			plugin.getLogger().info("Inventory was not dropped, not making grave");
 			return;
 		}
-		
+
 		if (plugin.getPvpManager() != null) {
 			if (!plugin.getPvpManager().canHaveGrave(event.getEntity())) {
 				plugin.getLogger().info("Can't create grave, player was in combat");

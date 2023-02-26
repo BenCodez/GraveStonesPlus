@@ -2,10 +2,12 @@ package com.bencodez.gravestonesplus.listeners;
 
 import java.util.HashMap;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.Skull;
+import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
@@ -37,7 +39,7 @@ public class PlayerDeathListener implements Listener {
 	 */
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onPlayerDeath(PlayerDeathEvent event) {
-		Location deathLocation = event.getEntity().getLocation();
+		final Location deathLocation = event.getEntity().getLocation();
 		if (plugin.getConfigFile().getDisabledWorlds().contains(deathLocation.getWorld().getName())) {
 			plugin.debug("Graves in " + deathLocation.getWorld().getName() + " are disabled");
 			return;
@@ -52,17 +54,7 @@ public class PlayerDeathListener implements Listener {
 			plugin.getLogger().info("Not creating grave for " + event.getEntity().getName() + ", no permission");
 			return;
 		}
-		Location emptyBlock = null;
-		if (deathLocation.getBlock().isEmpty()) {
-			emptyBlock = deathLocation;
-		} else {
-			emptyBlock = getAirBlock(deathLocation);
-		}
 
-		if (emptyBlock == null) {
-			plugin.getLogger().info("Failed to find air block, can't make grave");
-			return;
-		}
 		if (event.getKeepInventory()) {
 			plugin.getLogger().info("Inventory was not dropped, not making grave");
 			return;
@@ -75,17 +67,15 @@ public class PlayerDeathListener implements Listener {
 			}
 		}
 
-		Block block = emptyBlock.getBlock();
-		block.setType(Material.PLAYER_HEAD);
-		if (block.getState() instanceof Skull) {
-			Skull skull = (Skull) block.getState();
-			skull.setOwningPlayer(event.getEntity());
-			skull.update();
-		}
-
+		PlayerInventory inv = event.getEntity().getInventory();
+		final Player entity = event.getEntity();
+		final String deathMessage = event.getDeathMessage();
+		final int droppedExp = event.getDroppedExp();
+		event.setDroppedExp(0);
+		event.getDrops().clear();
 		// store items with slot number
 		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>();
-		PlayerInventory inv = event.getEntity().getInventory();
+
 		for (int i = 0; i < 36; i++) {
 			ItemStack item = inv.getItem(i);
 			if (item != null) {
@@ -109,28 +99,49 @@ public class PlayerDeathListener implements Listener {
 		if (inv.getItemInOffHand() != null) {
 			itemsWithSlot.put(-5, inv.getItemInOffHand());
 		}
+		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
 
-		Grave grave = new Grave(plugin,
-				new GravesConfig(event.getEntity().getUniqueId(), event.getEntity().getName(), emptyBlock,
-						itemsWithSlot, event.getDroppedExp(), event.getDeathMessage(), System.currentTimeMillis(),
-						false, 0));
-		grave.createHologram();
-		grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
-		plugin.addGrave(grave);
-		grave.loadBlockMeta(emptyBlock.getBlock());
+			@Override
+			public void run() {
+				Location emptyBlock = null;
+				if (deathLocation.getBlock().isEmpty()) {
+					emptyBlock = deathLocation;
+				} else {
+					emptyBlock = getAirBlock(deathLocation);
+				}
 
-		event.setDroppedExp(0);
-		event.getDrops().clear();
+				if (emptyBlock == null) {
+					plugin.getLogger().info("Failed to find air block, can't make grave");
+					return;
+				}
 
-		HashMap<String, String> placeholders = new HashMap<String, String>();
-		placeholders.put("x", "" + emptyBlock.getBlockX());
-		placeholders.put("y", "" + emptyBlock.getBlockY());
-		placeholders.put("z", "" + emptyBlock.getBlockZ());
+				Block block = emptyBlock.getBlock();
+				block.setType(Material.PLAYER_HEAD);
+				if (block.getState() instanceof Skull) {
+					Skull skull = (Skull) block.getState();
+					skull.setOwningPlayer(event.getEntity());
+					skull.update();
+				}
 
-		event.getEntity().sendMessage(StringParser.getInstance().colorize(
-				StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders)));
+				Grave grave = new Grave(plugin, new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlock,
+						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0));
+				grave.createHologram();
+				grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
+				plugin.addGrave(grave);
+				grave.loadBlockMeta(emptyBlock.getBlock());
 
-		plugin.getLogger().info("Grave: " + emptyBlock.toString());
+				HashMap<String, String> placeholders = new HashMap<String, String>();
+				placeholders.put("x", "" + emptyBlock.getBlockX());
+				placeholders.put("y", "" + emptyBlock.getBlockY());
+				placeholders.put("z", "" + emptyBlock.getBlockZ());
+
+				entity.sendMessage(StringParser.getInstance().colorize(StringParser.getInstance()
+						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders)));
+
+				plugin.getLogger().info("Grave: " + emptyBlock.toString());
+			}
+		}, 2);
+
 	}
 
 	public Location getAirBlock(Location loc) {

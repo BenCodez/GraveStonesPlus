@@ -2,7 +2,7 @@
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.bencodez</groupId>
 	<artifactId>GraveStonesPlus</artifactId>
-	<version>1.4.2</version>
+	<version>1.4.3</version>
 	<packaging>jar</packaging>
 	<name>GraveStonesPlus</name>
 	<properties>
@@ -242,7 +242,7 @@
 		<dependency>
 			<groupId>org.spigotmc</groupId>
 			<artifactId>spigot-api</artifactId>
-			<version>1.19.3-R0.1-SNAPSHOT</version>
+			<version>1.19.4-R0.1-SNAPSHOT</version>
 			<scope>provided</scope>
 		</dependency>
 		<dependency>

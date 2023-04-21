@@ -104,7 +104,8 @@ public class PlayerDeathListener implements Listener {
 			@Override
 			public void run() {
 				Location emptyBlock = null;
-				if (deathLocation.getBlock().isEmpty()) {
+				if (deathLocation.getBlock().isEmpty()
+						&& deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()) {
 					emptyBlock = deathLocation;
 				} else {
 					emptyBlock = getAirBlock(deathLocation);

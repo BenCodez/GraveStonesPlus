@@ -145,7 +145,11 @@ public class PlayerDeathListener implements Listener {
 	}
 
 	public Location getAirBlock(Location loc) {
-		for (int i = loc.getBlockY(); i < loc.getWorld().getMaxHeight(); i++) {
+		int startingY = loc.getBlockY();
+		if (startingY < loc.getWorld().getMinHeight()) {
+			startingY = loc.getWorld().getMinHeight();
+		}
+		for (int i = startingY; i < loc.getWorld().getMaxHeight(); i++) {
 			Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
 			if (b.isEmpty() || isReplaceable(b.getType())) {
 				return b.getLocation();

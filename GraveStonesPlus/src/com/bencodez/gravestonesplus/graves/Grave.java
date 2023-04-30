@@ -26,7 +26,6 @@ import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.item.ItemBuilder;
 import com.bencodez.advancedcore.api.messages.StringParser;
 import com.bencodez.advancedcore.api.misc.MiscUtils;
-import com.bencodez.advancedcore.api.misc.StringUtils;
 import com.bencodez.advancedcore.api.user.AdvancedCoreUser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 
@@ -324,7 +323,7 @@ public class Grave {
 				Grave grave = (Grave) getData("grave");
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
 					grave.removeGrave();
-					clickEvent.getWhoClicked().sendMessage(StringUtils.getInstance().colorize("&cGrave removed"));
+					clickEvent.getWhoClicked().sendMessage(StringParser.getInstance().colorize("&cGrave removed"));
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
 					openGUIWithItems(clickEvent.getPlayer());
 				} else {
@@ -369,7 +368,7 @@ public class Grave {
 						}
 					});
 					plugin.recreateBrokenGrave(grave);
-					clickEvent.getWhoClicked().sendMessage(StringUtils.getInstance().colorize("&cGrave readded"));
+					clickEvent.getWhoClicked().sendMessage(StringParser.getInstance().colorize("&cGrave readded"));
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
 					openGUIWithItems(clickEvent.getPlayer());
 				} else {

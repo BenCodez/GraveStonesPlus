@@ -547,7 +547,17 @@ public class Grave {
 			user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
 		}
 		removeHologram();
-		removeHologramsAround();
+		if (Bukkit.isPrimaryThread()) {
+			removeHologramsAround();
+		} else {
+			Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+				@Override
+				public void run() {
+					removeHologramsAround();
+				}
+			});
+		}
 		plugin.removeGrave(this);
 	}
 

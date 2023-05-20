@@ -9,6 +9,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
+import org.bukkit.event.player.PlayerBucketEmptyEvent;
 
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
@@ -60,6 +61,16 @@ public class PlayerBreakBlock implements Listener {
 	public void onWaterMove(BlockFromToEvent event) {
 		if (event.getBlock().getType().equals(Material.WATER)) {
 			if (event.getToBlock().hasMetadata("Grave")) {
+				event.setCancelled(true);
+				return;
+			}
+		}
+	}
+	
+	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	public void onWaterCreate(PlayerBucketEmptyEvent event) {
+		if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
+			if (event.getBlock().hasMetadata("Grave")) {
 				event.setCancelled(true);
 				return;
 			}

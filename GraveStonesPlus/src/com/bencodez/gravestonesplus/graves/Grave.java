@@ -546,6 +546,7 @@ public class Grave {
 		if (notInCorrectSlot) {
 			user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
 		}
+		removeGrave();
 		removeHologram();
 		if (Bukkit.isPrimaryThread()) {
 			removeHologramsAround();

@@ -60,6 +60,10 @@ public class Config extends YMLFile {
 	private int graveClaimDistance = 10;
 
 	@Getter
+	@ConfigDataInt(path = "GraveLimit")
+	private int graveLimit = 10;
+
+	@Getter
 	@ConfigDataString(path = "Format.Death")
 	private String formatDeath = "Your grave is at %x%, %y%, %z%";
 	@Getter
@@ -68,6 +72,9 @@ public class Config extends YMLFile {
 	@Getter
 	@ConfigDataString(path = "Format.ItemsNotInCorrectSite")
 	private String formatItemsNotInGrave = "Some items didn't return to the correct slot";
+	@Getter
+	@ConfigDataString(path = "Format.GraveLimitBreak")
+	private String formatGraveLimitBreak = "Breaking oldest grave due to limit reached";
 	@Getter
 	@ConfigDataString(path = "Format.NotYourGrave")
 	private String formatNotYourGrave = "Not your grave!";

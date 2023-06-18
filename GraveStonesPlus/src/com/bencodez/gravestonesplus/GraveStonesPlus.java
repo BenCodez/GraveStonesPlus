@@ -5,6 +5,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.UUID;
 
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
@@ -214,6 +215,31 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	private PvpManagerHandle pvpManager;
+
+	public int numberOfGraves(UUID uuid) {
+		int num = 0;
+		for (Grave grave : getGraves()) {
+			if (grave.getGravesConfig().getUuid().equals(uuid)) {
+				num++;
+			}
+		}
+		return num;
+	}
+
+	public Grave getOldestGrave(UUID uuid) {
+		Grave oldest = null;
+		for (Grave grave : getGraves()) {
+			if (grave.getGravesConfig().getUuid().equals(uuid)) {
+				if (oldest == null) {
+					oldest = grave;
+				}
+				if (grave.getGravesConfig().getTime() < oldest.getGravesConfig().getTime()) {
+					oldest = grave;
+				}
+			}
+		}
+		return oldest;
+	}
 
 	@Override
 	public void onPreLoad() {

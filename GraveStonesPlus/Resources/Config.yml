@@ -23,6 +23,9 @@ BrokenGraveTimeLimit: 96
 # Distance in which /gravestonesplus claimgrave will claim graves
 GraveClaimDistance: 10
 
+# Limit number of graves to can be created by a single person
+GraveLimit: 10
+
 # If true, armor stands are disabled
 # Use this if performance takes a hit with armor stands
 DisableArmorStands: false
@@ -30,6 +33,7 @@ DisableArmorStands: false
 Format:
   Death: 'Your grave is at %x%, %y%, %z%'
   GraveBroke: 'You broke your grave!'
+  GraveLimitBreak: 'Breaking oldest grave due to limit reached'
   ItemsNotInCorrectSlot: "Some items didn't return to the correct slot"
   NotYourGrave: 'Not your grave!'
   # Hologram message

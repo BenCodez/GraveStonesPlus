@@ -67,8 +67,18 @@ public class PlayerDeathListener implements Listener {
 			}
 		}
 
-		PlayerInventory inv = event.getEntity().getInventory();
 		final Player entity = event.getEntity();
+		if (plugin.numberOfGraves(entity.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {
+			Grave oldest = plugin.getOldestGrave(entity.getUniqueId());
+			if (oldest != null) {
+				oldest.removeGrave();
+				entity.sendMessage(
+						StringParser.getInstance().colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+			}
+		}
+
+		PlayerInventory inv = event.getEntity().getInventory();
+
 		final String deathMessage = event.getDeathMessage();
 		final int droppedExp = event.getDroppedExp();
 		event.setDroppedExp(0);

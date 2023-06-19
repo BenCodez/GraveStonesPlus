@@ -55,7 +55,7 @@ public class CommandLoader {
 
 	public void loadCommands() {
 		plugin.getCommands()
-				.add(new CommandHandler(new String[] { "Reload" }, "GraveStonesPlus.Reload", "Reload the plugin") {
+				.add(new CommandHandler(plugin, new String[] { "Reload" }, "GraveStonesPlus.Reload", "Reload the plugin") {
 
 					@Override
 					public void execute(CommandSender sender, String[] args) {
@@ -65,7 +65,7 @@ public class CommandLoader {
 				});
 
 		plugin.getCommands()
-				.add(new CommandHandler(new String[] { "Help" }, "GraveStonesPlus.Help", "Shows this page") {
+				.add(new CommandHandler(plugin, new String[] { "Help" }, "GraveStonesPlus.Help", "Shows this page") {
 
 					@Override
 					public void execute(CommandSender sender, String[] args) {
@@ -74,7 +74,7 @@ public class CommandLoader {
 				});
 
 		plugin.getCommands()
-				.add(new CommandHandler(new String[] { "Perms" }, "GraveStonesPlus.Perms", "List all perms") {
+				.add(new CommandHandler(plugin, new String[] { "Perms" }, "GraveStonesPlus.Perms", "List all perms") {
 
 					@Override
 					public void execute(CommandSender sender, String[] args) {
@@ -120,7 +120,7 @@ public class CommandLoader {
 				});
 
 		plugin.getCommands().add(
-				new CommandHandler(new String[] { "Graves" }, "GraveStonesPlus.Graves", "See current graves", false) {
+				new CommandHandler(plugin, new String[] { "Graves" }, "GraveStonesPlus.Graves", "See current graves", false) {
 
 					@Override
 					public void execute(CommandSender sender, String[] args) {
@@ -134,7 +134,7 @@ public class CommandLoader {
 					}
 				});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "AllGraves" }, "GraveStonesPlus.AllGraves",
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "AllGraves" }, "GraveStonesPlus.AllGraves",
 				"See all current graves", false) {
 
 			@Override
@@ -149,7 +149,7 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "AllGraves", "(Player)" },
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "AllGraves", "(Player)" },
 				"GraveStonesPlus.AllGraves.Player", "See all current graves of player", false) {
 
 			@Override
@@ -166,7 +166,7 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "AllBrokenGraves" },
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "AllBrokenGraves" },
 				"GraveStonesPlus.AllBrokenGraves", "See all current recent broken graves", false) {
 
 			@Override
@@ -181,7 +181,7 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "AllBrokenGraves", "(Player)" },
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "AllBrokenGraves", "(Player)" },
 				"GraveStonesPlus.AllBrokenGraves.Player", "See all current recent broken graves", false) {
 
 			@Override
@@ -198,7 +198,7 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "CheckValidGraves" },
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "CheckValidGraves" },
 				"GraveStonesPlus.CheckValidGraves", "Check and remove invalid graves") {
 
 			@Override
@@ -216,7 +216,7 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "Graves", "(player)" },
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "Graves", "(player)" },
 				"GraveStonesPlus.Graves.Other", "See current graves", false) {
 
 			@Override
@@ -232,7 +232,7 @@ public class CommandLoader {
 		});
 
 		plugin.getCommands()
-				.add(new CommandHandler(new String[] { "KillGravesRadius" }, "GraveStonesPlus.KillGravesRadius",
+				.add(new CommandHandler(plugin, new String[] { "KillGravesRadius" }, "GraveStonesPlus.KillGravesRadius",
 						"Kills armor stands/graves from the plugin within a radius of 10", false) {
 
 					@Override
@@ -273,7 +273,7 @@ public class CommandLoader {
 					}
 				});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "Teleport" }, "GraveStonesPlus.Teleport",
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "Teleport" }, "GraveStonesPlus.Teleport",
 				"Teleport to latest grave", false) {
 
 			@Override
@@ -295,7 +295,7 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "ClaimGrave" }, "GraveStonesPlus.ClaimGrave",
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "ClaimGrave" }, "GraveStonesPlus.ClaimGrave",
 				"Claim Grave nearby", false) {
 
 			@Override
@@ -316,7 +316,7 @@ public class CommandLoader {
 			}
 		});
 
-		plugin.getCommands().add(new CommandHandler(new String[] { "ViewGrave" }, "GraveStonesPlus.ViewGrave",
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "ViewGrave" }, "GraveStonesPlus.ViewGrave",
 				"View current grave items that you are looking at", false) {
 
 			@Override

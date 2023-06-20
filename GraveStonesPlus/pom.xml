@@ -271,7 +271,7 @@
 				<dependency>
 					<groupId>com.github.bencodez</groupId>
 					<artifactId>advancedcore</artifactId>
-					<version>master-SNAPSHOT</version>
+					<version>3.6.2</version>
 				</dependency>
 			</dependencies>
 			<repositories>

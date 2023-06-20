@@ -254,7 +254,7 @@
 		<dependency>
 			<groupId>me.NoChance.PvPManager</groupId>
 			<artifactId>PvPManager</artifactId>
-			<version>3.10.0</version>
+			<version>3.12</version>
 			<scope>provided</scope>
 		</dependency>
 	</dependencies>

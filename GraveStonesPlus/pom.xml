@@ -269,29 +269,6 @@
 			</properties>
 			<dependencies>
 				<dependency>
-					<groupId>com.github.bencodez</groupId>
-					<artifactId>advancedcore</artifactId>
-					<version>master-SNAPSHOT</version>
-				</dependency>
-			</dependencies>
-			<repositories>
-				<repository>
-					<id>jitpack.io</id>
-					<url>https://jitpack.io</url>
-					<snapshots>
-						<enabled>true</enabled>
-						<updatePolicy>always</updatePolicy>
-					</snapshots>
-				</repository>
-			</repositories>
-		</profile>
-		<profile>
-			<id>prod2</id>
-			<properties>
-				<build.profile.id>prod2</build.profile.id>
-			</properties>
-			<dependencies>
-				<dependency>
 					<groupId>com.bencodez</groupId>
 					<artifactId>advancedcore</artifactId>
 					<version>LATEST</version>

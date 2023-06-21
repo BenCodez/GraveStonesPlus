@@ -1,5 +1,6 @@
 package com.bencodez.gravestonesplus.graves;
 
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map.Entry;
@@ -480,6 +481,22 @@ public class Grave {
 			return true;
 		}
 		return false;
+	}
+
+	public void dropItemsOnGround(Player p) {
+		Location loc = getGravesConfig().getLocation();
+		final ArrayList<ItemStack> items = new ArrayList<ItemStack>(getGravesConfig().getItems().values());
+		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				for (ItemStack item : items) {
+					if (!item.getType().equals(Material.AIR)) {
+						loc.getWorld().dropItem(loc, item);
+					}
+				}
+			}
+		});
 	}
 
 	public void claim(Player player, PlayerInventory currentInv) {

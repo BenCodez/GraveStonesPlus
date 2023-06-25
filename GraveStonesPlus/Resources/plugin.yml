@@ -1,5 +1,5 @@
 name: ${project.name}
-version: ${project.version}
+version: "${project.version}"
 main: com.bencodez.gravestonesplus.GraveStonesPlus
 description: Description
 author: BenCodez

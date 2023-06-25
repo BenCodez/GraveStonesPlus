@@ -30,6 +30,10 @@ GraveLimit: 10
 # Use this if performance takes a hit with armor stands
 DisableArmorStands: false
 
+# Chance for items to drops
+# This perctange is caculated on every item
+PercentageDrops: 100
+
 Format:
   Death: 'Your grave is at %x%, %y%, %z%'
   GraveBroke: 'You broke your grave!'

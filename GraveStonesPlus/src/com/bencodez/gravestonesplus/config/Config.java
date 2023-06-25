@@ -60,6 +60,10 @@ public class Config extends YMLFile {
 	private int graveClaimDistance = 10;
 
 	@Getter
+	@ConfigDataInt(path = "PercentageDrops")
+	private int percentageDrops = 100;
+
+	@Getter
 	@ConfigDataInt(path = "GraveLimit")
 	private int graveLimit = 10;
 

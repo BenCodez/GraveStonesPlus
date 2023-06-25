@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map.Entry;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.Timer;
 import java.util.TimerTask;
 
@@ -485,12 +486,21 @@ public class Grave {
 
 	public void dropItemsOnGround(Player p) {
 		Location loc = getGravesConfig().getLocation();
-		final ArrayList<ItemStack> items = new ArrayList<ItemStack>(getGravesConfig().getItems().values());
+		ArrayList<ItemStack> items = new ArrayList<ItemStack>(getGravesConfig().getItems().values());
+		int chance = plugin.getConfigFile().getPercentageDrops();
+		final ArrayList<ItemStack> itemsToDrop = new ArrayList<ItemStack>();
+		for (ItemStack item : items) {
+			if (!item.getType().equals(Material.AIR)) {
+				if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
+					itemsToDrop.add(item);
+				}
+			}
+		}
 		Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
 			@Override
 			public void run() {
-				for (ItemStack item : items) {
+				for (ItemStack item : itemsToDrop) {
 					if (!item.getType().equals(Material.AIR)) {
 						loc.getWorld().dropItem(loc, item);
 					}
@@ -503,59 +513,62 @@ public class Grave {
 		AdvancedCoreUser user = plugin.getUserManager().getUser(player);
 		user.giveExp(getGravesConfig().getExp());
 
+		int chance = plugin.getConfigFile().getPercentageDrops();
 		boolean notInCorrectSlot = false;
 		for (Entry<Integer, ItemStack> item : getGravesConfig().getItems().entrySet()) {
+			if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
 
-			if (item.getKey().intValue() >= 0) {
-				ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
-				if (isSlotAvailable(currentItem)) {
-					currentInv.setItem(item.getKey().intValue(), item.getValue());
+				if (item.getKey().intValue() >= 0) {
+					ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
+					if (isSlotAvailable(currentItem)) {
+						currentInv.setItem(item.getKey().intValue(), item.getValue());
+					} else {
+						notInCorrectSlot = true;
+						user.giveItem(item.getValue());
+					}
 				} else {
-					notInCorrectSlot = true;
-					user.giveItem(item.getValue());
-				}
-			} else {
-				switch (item.getKey().intValue()) {
-				case -1:
-					if (isSlotAvailable(currentInv.getHelmet())) {
-						currentInv.setHelmet(item.getValue());
-					} else {
-						user.giveItem(item.getValue());
-						notInCorrectSlot = true;
+					switch (item.getKey().intValue()) {
+					case -1:
+						if (isSlotAvailable(currentInv.getHelmet())) {
+							currentInv.setHelmet(item.getValue());
+						} else {
+							user.giveItem(item.getValue());
+							notInCorrectSlot = true;
+						}
+						break;
+					case -2:
+						if (isSlotAvailable(currentInv.getChestplate())) {
+							currentInv.setChestplate(item.getValue());
+						} else {
+							user.giveItem(item.getValue());
+							notInCorrectSlot = true;
+						}
+						break;
+					case -3:
+						if (isSlotAvailable(currentInv.getLeggings())) {
+							currentInv.setLeggings(item.getValue());
+						} else {
+							user.giveItem(item.getValue());
+							notInCorrectSlot = true;
+						}
+						break;
+					case -4:
+						if (isSlotAvailable(currentInv.getBoots())) {
+							currentInv.setBoots(item.getValue());
+						} else {
+							user.giveItem(item.getValue());
+							notInCorrectSlot = true;
+						}
+						break;
+					case -5:
+						if (isSlotAvailable(currentInv.getItemInOffHand())) {
+							currentInv.setItemInOffHand(item.getValue());
+						} else {
+							user.giveItem(item.getValue());
+							notInCorrectSlot = true;
+						}
+						break;
 					}
-					break;
-				case -2:
-					if (isSlotAvailable(currentInv.getChestplate())) {
-						currentInv.setChestplate(item.getValue());
-					} else {
-						user.giveItem(item.getValue());
-						notInCorrectSlot = true;
-					}
-					break;
-				case -3:
-					if (isSlotAvailable(currentInv.getLeggings())) {
-						currentInv.setLeggings(item.getValue());
-					} else {
-						user.giveItem(item.getValue());
-						notInCorrectSlot = true;
-					}
-					break;
-				case -4:
-					if (isSlotAvailable(currentInv.getBoots())) {
-						currentInv.setBoots(item.getValue());
-					} else {
-						user.giveItem(item.getValue());
-						notInCorrectSlot = true;
-					}
-					break;
-				case -5:
-					if (isSlotAvailable(currentInv.getItemInOffHand())) {
-						currentInv.setItemInOffHand(item.getValue());
-					} else {
-						user.giveItem(item.getValue());
-						notInCorrectSlot = true;
-					}
-					break;
 				}
 			}
 		}

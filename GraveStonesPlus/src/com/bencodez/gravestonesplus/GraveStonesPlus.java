@@ -16,6 +16,7 @@ import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
 import com.bencodez.advancedcore.api.metrics.BStatsMetrics;
 import com.bencodez.advancedcore.api.updater.Updater;
+import com.bencodez.advancedcore.api.yml.YMLConfig;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
@@ -273,7 +274,23 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	private void updateAdvancedCoreHook() {
 		getJavascriptEngine().put("GraveStonesPlus", this);
-		setConfigData(configFile.getData());
+		setConfigData(new YMLConfig(plugin, configFile.getData()) {
+
+			@Override
+			public void setValue(String path, Object value) {
+				configFile.setValue(path, value);
+			}
+
+			@Override
+			public void saveData() {
+				configFile.saveData();
+			}
+
+			@Override
+			public void createSection(String key) {
+				configFile.createSection(key);
+			}
+		});
 		setLoadUserData(false);
 	}
 

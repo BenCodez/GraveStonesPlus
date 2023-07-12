@@ -7,6 +7,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.Skull;
+import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
@@ -90,25 +91,37 @@ public class PlayerDeathListener implements Listener {
 		for (int i = 0; i < 36; i++) {
 			ItemStack item = inv.getItem(i);
 			if (item != null) {
-				itemsWithSlot.put(i, item);
+				if (!hasCurseOfVanishing(item)) {
+					itemsWithSlot.put(i, item);
+				}
 			}
 		}
 
 		// store items outside of player inventory
 		if (inv.getHelmet() != null) {
-			itemsWithSlot.put(-1, inv.getHelmet());
+			if (!hasCurseOfVanishing(inv.getHelmet())) {
+				itemsWithSlot.put(-1, inv.getHelmet());
+			}
 		}
 		if (inv.getChestplate() != null) {
-			itemsWithSlot.put(-2, inv.getChestplate());
+			if (!hasCurseOfVanishing(inv.getChestplate())) {
+				itemsWithSlot.put(-2, inv.getChestplate());
+			}
 		}
 		if (inv.getLeggings() != null) {
-			itemsWithSlot.put(-3, inv.getLeggings());
+			if (!hasCurseOfVanishing(inv.getLeggings())) {
+				itemsWithSlot.put(-3, inv.getLeggings());
+			}
 		}
 		if (inv.getBoots() != null) {
-			itemsWithSlot.put(-4, inv.getBoots());
+			if (!hasCurseOfVanishing(inv.getBoots())) {
+				itemsWithSlot.put(-4, inv.getBoots());
+			}
 		}
 		if (inv.getItemInOffHand() != null) {
-			itemsWithSlot.put(-5, inv.getItemInOffHand());
+			if (!hasCurseOfVanishing(inv.getItemInOffHand())) {
+				itemsWithSlot.put(-5, inv.getItemInOffHand());
+			}
 		}
 		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
 
@@ -154,6 +167,13 @@ public class PlayerDeathListener implements Listener {
 			}
 		}, 2);
 
+	}
+
+	public boolean hasCurseOfVanishing(ItemStack item) {
+		if (item.hasItemMeta()) {
+			return item.getItemMeta().getEnchants().containsKey(Enchantment.VANISHING_CURSE);
+		}
+		return false;
 	}
 
 	public Location getAirBlock(Location loc) {

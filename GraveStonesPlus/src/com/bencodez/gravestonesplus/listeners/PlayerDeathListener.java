@@ -195,7 +195,7 @@ public class PlayerDeathListener implements Listener {
 				}
 			}
 		} else {
-			for (int i = startingY; i > loc.getWorld().getMinHeight(); i--) {
+			for (int i = startingY-1; i > loc.getWorld().getMinHeight(); i--) {
 				Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
 				if (b.isEmpty() || isReplaceable(b.getType())) {
 					return b.getLocation();

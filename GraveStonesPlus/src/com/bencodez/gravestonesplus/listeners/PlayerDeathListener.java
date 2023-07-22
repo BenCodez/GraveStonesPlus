@@ -129,7 +129,8 @@ public class PlayerDeathListener implements Listener {
 			public void run() {
 				Location emptyBlock = null;
 				if (deathLocation.getBlock().isEmpty()
-						&& deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()) {
+						&& deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()
+						&& deathLocation.getBlockY() < deathLocation.getWorld().getMaxHeight()) {
 					emptyBlock = deathLocation;
 				} else {
 					emptyBlock = getAirBlock(deathLocation);
@@ -178,13 +179,27 @@ public class PlayerDeathListener implements Listener {
 
 	public Location getAirBlock(Location loc) {
 		int startingY = loc.getBlockY();
+		boolean reverse = false;
 		if (startingY < loc.getWorld().getMinHeight()) {
 			startingY = loc.getWorld().getMinHeight();
 		}
-		for (int i = startingY; i < loc.getWorld().getMaxHeight(); i++) {
-			Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
-			if (b.isEmpty() || isReplaceable(b.getType())) {
-				return b.getLocation();
+		if (startingY > loc.getWorld().getMaxHeight()) {
+			reverse = true;
+			startingY = loc.getWorld().getMaxHeight();
+		}
+		if (!reverse) {
+			for (int i = startingY; i < loc.getWorld().getMaxHeight(); i++) {
+				Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
+				if (b.isEmpty() || isReplaceable(b.getType())) {
+					return b.getLocation();
+				}
+			}
+		} else {
+			for (int i = startingY; i > loc.getWorld().getMinHeight(); i--) {
+				Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
+				if (b.isEmpty() || isReplaceable(b.getType())) {
+					return b.getLocation();
+				}
 			}
 		}
 		return null;

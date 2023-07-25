@@ -8,6 +8,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
 import org.bukkit.event.block.BlockFromToEvent;
+import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.player.PlayerBucketEmptyEvent;
 
@@ -66,7 +67,7 @@ public class PlayerBreakBlock implements Listener {
 			}
 		}
 	}
-	
+
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onWaterCreate(PlayerBucketEmptyEvent event) {
 		if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
@@ -119,6 +120,20 @@ public class PlayerBreakBlock implements Listener {
 				event.setCancelled(true);
 				return;
 
+			}
+		}
+	}
+
+	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	public void onPistonBreak(BlockPistonExtendEvent event) {
+		for (Block block : event.getBlocks()) {
+			if (block.getType().equals(Material.PLAYER_HEAD)) {
+				Object obj = MiscUtils.getInstance().getBlockMeta(block, "Grave");
+				if (obj == null) {
+					return;
+				} else {
+					event.setCancelled(true);
+				}
 			}
 		}
 	}

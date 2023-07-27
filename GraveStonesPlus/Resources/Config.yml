@@ -34,6 +34,11 @@ DisableArmorStands: false
 # This perctange is caculated on every item
 PercentageDrops: 100
 
+# Keeps items with lore set here on player death
+# %player% works here
+# Set to '' to disable
+KeepItemsWithLore: ''
+
 Format:
   Death: 'Your grave is at %x%, %y%, %z%'
   GraveBroke: 'You broke your grave!'

@@ -67,6 +67,10 @@ public class Config extends YMLFile {
 	@ConfigDataInt(path = "GraveLimit")
 	private int graveLimit = 10;
 
+	@ConfigDataString(path = "KeepItemsWithLore")
+	@Getter
+	private String keepItemsWithLore = "";
+
 	@Getter
 	@ConfigDataString(path = "Format.Death")
 	private String formatDeath = "Your grave is at %x%, %y%, %z%";

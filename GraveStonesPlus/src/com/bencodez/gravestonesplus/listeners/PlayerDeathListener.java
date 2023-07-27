@@ -1,6 +1,7 @@
 package com.bencodez.gravestonesplus.listeners;
 
 import java.util.HashMap;
+import java.util.UUID;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -13,10 +14,13 @@ import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.entity.PlayerDeathEvent;
+import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.ItemMeta;
 
 import com.bencodez.advancedcore.api.messages.StringParser;
+import com.bencodez.advancedcore.api.misc.ArrayUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GravesConfig;
@@ -32,6 +36,8 @@ public class PlayerDeathListener implements Listener {
 	public PlayerDeathListener(GraveStonesPlus plugin) {
 		this.plugin = plugin;
 	}
+
+	private final HashMap<UUID, HashMap<Integer, ItemStack>> deathItems = new HashMap<UUID, HashMap<Integer, ItemStack>>();
 
 	/**
 	 * On player interact.
@@ -80,6 +86,8 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		PlayerInventory inv = event.getEntity().getInventory();
+		String text = StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(),
+				"player", event.getEntity().getName());
 
 		final String deathMessage = event.getDeathMessage();
 		final int droppedExp = event.getDroppedExp();
@@ -87,11 +95,14 @@ public class PlayerDeathListener implements Listener {
 		event.getDrops().clear();
 		// store items with slot number
 		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>();
+		HashMap<Integer, ItemStack> keepItems = new HashMap<Integer, ItemStack>();
 
 		for (int i = 0; i < 36; i++) {
 			ItemStack item = inv.getItem(i);
 			if (item != null) {
-				if (!hasCurseOfVanishing(item)) {
+				if (keepItemsWithMatchingLore(item, text)) {
+					keepItems.put(i, item);
+				} else if (!hasCurseOfVanishing(item)) {
 					itemsWithSlot.put(i, item);
 				}
 			}
@@ -99,29 +110,42 @@ public class PlayerDeathListener implements Listener {
 
 		// store items outside of player inventory
 		if (inv.getHelmet() != null) {
-			if (!hasCurseOfVanishing(inv.getHelmet())) {
+			if (keepItemsWithMatchingLore(inv.getHelmet(), text)) {
+				keepItems.put(-1, inv.getHelmet());
+			} else if (!hasCurseOfVanishing(inv.getHelmet())) {
 				itemsWithSlot.put(-1, inv.getHelmet());
 			}
 		}
 		if (inv.getChestplate() != null) {
-			if (!hasCurseOfVanishing(inv.getChestplate())) {
+			if (keepItemsWithMatchingLore(inv.getChestplate(), text)) {
+				keepItems.put(-2, inv.getChestplate());
+			} else if (!hasCurseOfVanishing(inv.getChestplate())) {
 				itemsWithSlot.put(-2, inv.getChestplate());
 			}
 		}
 		if (inv.getLeggings() != null) {
-			if (!hasCurseOfVanishing(inv.getLeggings())) {
+			if (keepItemsWithMatchingLore(inv.getLeggings(), text)) {
+				keepItems.put(-3, inv.getLeggings());
+			} else if (!hasCurseOfVanishing(inv.getLeggings())) {
 				itemsWithSlot.put(-3, inv.getLeggings());
 			}
 		}
 		if (inv.getBoots() != null) {
-			if (!hasCurseOfVanishing(inv.getBoots())) {
+			if (keepItemsWithMatchingLore(inv.getBoots(), text)) {
+				keepItems.put(-4, inv.getBoots());
+			} else if (!hasCurseOfVanishing(inv.getBoots())) {
 				itemsWithSlot.put(-4, inv.getBoots());
 			}
 		}
 		if (inv.getItemInOffHand() != null) {
-			if (!hasCurseOfVanishing(inv.getItemInOffHand())) {
+			if (keepItemsWithMatchingLore(inv.getItemInOffHand(), text)) {
+				keepItems.put(-5, inv.getItemInOffHand());
+			} else if (!hasCurseOfVanishing(inv.getItemInOffHand())) {
 				itemsWithSlot.put(-5, inv.getItemInOffHand());
 			}
+		}
+		if (!keepItems.isEmpty()) {
+			deathItems.put(event.getEntity().getUniqueId(), keepItems);
 		}
 		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
 
@@ -168,6 +192,44 @@ public class PlayerDeathListener implements Listener {
 			}
 		}, 2);
 
+	}
+
+	@EventHandler(priority = EventPriority.HIGH)
+	public void onRespawn(PlayerRespawnEvent event) {
+		Player player = event.getPlayer();
+		UUID playerUUID = player.getUniqueId();
+		if (deathItems.containsKey(playerUUID)) {
+			HashMap<Integer, ItemStack> items = deathItems.get(playerUUID);
+			PlayerInventory playerInventory = player.getInventory();
+
+			for (Integer i : items.keySet()) {
+				if (playerInventory.getItem(i) == null || playerInventory.getItem(i).getType().equals(Material.AIR)) {
+					playerInventory.setItem(i, items.get(i));
+				} else {
+					// if slot is taken
+					playerInventory.addItem(items.get(i));
+				}
+
+			}
+
+			deathItems.remove(playerUUID);
+		}
+
+	}
+
+	public boolean keepItemsWithMatchingLore(ItemStack item, String text) {
+
+		if (!text.isEmpty()) {
+			if (item.hasItemMeta()) {
+				ItemMeta meta = item.getItemMeta();
+				if (meta.hasLore()) {
+					if (ArrayUtils.getInstance().containsIgnoreCase(meta.getLore(), text)) {
+						return true;
+					}
+				}
+			}
+		}
+		return false;
 	}
 
 	public boolean hasCurseOfVanishing(ItemStack item) {

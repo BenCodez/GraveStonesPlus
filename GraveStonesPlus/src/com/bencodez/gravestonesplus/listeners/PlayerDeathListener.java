@@ -86,8 +86,11 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		PlayerInventory inv = event.getEntity().getInventory();
+		HashMap<String, String> placeholders = new HashMap<String, String>();
+		placeholders.put("player", event.getEntity().getName());
+		placeholders.put("displayname", event.getEntity().getDisplayName());
 		String text = StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(),
-				"player", event.getEntity().getName());
+				placeholders);
 
 		final String deathMessage = event.getDeathMessage();
 		final int droppedExp = event.getDroppedExp();

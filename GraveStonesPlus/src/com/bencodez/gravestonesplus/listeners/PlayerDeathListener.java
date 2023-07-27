@@ -206,11 +206,52 @@ public class PlayerDeathListener implements Listener {
 			PlayerInventory playerInventory = player.getInventory();
 
 			for (Integer i : items.keySet()) {
-				if (playerInventory.getItem(i) == null || playerInventory.getItem(i).getType().equals(Material.AIR)) {
-					playerInventory.setItem(i, items.get(i));
+				if (i >= 0) {
+					if (playerInventory.getItem(i) == null
+							|| playerInventory.getItem(i).getType().equals(Material.AIR)) {
+						playerInventory.setItem(i, items.get(i));
+					} else {
+						// if slot is taken
+						playerInventory.addItem(items.get(i));
+					}
 				} else {
-					// if slot is taken
-					playerInventory.addItem(items.get(i));
+					switch (i) {
+					case -1:
+						if (isSlotAvailable(playerInventory.getHelmet())) {
+							playerInventory.setHelmet(items.get(i));
+						} else {
+							playerInventory.addItem(items.get(i));
+						}
+						break;
+					case -2:
+						if (isSlotAvailable(playerInventory.getChestplate())) {
+							playerInventory.setChestplate(items.get(i));
+						} else {
+							playerInventory.addItem(items.get(i));
+						}
+						break;
+					case -3:
+						if (isSlotAvailable(playerInventory.getLeggings())) {
+							playerInventory.setLeggings(items.get(i));
+						} else {
+							playerInventory.addItem(items.get(i));
+						}
+						break;
+					case -4:
+						if (isSlotAvailable(playerInventory.getBoots())) {
+							playerInventory.setBoots(items.get(i));
+						} else {
+							playerInventory.addItem(items.get(i));
+						}
+						break;
+					case -5:
+						if (isSlotAvailable(playerInventory.getItemInOffHand())) {
+							playerInventory.setItemInOffHand(items.get(i));
+						} else {
+							playerInventory.addItem(items.get(i));
+						}
+						break;
+					}
 				}
 
 			}
@@ -218,6 +259,13 @@ public class PlayerDeathListener implements Listener {
 			deathItems.remove(playerUUID);
 		}
 
+	}
+
+	public boolean isSlotAvailable(ItemStack slot) {
+		if (slot == null || slot.getType().isAir()) {
+			return true;
+		}
+		return false;
 	}
 
 	public boolean keepItemsWithMatchingLore(ItemStack item, String text) {

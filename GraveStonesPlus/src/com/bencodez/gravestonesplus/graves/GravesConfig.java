@@ -84,20 +84,42 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@SuppressWarnings("unchecked")
 	public static GravesConfig deserialize(Map<String, Object> deserialize) {
-		String str = deserialize.get("GraveUUID").toString();
-		if (str == null || str.isEmpty()) {
+		Object strObj = deserialize.get("GraveUUID");
+		String str = "";
+		if (strObj != null) {
+			str = strObj.toString();
+		}
+		if (str == null || str.isEmpty() && GraveStonesPlus.plugin.isUsingDisplayEntities()) {
 			str = GraveStonesPlus.plugin.generateGraveUUID().toString();
+		} else {
+			str = null;
 		}
 
-		return new GravesConfig(UUID.fromString(deserialize.get("UUID").toString()),
-				deserialize.get("PlayerName").toString(),
-				new Location(Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString())),
-						NumberConversions.toInt(deserialize.get("X")), NumberConversions.toInt(deserialize.get("Y")),
-						NumberConversions.toInt(deserialize.get("Z"))),
-				(HashMap<Integer, ItemStack>) deserialize.get("Items"), NumberConversions.toInt(deserialize.get("EXP")),
-				deserialize.get("DeathMessage").toString(), NumberConversions.toLong(deserialize.get("Time")),
-				Boolean.valueOf(deserialize.get("Destroyed").toString()),
-				NumberConversions.toLong(deserialize.get("DestroyedTime")), UUID.fromString(str));
+		if (str != null) {
+			return new GravesConfig(UUID.fromString(deserialize.get("UUID").toString()),
+					deserialize.get("PlayerName").toString(),
+					new Location(Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString())),
+							NumberConversions.toInt(deserialize.get("X")),
+							NumberConversions.toInt(deserialize.get("Y")),
+							NumberConversions.toInt(deserialize.get("Z"))),
+					(HashMap<Integer, ItemStack>) deserialize.get("Items"),
+					NumberConversions.toInt(deserialize.get("EXP")), deserialize.get("DeathMessage").toString(),
+					NumberConversions.toLong(deserialize.get("Time")),
+					Boolean.valueOf(deserialize.get("Destroyed").toString()),
+					NumberConversions.toLong(deserialize.get("DestroyedTime")), UUID.fromString(str));
+		} else {
+			return new GravesConfig(UUID.fromString(deserialize.get("UUID").toString()),
+					deserialize.get("PlayerName").toString(),
+					new Location(Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString())),
+							NumberConversions.toInt(deserialize.get("X")),
+							NumberConversions.toInt(deserialize.get("Y")),
+							NumberConversions.toInt(deserialize.get("Z"))),
+					(HashMap<Integer, ItemStack>) deserialize.get("Items"),
+					NumberConversions.toInt(deserialize.get("EXP")), deserialize.get("DeathMessage").toString(),
+					NumberConversions.toLong(deserialize.get("Time")),
+					Boolean.valueOf(deserialize.get("Destroyed").toString()),
+					NumberConversions.toLong(deserialize.get("DestroyedTime")), null);
+		}
 	}
 
 }

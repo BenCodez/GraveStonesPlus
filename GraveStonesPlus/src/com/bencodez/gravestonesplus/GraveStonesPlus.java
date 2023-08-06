@@ -23,10 +23,12 @@ import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompl
 import com.bencodez.gravestonesplus.config.Config;
 import com.bencodez.gravestonesplus.config.GraveLocations;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.graves.GraveDisplayEntityHandle;
 import com.bencodez.gravestonesplus.graves.GravesConfig;
 import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
+import com.bencodez.gravestonesplus.listeners.PlayerInteractEntity;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
 
 import lombok.Getter;
@@ -79,8 +81,31 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Setter
 	private Updater updater;
 
+	@Getter
+	@Setter
+	private boolean usingDisplayEntities = false;
+
+	@Getter
+	private GraveDisplayEntityHandle graveDisplayEntityHandler;
+
+	public UUID generateGraveUUID() {
+		UUID uuid = UUID.randomUUID();
+		for (Grave grave : graves) {
+			if (grave.getGravesConfig().getGraveUUID().equals(uuid)) {
+				return generateGraveUUID();
+			}
+		}
+		for (Grave grave : brokenGraves) {
+			if (grave.getGravesConfig().getGraveUUID().equals(uuid)) {
+				return generateGraveUUID();
+			}
+		}
+		return uuid;
+	}
+
 	@Override
 	public void onPostLoad() {
+		graveDisplayEntityHandler = new GraveDisplayEntityHandle(this);
 		graves = Collections.synchronizedList(new ArrayList<Grave>());
 		brokenGraves = Collections.synchronizedList(new ArrayList<Grave>());
 
@@ -117,6 +142,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 				Grave grave = new Grave(this, gr);
 				grave.removeHologramsAround();
 				grave.loadBlockMeta(gr.getLocation().getBlock());
+				grave.checkBlockDisplay();
 				if (grave.isValid()) {
 					grave.createHologram();
 					grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
@@ -134,6 +160,11 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		Bukkit.getPluginManager().registerEvents(new PlayerDeathListener(this), this);
 		Bukkit.getPluginManager().registerEvents(new PlayerInteract(this), this);
 		Bukkit.getPluginManager().registerEvents(new PlayerBreakBlock(this), this);
+		if (plugin.getConfigFile().isUseDisplayEntities()) {
+			usingDisplayEntities = true;
+			Bukkit.getPluginManager().registerEvents(new PlayerInteractEntity(this), this);
+			plugin.debug("Using display entities WIP");
+		}
 
 		getCommand("gravestonesplus").setExecutor(new CommandGraveStonesPlus(this));
 		getCommand("gravestonesplus").setTabCompleter(new GraveStonesPlusTabCompleter(this));

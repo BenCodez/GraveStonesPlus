@@ -168,20 +168,25 @@ public class PlayerDeathListener implements Listener {
 					return;
 				}
 
-				Block block = emptyBlock.getBlock();
-				block.setType(Material.PLAYER_HEAD);
-				if (block.getState() instanceof Skull) {
-					Skull skull = (Skull) block.getState();
-					skull.setOwningPlayer(event.getEntity());
-					skull.update();
+				if (!plugin.isUsingDisplayEntities()) {
+					Block block = emptyBlock.getBlock();
+					block.setType(Material.PLAYER_HEAD);
+					if (block.getState() instanceof Skull) {
+						Skull skull = (Skull) block.getState();
+						skull.setOwningPlayer(event.getEntity());
+						skull.update();
+					}
 				}
 
 				Grave grave = new Grave(plugin, new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlock,
-						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0));
+						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null));
 				grave.createHologram();
 				grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
 				plugin.addGrave(grave);
 				grave.loadBlockMeta(emptyBlock.getBlock());
+				if (plugin.isUsingDisplayEntities()) {
+					grave.createSkull();
+				}
 
 				HashMap<String, String> placeholders = new HashMap<String, String>();
 				placeholders.put("x", "" + emptyBlock.getBlockX());

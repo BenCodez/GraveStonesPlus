@@ -10,6 +10,8 @@ import org.bukkit.configuration.serialization.ConfigurationSerializable;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.NumberConversions;
 
+import com.bencodez.gravestonesplus.GraveStonesPlus;
+
 import lombok.Getter;
 import lombok.Setter;
 
@@ -41,8 +43,12 @@ public class GravesConfig implements ConfigurationSerializable {
 	@Setter
 	private long destroyedTime;
 
+	@Getter
+	@Setter
+	private UUID graveUUID;
+
 	public GravesConfig(UUID uuid, String playerName, Location loc, HashMap<Integer, ItemStack> items, int exp,
-			String deathMessage, long time, boolean destroyed, long destroyedTime) {
+			String deathMessage, long time, boolean destroyed, long destroyedTime, UUID graveUUID) {
 		this.uuid = uuid;
 		this.location = loc;
 		this.items = items;
@@ -52,6 +58,7 @@ public class GravesConfig implements ConfigurationSerializable {
 		this.time = time;
 		this.destroyed = destroyed;
 		this.destroyedTime = destroyedTime;
+		this.graveUUID = graveUUID;
 	}
 
 	@Override
@@ -60,6 +67,9 @@ public class GravesConfig implements ConfigurationSerializable {
 		serialized.put("DeathMessage", deathMessage);
 		serialized.put("Time", time);
 		serialized.put("UUID", uuid.toString());
+		if (graveUUID != null) {
+			serialized.put("GraveUUID", graveUUID.toString());
+		}
 		serialized.put("PlayerName", playerName);
 		serialized.put("World", location.getWorld().getUID().toString());
 		serialized.put("X", location.getBlockX());
@@ -74,6 +84,11 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@SuppressWarnings("unchecked")
 	public static GravesConfig deserialize(Map<String, Object> deserialize) {
+		String str = deserialize.get("GraveUUID").toString();
+		if (str == null || str.isEmpty()) {
+			str = GraveStonesPlus.plugin.generateGraveUUID().toString();
+		}
+
 		return new GravesConfig(UUID.fromString(deserialize.get("UUID").toString()),
 				deserialize.get("PlayerName").toString(),
 				new Location(Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString())),
@@ -82,7 +97,7 @@ public class GravesConfig implements ConfigurationSerializable {
 				(HashMap<Integer, ItemStack>) deserialize.get("Items"), NumberConversions.toInt(deserialize.get("EXP")),
 				deserialize.get("DeathMessage").toString(), NumberConversions.toLong(deserialize.get("Time")),
 				Boolean.valueOf(deserialize.get("Destroyed").toString()),
-				NumberConversions.toLong(deserialize.get("DestroyedTime")));
+				NumberConversions.toLong(deserialize.get("DestroyedTime")), UUID.fromString(str));
 	}
 
 }

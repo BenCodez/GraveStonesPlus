@@ -4,9 +4,9 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map.Entry;
-import java.util.concurrent.ThreadLocalRandom;
 import java.util.Timer;
 import java.util.TimerTask;
+import java.util.concurrent.ThreadLocalRandom;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -15,6 +15,7 @@ import org.bukkit.block.Block;
 import org.bukkit.block.Skull;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.inventory.ItemStack;
@@ -66,25 +67,42 @@ public class Grave {
 		this.gravesConfig = gravesConfig;
 	}
 
+	@Getter
+	private ItemDisplay itemDisplay;
+
 	public void loadBlockMeta(Block block) {
-		MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
+		if (!plugin.isUsingDisplayEntities()) {
+			MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
+		}
 	}
 
 	public void createSkull() {
-		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+		if (plugin.isUsingDisplayEntities()) {
+			final Grave grave = this;
+			Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
-			@Override
-			public void run() {
-				Block block = gravesConfig.getLocation().getBlock();
-				block.setType(Material.PLAYER_HEAD);
-				if (block.getState() instanceof Skull) {
-					Skull skull = (Skull) block.getState();
-					skull.setOwningPlayer(Bukkit.getOfflinePlayer(getGravesConfig().getUuid()));
-					skull.update();
+				@Override
+				public void run() {
+					itemDisplay = plugin.getGraveDisplayEntityHandler().create(grave);
+					getGravesConfig().setGraveUUID(itemDisplay.getUniqueId());
 				}
-				loadBlockMeta(block);
-			}
-		});
+			});
+		} else {
+			Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+				@Override
+				public void run() {
+					Block block = gravesConfig.getLocation().getBlock();
+					block.setType(Material.PLAYER_HEAD);
+					if (block.getState() instanceof Skull) {
+						Skull skull = (Skull) block.getState();
+						skull.setOwningPlayer(Bukkit.getOfflinePlayer(getGravesConfig().getUuid()));
+						skull.update();
+					}
+					loadBlockMeta(block);
+				}
+			});
+		}
 	}
 
 	public void removeSkull() {
@@ -161,6 +179,7 @@ public class Grave {
 		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
 				StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders),
 				true, false, plugin.getKey(), 1);
+		MiscUtils.getInstance().setEntityMeta(getTopHologram().getArmorStand(), "Grave", this);
 		// topHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		if (middleHologram != null) {
@@ -169,6 +188,7 @@ public class Grave {
 		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
 				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true, false,
 				plugin.getKey(), 1);
+		MiscUtils.getInstance().setEntityMeta(getMiddleHologram().getArmorStand(), "Grave", this);
 		// middleHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		if (bottomHologram != null) {
@@ -177,6 +197,7 @@ public class Grave {
 		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
 				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true, false,
 				plugin.getKey(), 1);
+		MiscUtils.getInstance().setEntityMeta(getBottomHologram().getArmorStand(), "Grave", this);
 		// bottomHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		checkGlowing();
@@ -202,6 +223,11 @@ public class Grave {
 	}
 
 	public boolean isValid() {
+		if (itemDisplay != null) {
+			if (!itemDisplay.isDead()) {
+				return true;
+			}
+		}
 		return gravesConfig.getLocation().getBlock().getType().equals(Material.PLAYER_HEAD);
 	}
 
@@ -223,6 +249,10 @@ public class Grave {
 
 			@Override
 			public void run() {
+				if (itemDisplay != null) {
+					itemDisplay.remove();
+					itemDisplay = null;
+				}
 				gravesConfig.getLocation().getBlock().setType(Material.AIR);
 			}
 		});
@@ -273,6 +303,7 @@ public class Grave {
 						glowingHologram = new Hologram(
 								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
 								true, plugin.getKey(), 1);
+						MiscUtils.getInstance().setEntityMeta(glowingHologram.getArmorStand(), "Grave", this);
 
 					}
 					glowingHologram.glow(true);
@@ -590,6 +621,10 @@ public class Grave {
 			});
 		}
 		plugin.removeGrave(this);
+	}
+
+	public void checkBlockDisplay() {
+		itemDisplay = plugin.getGraveDisplayEntityHandler().get(this);
 	}
 
 }

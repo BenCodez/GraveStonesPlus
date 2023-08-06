@@ -71,6 +71,10 @@ public class Config extends YMLFile {
 	@Getter
 	private String keepItemsWithLore = "";
 
+	@ConfigDataBoolean(path = "UseDisplayEntities")
+	@Getter
+	private boolean useDisplayEntities = false;
+
 	@Getter
 	@ConfigDataString(path = "Format.Death")
 	private String formatDeath = "Your grave is at %x%, %y%, %z%";

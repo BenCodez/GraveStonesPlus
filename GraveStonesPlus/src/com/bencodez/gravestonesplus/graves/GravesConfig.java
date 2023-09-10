@@ -10,8 +10,6 @@ import org.bukkit.configuration.serialization.ConfigurationSerializable;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.NumberConversions;
 
-import com.bencodez.gravestonesplus.GraveStonesPlus;
-
 import lombok.Getter;
 import lombok.Setter;
 
@@ -45,10 +43,15 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@Getter
 	@Setter
-	private UUID graveUUID;
+	private UUID displayUUID;
+
+	@Getter
+	@Setter
+	private UUID interactUUID;
 
 	public GravesConfig(UUID uuid, String playerName, Location loc, HashMap<Integer, ItemStack> items, int exp,
-			String deathMessage, long time, boolean destroyed, long destroyedTime, UUID graveUUID) {
+			String deathMessage, long time, boolean destroyed, long destroyedTime, UUID displayUUID,
+			UUID interactUUID) {
 		this.uuid = uuid;
 		this.location = loc;
 		this.items = items;
@@ -58,7 +61,8 @@ public class GravesConfig implements ConfigurationSerializable {
 		this.time = time;
 		this.destroyed = destroyed;
 		this.destroyedTime = destroyedTime;
-		this.graveUUID = graveUUID;
+		this.displayUUID = displayUUID;
+		this.interactUUID = interactUUID;
 	}
 
 	@Override
@@ -67,8 +71,11 @@ public class GravesConfig implements ConfigurationSerializable {
 		serialized.put("DeathMessage", deathMessage);
 		serialized.put("Time", time);
 		serialized.put("UUID", uuid.toString());
-		if (graveUUID != null) {
-			serialized.put("GraveUUID", graveUUID.toString());
+		if (displayUUID != null) {
+			serialized.put("DisplayUUID", displayUUID.toString());
+		}
+		if (interactUUID != null) {
+			serialized.put("InteractUUID", interactUUID.toString());
 		}
 		serialized.put("PlayerName", playerName);
 		serialized.put("World", location.getWorld().getUID().toString());
@@ -84,18 +91,23 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@SuppressWarnings("unchecked")
 	public static GravesConfig deserialize(Map<String, Object> deserialize) {
-		Object strObj = deserialize.get("GraveUUID");
+		Object strObj = deserialize.get("DisplayUUID");
 		String str = "";
 		if (strObj != null) {
 			str = strObj.toString();
-		}
-		if (str == null || str.isEmpty() && GraveStonesPlus.plugin.isUsingDisplayEntities()) {
-			str = GraveStonesPlus.plugin.generateGraveUUID().toString();
 		} else {
 			str = null;
 		}
 
-		if (str != null) {
+		Object strObj1 = deserialize.get("InteractUUID");
+		String str1 = "";
+		if (strObj1 != null) {
+			str1 = strObj.toString();
+		} else {
+			str1 = null;
+		}
+
+		if (str != null && str1 != null) {
 			return new GravesConfig(UUID.fromString(deserialize.get("UUID").toString()),
 					deserialize.get("PlayerName").toString(),
 					new Location(Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString())),
@@ -106,7 +118,8 @@ public class GravesConfig implements ConfigurationSerializable {
 					NumberConversions.toInt(deserialize.get("EXP")), deserialize.get("DeathMessage").toString(),
 					NumberConversions.toLong(deserialize.get("Time")),
 					Boolean.valueOf(deserialize.get("Destroyed").toString()),
-					NumberConversions.toLong(deserialize.get("DestroyedTime")), UUID.fromString(str));
+					NumberConversions.toLong(deserialize.get("DestroyedTime")), UUID.fromString(str),
+					UUID.fromString(str1));
 		} else {
 			return new GravesConfig(UUID.fromString(deserialize.get("UUID").toString()),
 					deserialize.get("PlayerName").toString(),
@@ -118,7 +131,7 @@ public class GravesConfig implements ConfigurationSerializable {
 					NumberConversions.toInt(deserialize.get("EXP")), deserialize.get("DeathMessage").toString(),
 					NumberConversions.toLong(deserialize.get("Time")),
 					Boolean.valueOf(deserialize.get("Destroyed").toString()),
-					NumberConversions.toLong(deserialize.get("DestroyedTime")), null);
+					NumberConversions.toLong(deserialize.get("DestroyedTime")), null, null);
 		}
 	}
 

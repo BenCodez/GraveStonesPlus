@@ -41,8 +41,9 @@ KeepItemsWithLore: ''
 
 # Use display entities rather than real blocks
 # Still a WIP
-# Not fully working, don't use in production servers
+# May break, use at your own risk currently
 # 1.19.4+ only
+# The benefits is that the grave can't be destroyed by normal means, perfect for graves
 UseDisplayEntities: false
 
 Format:

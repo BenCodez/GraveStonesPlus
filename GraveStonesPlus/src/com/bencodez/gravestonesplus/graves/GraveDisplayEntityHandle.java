@@ -7,6 +7,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Interaction;
 import org.bukkit.entity.ItemDisplay;
 
 import com.bencodez.advancedcore.api.item.ItemBuilder;
@@ -22,9 +23,10 @@ public class GraveDisplayEntityHandle {
 	}
 
 	@SuppressWarnings("deprecation")
-	public ItemDisplay create(Grave grave) {
+	public ItemDisplay createDisplay(Grave grave) {
 		Location loc = grave.getGravesConfig().getLocation();
-		Location newLoc = new Location(loc.getWorld(), loc.getBlockX()+.5, loc.getBlockY()+.5, loc.getBlockZ()+.5);
+		Location newLoc = new Location(loc.getWorld(), loc.getBlockX() + .5, loc.getBlockY() + .5,
+				loc.getBlockZ() + .5);
 		ItemDisplay display = grave.getGravesConfig().getLocation().getWorld().spawn(newLoc, ItemDisplay.class);
 		display.setItemStack(new ItemBuilder(Material.PLAYER_HEAD)
 				.setSkullOwner(Bukkit.getOfflinePlayer(grave.getGravesConfig().getUuid())).toItemStack());
@@ -33,18 +35,46 @@ public class GraveDisplayEntityHandle {
 		return display;
 	}
 
-	public ItemDisplay get(Grave grave) {
+	public Interaction createInteract(Grave grave) {
+		Location loc = grave.getGravesConfig().getLocation();
+		Location newLoc = new Location(loc.getWorld(), loc.getBlockX() + .5, loc.getBlockY() + .5,
+				loc.getBlockZ() + .5);
+		Interaction interaction = grave.getGravesConfig().getLocation().getWorld().spawn(newLoc, Interaction.class);
+		MiscUtils.getInstance().setEntityMeta(interaction, "Grave", grave);
+		return interaction;
+	}
+
+	public ItemDisplay getItemDisplay(Grave grave) {
 		for (Entity entity : grave.getGravesConfig().getLocation().getWorld()
 				.getNearbyEntities(grave.getGravesConfig().getLocation(), 2, 2, 2)) {
 			if (entity.getType().equals(EntityType.ITEM_DISPLAY)) {
 				ItemDisplay display = (ItemDisplay) entity;
 				if (display.getItemStack().getType().equals(Material.PLAYER_HEAD)) {
 					UUID uuid = display.getUniqueId();
-					if (grave.getGravesConfig().getGraveUUID().equals(uuid)) {
+					if (grave.getGravesConfig().getDisplayUUID() != null) {
+						if (grave.getGravesConfig().getDisplayUUID().equals(uuid)) {
+							MiscUtils.getInstance().setEntityMeta(display, "Grave", grave);
+							return display;
+						}
+					}
+
+				}
+			}
+		}
+		return null;
+	}
+
+	public Interaction getInteractEntity(Grave grave) {
+		for (Entity entity : grave.getGravesConfig().getLocation().getWorld()
+				.getNearbyEntities(grave.getGravesConfig().getLocation(), 2, 2, 2)) {
+			if (entity.getType().equals(EntityType.INTERACTION)) {
+				Interaction display = (Interaction) entity;
+				UUID uuid = display.getUniqueId();
+				if (grave.getGravesConfig().getInteractUUID() != null) {
+					if (grave.getGravesConfig().getInteractUUID().equals(uuid)) {
 						MiscUtils.getInstance().setEntityMeta(display, "Grave", grave);
 						return display;
 					}
-
 				}
 			}
 		}

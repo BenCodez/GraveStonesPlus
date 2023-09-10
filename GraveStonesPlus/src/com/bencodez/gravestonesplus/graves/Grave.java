@@ -15,6 +15,7 @@ import org.bukkit.block.Block;
 import org.bukkit.block.Skull;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
+import org.bukkit.entity.Interaction;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
@@ -70,6 +71,9 @@ public class Grave {
 	@Getter
 	private ItemDisplay itemDisplay;
 
+	@Getter
+	private Interaction interactEntity;
+
 	public void loadBlockMeta(Block block) {
 		if (!plugin.isUsingDisplayEntities()) {
 			MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
@@ -83,8 +87,11 @@ public class Grave {
 
 				@Override
 				public void run() {
-					itemDisplay = plugin.getGraveDisplayEntityHandler().create(grave);
-					getGravesConfig().setGraveUUID(itemDisplay.getUniqueId());
+					itemDisplay = plugin.getGraveDisplayEntityHandler().createDisplay(grave);
+					getGravesConfig().setDisplayUUID(itemDisplay.getUniqueId());
+					interactEntity = plugin.getGraveDisplayEntityHandler().createInteract(grave);
+					getGravesConfig().setInteractUUID(interactEntity.getUniqueId());
+
 				}
 			});
 		} else {
@@ -178,26 +185,26 @@ public class Grave {
 		}
 		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
 				StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders),
-				true, false, plugin.getKey(), 1);
-		MiscUtils.getInstance().setEntityMeta(getTopHologram().getArmorStand(), "Grave", this);
+				true, false, plugin.getKey(), 1, "Grave", this);
 		// topHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		if (middleHologram != null) {
 			middleHologram.kill();
 		}
-		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
-				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true, false,
-				plugin.getKey(), 1);
-		MiscUtils.getInstance().setEntityMeta(getMiddleHologram().getArmorStand(), "Grave", this);
+		middleHologram = new Hologram(
+				hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
+						.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders),
+				true, false, plugin.getKey(), 1, "Grave", this);
+
 		// middleHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		if (bottomHologram != null) {
 			bottomHologram.kill();
 		}
-		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
-				.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true, false,
-				plugin.getKey(), 1);
-		MiscUtils.getInstance().setEntityMeta(getBottomHologram().getArmorStand(), "Grave", this);
+		bottomHologram = new Hologram(
+				hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
+						.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders),
+				true, false, plugin.getKey(), 1, "Grave", this);
 		// bottomHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		checkGlowing();
@@ -253,6 +260,10 @@ public class Grave {
 					itemDisplay.remove();
 					itemDisplay = null;
 				}
+				if (interactEntity != null) {
+					interactEntity.remove();
+					interactEntity = null;
+				}
 				gravesConfig.getLocation().getBlock().setType(Material.AIR);
 			}
 		});
@@ -302,8 +313,7 @@ public class Grave {
 					if (glowingHologram == null) {
 						glowingHologram = new Hologram(
 								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
-								true, plugin.getKey(), 1);
-						MiscUtils.getInstance().setEntityMeta(glowingHologram.getArmorStand(), "Grave", this);
+								true, plugin.getKey(), 1, "Grave", this);
 
 					}
 					glowingHologram.glow(true);
@@ -624,7 +634,8 @@ public class Grave {
 	}
 
 	public void checkBlockDisplay() {
-		itemDisplay = plugin.getGraveDisplayEntityHandler().get(this);
+		itemDisplay = plugin.getGraveDisplayEntityHandler().getItemDisplay(this);
+		interactEntity = plugin.getGraveDisplayEntityHandler().getInteractEntity(this);
 	}
 
 }

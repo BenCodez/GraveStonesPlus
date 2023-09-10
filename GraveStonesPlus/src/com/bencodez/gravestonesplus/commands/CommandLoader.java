@@ -308,8 +308,10 @@ public class CommandLoader {
 						if (distance < plugin.getConfigFile().getGraveClaimDistance()) {
 							grave.removeSkull();
 							grave.claim(p, p.getInventory());
+							return;
 						}
 					}
+					sendMessage(sender, "&cNo graves found");
 				} else {
 					sendMessage(sender, "&cYou don't have a grave");
 				}

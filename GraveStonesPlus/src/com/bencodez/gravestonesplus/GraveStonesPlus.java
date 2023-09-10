@@ -88,21 +88,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Getter
 	private GraveDisplayEntityHandle graveDisplayEntityHandler;
 
-	public UUID generateGraveUUID() {
-		UUID uuid = UUID.randomUUID();
-		for (Grave grave : graves) {
-			if (grave.getGravesConfig().getGraveUUID().equals(uuid)) {
-				return generateGraveUUID();
-			}
-		}
-		for (Grave grave : brokenGraves) {
-			if (grave.getGravesConfig().getGraveUUID().equals(uuid)) {
-				return generateGraveUUID();
-			}
-		}
-		return uuid;
-	}
-
 	@Override
 	public void onPostLoad() {
 		graveDisplayEntityHandler = new GraveDisplayEntityHandle(this);

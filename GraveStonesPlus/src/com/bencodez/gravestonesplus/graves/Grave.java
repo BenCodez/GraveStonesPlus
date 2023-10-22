@@ -15,7 +15,6 @@ import org.bukkit.block.Block;
 import org.bukkit.block.Skull;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
-import org.bukkit.entity.Interaction;
 import org.bukkit.entity.ItemDisplay;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
@@ -71,13 +70,8 @@ public class Grave {
 	@Getter
 	private ItemDisplay itemDisplay;
 
-	@Getter
-	private Interaction interactEntity;
-
 	public void loadBlockMeta(Block block) {
-		if (!plugin.isUsingDisplayEntities()) {
-			MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
-		}
+		MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
 	}
 
 	public void createSkull() {
@@ -89,8 +83,10 @@ public class Grave {
 				public void run() {
 					itemDisplay = plugin.getGraveDisplayEntityHandler().createDisplay(grave);
 					getGravesConfig().setDisplayUUID(itemDisplay.getUniqueId());
-					interactEntity = plugin.getGraveDisplayEntityHandler().createInteract(grave);
-					getGravesConfig().setInteractUUID(interactEntity.getUniqueId());
+
+					Block block = gravesConfig.getLocation().getBlock();
+					block.setType(Material.BARRIER);
+					loadBlockMeta(block);
 
 				}
 			});
@@ -230,9 +226,13 @@ public class Grave {
 	}
 
 	public boolean isValid() {
-		if (itemDisplay != null) {
-			if (!itemDisplay.isDead()) {
-				return true;
+		if (plugin.getConfigFile().isUseDisplayEntities()) {
+			if (itemDisplay != null) {
+				if (!itemDisplay.isDead()) {
+					if (gravesConfig.getLocation().getBlock().getType().equals(Material.BARRIER)) {
+						return true;
+					}
+				}
 			}
 		}
 		return gravesConfig.getLocation().getBlock().getType().equals(Material.PLAYER_HEAD);
@@ -259,10 +259,6 @@ public class Grave {
 				if (itemDisplay != null) {
 					itemDisplay.remove();
 					itemDisplay = null;
-				}
-				if (interactEntity != null) {
-					interactEntity.remove();
-					interactEntity = null;
 				}
 				gravesConfig.getLocation().getBlock().setType(Material.AIR);
 			}
@@ -635,7 +631,6 @@ public class Grave {
 
 	public void checkBlockDisplay() {
 		itemDisplay = plugin.getGraveDisplayEntityHandler().getItemDisplay(this);
-		interactEntity = plugin.getGraveDisplayEntityHandler().getInteractEntity(this);
 	}
 
 }

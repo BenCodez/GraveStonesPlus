@@ -28,7 +28,6 @@ import com.bencodez.gravestonesplus.graves.GravesConfig;
 import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
-import com.bencodez.gravestonesplus.listeners.PlayerInteractEntity;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
 
 import lombok.Getter;
@@ -134,6 +133,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 					graves.add(grave);
 					debug("Grave loaded: " + grave.getGravesConfig().getLocation());
 				} else {
+					grave.removeGrave();
 					debug("Grave at " + grave.getGravesConfig().getLocation() + " is not valid");
 				}
 			}
@@ -147,8 +147,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		Bukkit.getPluginManager().registerEvents(new PlayerBreakBlock(this), this);
 		if (plugin.getConfigFile().isUseDisplayEntities()) {
 			usingDisplayEntities = true;
-			Bukkit.getPluginManager().registerEvents(new PlayerInteractEntity(this), this);
-			plugin.debug("Using display entities WIP");
+			//Bukkit.getPluginManager().registerEvents(new PlayerInteractEntity(this), this);
+			plugin.debug("Using display entities");
 		}
 
 		getCommand("gravestonesplus").setExecutor(new CommandGraveStonesPlus(this));

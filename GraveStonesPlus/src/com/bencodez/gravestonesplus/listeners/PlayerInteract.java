@@ -40,7 +40,7 @@ public class PlayerInteract implements Listener {
 	public void onPlayerInteract(PlayerInteractEvent event) {
 		if (event.getAction().equals(Action.RIGHT_CLICK_BLOCK)) {
 			Block clicked = event.getClickedBlock();
-			if (clicked.getType().equals(Material.PLAYER_HEAD)) {
+			if (clicked.getType().equals(Material.PLAYER_HEAD) || clicked.getType().equals(Material.BARRIER)) {
 				Object obj = MiscUtils.getInstance().getBlockMeta(clicked, "Grave");
 				if (obj == null) {
 					return;
@@ -53,6 +53,37 @@ public class PlayerInteract implements Listener {
 					grave.onClick(event.getPlayer());
 				}
 
+			}
+		}
+		if (event.getAction().equals(Action.LEFT_CLICK_BLOCK)) {
+			Block clicked = event.getClickedBlock();
+			if (clicked.getType().equals(Material.BARRIER)) {
+				Object obj = MiscUtils.getInstance().getBlockMeta(clicked, "Grave");
+				if (obj == null) {
+					return;
+				}
+				Grave grave = (Grave) obj;
+				if (!grave.isValid()) {
+					return;
+				}
+
+				if (grave.isOwner(event.getPlayer())) {
+					grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+					return;
+				}
+
+				if (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")) {
+					if (plugin.getConfigFile().isBreakOtherGravesWithPermission()) {
+						grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+						return;
+					} else {
+						plugin.debug("Config option disabled to break other graves");
+					}
+				} else {
+					plugin.debug("No permission to break other graves");
+				}
+
+				event.getPlayer().sendMessage(plugin.getConfigFile().getFormatNotYourGrave());
 			}
 		}
 	}

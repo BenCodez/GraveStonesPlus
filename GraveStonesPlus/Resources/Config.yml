@@ -45,6 +45,9 @@ KeepItemsWithLore: ''
 # Relatively new feature, could still have some bugs
 UseDisplayEntities: false
 
+# Whether or not to create daily backups. (Only the most recent ones get kept)
+CreateBackups: false
+
 Format:
   Death: 'Your grave is at %x%, %y%, %z%'
   GraveBroke: 'You broke your grave!'

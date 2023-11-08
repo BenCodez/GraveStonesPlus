@@ -54,8 +54,8 @@ public class CommandLoader {
 	}
 
 	public void loadCommands() {
-		plugin.getCommands()
-				.add(new CommandHandler(plugin, new String[] { "Reload" }, "GraveStonesPlus.Reload", "Reload the plugin") {
+		plugin.getCommands().add(
+				new CommandHandler(plugin, new String[] { "Reload" }, "GraveStonesPlus.Reload", "Reload the plugin") {
 
 					@Override
 					public void execute(CommandSender sender, String[] args) {
@@ -119,20 +119,20 @@ public class CommandLoader {
 					}
 				});
 
-		plugin.getCommands().add(
-				new CommandHandler(plugin, new String[] { "Graves" }, "GraveStonesPlus.Graves", "See current graves", false) {
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "Graves" }, "GraveStonesPlus.Graves",
+				"See current graves", false) {
 
-					@Override
-					public void execute(CommandSender sender, String[] args) {
-						List<Grave> graves = plugin.getGraves((Player) sender);
-						ArrayList<String> msg = new ArrayList<String>();
-						msg.add("Current graves:");
-						for (Grave gr : graves) {
-							msg.add(gr.getGraveMessage());
-						}
-						sendMessage(sender, msg);
-					}
-				});
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				List<Grave> graves = plugin.getGraves((Player) sender);
+				ArrayList<String> msg = new ArrayList<String>();
+				msg.add("Current graves:");
+				for (Grave gr : graves) {
+					msg.add(gr.getGraveMessage());
+				}
+				sendMessage(sender, msg);
+			}
+		});
 
 		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "AllGraves" }, "GraveStonesPlus.AllGraves",
 				"See all current graves", false) {
@@ -252,7 +252,8 @@ public class CommandLoader {
 									}
 								}
 								for (Entity entity : p.getNearbyEntities(10, 10, 10)) {
-									if (entity.getType().equals(EntityType.ARMOR_STAND)) {
+									if (entity.getType().equals(EntityType.ARMOR_STAND)
+											|| entity.getType().equals(EntityType.ITEM_DISPLAY)) {
 										if (entity.getPersistentDataContainer().has(plugin.getKey(),
 												PersistentDataType.INTEGER)) {
 											int value = entity.getPersistentDataContainer().get(plugin.getKey(),

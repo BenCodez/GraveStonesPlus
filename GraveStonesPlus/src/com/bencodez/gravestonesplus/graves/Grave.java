@@ -83,6 +83,7 @@ public class Grave {
 				public void run() {
 					itemDisplay = plugin.getGraveDisplayEntityHandler().createDisplay(grave);
 					getGravesConfig().setDisplayUUID(itemDisplay.getUniqueId());
+					itemDisplay.getPersistentDataContainer().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
 
 					Block block = gravesConfig.getLocation().getBlock();
 					block.setType(Material.BARRIER);
@@ -150,7 +151,8 @@ public class Grave {
 		try {
 			Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
 			for (Entity entity : hologramLocation.getWorld().getNearbyEntities(hologramLocation, 1, 3, 1)) {
-				if (entity.getType().equals(EntityType.ARMOR_STAND)) {
+				if (entity.getType().equals(EntityType.ARMOR_STAND)
+						|| entity.getType().equals(EntityType.ITEM_DISPLAY)) {
 					if (entity.getPersistentDataContainer().has(plugin.getKey(), PersistentDataType.INTEGER)) {
 						int value = entity.getPersistentDataContainer().get(plugin.getKey(),
 								PersistentDataType.INTEGER);

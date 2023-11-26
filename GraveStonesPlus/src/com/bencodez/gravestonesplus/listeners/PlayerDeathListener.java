@@ -73,6 +73,13 @@ public class PlayerDeathListener implements Listener {
 				return;
 			}
 		}
+		
+		if (plugin.getWorldGuardHandle() != null) {
+			if (plugin.getWorldGuardHandle().isKeepInv(event.getEntity())) {
+				plugin.getLogger().info("Can't create grave, player has keep inv from worldguard");
+				return;
+			}
+		}
 
 		final Player entity = event.getEntity();
 		if (plugin.numberOfGraves(entity.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {

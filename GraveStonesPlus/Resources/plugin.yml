@@ -8,7 +8,7 @@ softdepend:
 - Vault
 libraries:
   - org.openjdk.nashorn:nashorn-core:15.3
-softdepend: [ProtocolLib, Vault, PvPManager]
+softdepend: [ProtocolLib, Vault, PvPManager, WorldGuard, WorldGuardExtraFlags]
 commands:
   gravestonesplus:
     description: Main plugin command

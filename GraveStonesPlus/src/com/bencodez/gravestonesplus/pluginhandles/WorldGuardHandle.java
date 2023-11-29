@@ -25,7 +25,8 @@ public class WorldGuardHandle {
 		ApplicableRegionSet regions = WorldGuard.getInstance().getPlatform().getRegionContainer().createQuery()
 				.getApplicableRegions(localPlayer.getLocation());
 		Boolean value = regions.queryValue(null, Flags.KEEP_INVENTORY);
-		plugin.debug(localPlayer.getLocation().toString());
+		plugin.debug("Loc:" + localPlayer.getLocation().getX() + "/" + localPlayer.getLocation().getY() + "?"
+				+ localPlayer.getLocation().getZ());
 		if (value != null) {
 			plugin.debug("KeepInv: " + value.booleanValue());
 			return value.booleanValue();

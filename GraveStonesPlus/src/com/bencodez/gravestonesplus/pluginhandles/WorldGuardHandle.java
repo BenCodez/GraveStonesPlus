@@ -26,8 +26,10 @@ public class WorldGuardHandle {
 				.getApplicableRegions(localPlayer.getLocation());
 		Boolean value = regions.queryValue(localPlayer, Flags.KEEP_INVENTORY);
 		if (value != null) {
+			plugin.debug("KeepInv: " + value.booleanValue());
 			return value.booleanValue();
 		}
+		plugin.debug("KeepInv flag not there");
 		return false;
 	}
 }

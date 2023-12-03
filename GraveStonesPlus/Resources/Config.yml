@@ -45,6 +45,10 @@ KeepItemsWithLore: ''
 # Relatively new feature, could still have some bugs
 UseDisplayEntities: false
 
+# If true, a grave will be created if a player has an empty inventory
+# If false, no grave will be created
+CreateGraveForEmptyInventories: false
+
 # Whether or not to create daily backups. (Only the most recent ones get kept)
 CreateBackups: false
 

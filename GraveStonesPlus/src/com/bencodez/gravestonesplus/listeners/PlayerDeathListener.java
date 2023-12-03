@@ -80,6 +80,13 @@ public class PlayerDeathListener implements Listener {
 				return;
 			}
 		}
+		
+		if (event.getEntity().getInventory().isEmpty()) {
+			if (!plugin.getConfigFile().isCreateGraveForEmptyInventories()) {
+				plugin.getLogger().info("Not creating grave, player has an empty inventory");
+				return;
+			}
+		}
 
 		final Player entity = event.getEntity();
 		if (plugin.numberOfGraves(entity.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {

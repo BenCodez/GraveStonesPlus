@@ -29,7 +29,6 @@ import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
-import com.bencodez.gravestonesplus.pluginhandles.WorldGuardHandle;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -191,10 +190,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			pvpManager = new PvpManagerHandle(this);
 		}
 
-		if (Bukkit.getPluginManager().isPluginEnabled("WorldGuard")) {
-			worldGuardHandle = new WorldGuardHandle(this);
-		}
-
 		Bukkit.getScheduler().runTaskAsynchronously(plugin, new Runnable() {
 
 			@Override
@@ -238,9 +233,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	private PvpManagerHandle pvpManager;
-
-	@Getter
-	private WorldGuardHandle worldGuardHandle;
 
 	public int numberOfGraves(UUID uuid) {
 		int num = 0;

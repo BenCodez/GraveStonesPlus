@@ -73,14 +73,7 @@ public class PlayerDeathListener implements Listener {
 				return;
 			}
 		}
-		
-		if (plugin.getWorldGuardHandle() != null) {
-			if (plugin.getWorldGuardHandle().isKeepInv(event.getEntity())) {
-				plugin.getLogger().info("Can't create grave, player has keep inv from worldguard");
-				return;
-			}
-		}
-		
+
 		if (event.getEntity().getInventory().isEmpty()) {
 			if (!plugin.getConfigFile().isCreateGraveForEmptyInventories()) {
 				plugin.getLogger().info("Not creating grave, player has an empty inventory");

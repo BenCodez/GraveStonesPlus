@@ -331,10 +331,12 @@ public class PlayerDeathListener implements Listener {
 	}
 
 	public boolean isReplaceable(Material material) {
-		switch (material) {
-		case TALL_GRASS:
+		switch (material.toString()) {
+		case "TALL_GRASS":
 			return true;
-		case GRASS:
+		case "GRASS":
+			return true;
+		case "SHORT_GRASS":
 			return true;
 		default:
 			return false;

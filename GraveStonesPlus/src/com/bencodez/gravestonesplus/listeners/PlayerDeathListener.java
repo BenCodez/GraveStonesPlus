@@ -44,7 +44,7 @@ public class PlayerDeathListener implements Listener {
 	 *
 	 * @param event the event
 	 */
-	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	@EventHandler(priority = EventPriority.LOWEST, ignoreCancelled = true)
 	public void onPlayerDeath(PlayerDeathEvent event) {
 		final Location deathLocation = event.getEntity().getLocation();
 		if (plugin.getConfigFile().getDisabledWorlds().contains(deathLocation.getWorld().getName())) {

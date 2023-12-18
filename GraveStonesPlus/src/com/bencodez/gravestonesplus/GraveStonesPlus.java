@@ -97,6 +97,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (gravesbroken1 != null) {
 			for (GravesConfig gr : gravesbroken1) {
 				Grave grave = new Grave(this, gr);
+				grave.loadChunk();
 				grave.removeHologramsAround();
 				if (gr.isDestroyed()) {
 					if (gr.getDestroyedTime() == 0) {
@@ -124,6 +125,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (graves1 != null) {
 			for (GravesConfig gr : graves1) {
 				Grave grave = new Grave(this, gr);
+				grave.loadChunk();
 				grave.removeHologramsAround();
 				grave.loadBlockMeta(gr.getLocation().getBlock());
 				grave.checkBlockDisplay();

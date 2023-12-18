@@ -74,6 +74,34 @@ public class Grave {
 		MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
 	}
 
+	private boolean chunkLoaded = false;
+
+	public void loadChunk() {
+		Block block = gravesConfig.getLocation().getBlock();
+		if (!block.getChunk().isForceLoaded()) {
+			block.getChunk().setForceLoaded(true);
+			block.getChunk().load(false);
+			chunkLoaded = true;
+
+			unLoadChunk();
+		}
+	}
+
+	private void unLoadChunk() {
+		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				if (chunkLoaded) {
+					Block block = gravesConfig.getLocation().getBlock();
+					block.getChunk().setForceLoaded(false);
+					chunkLoaded = false;
+				}
+			}
+		}, 20 * 6);
+
+	}
+
 	public void createSkull() {
 		if (plugin.isUsingDisplayEntities()) {
 			final Grave grave = this;
@@ -81,14 +109,15 @@ public class Grave {
 
 				@Override
 				public void run() {
+					loadChunk();
+					Block block = gravesConfig.getLocation().getBlock();
+
 					itemDisplay = plugin.getGraveDisplayEntityHandler().createDisplay(grave);
 					getGravesConfig().setDisplayUUID(itemDisplay.getUniqueId());
 					itemDisplay.getPersistentDataContainer().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
 
-					Block block = gravesConfig.getLocation().getBlock();
 					block.setType(Material.BARRIER);
 					loadBlockMeta(block);
-
 				}
 			});
 		} else {
@@ -97,6 +126,7 @@ public class Grave {
 				@Override
 				public void run() {
 					Block block = gravesConfig.getLocation().getBlock();
+
 					block.setType(Material.PLAYER_HEAD);
 					if (block.getState() instanceof Skull) {
 						Skull skull = (Skull) block.getState();
@@ -400,6 +430,7 @@ public class Grave {
 			public void onClick(ClickEvent clickEvent) {
 				Grave grave = (Grave) getData("grave");
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
+					loadChunk();
 					grave.createSkull();
 					Bukkit.getScheduler().runTask(plugin, new Runnable() {
 

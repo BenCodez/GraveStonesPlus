@@ -175,6 +175,10 @@ public class PlayerDeathListener implements Listener {
 					return;
 				}
 
+				Grave grave = new Grave(plugin, new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlock,
+						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
+				grave.loadChunk();
+
 				if (!plugin.isUsingDisplayEntities()) {
 					Block block = emptyBlock.getBlock();
 					block.setType(Material.PLAYER_HEAD);
@@ -185,8 +189,6 @@ public class PlayerDeathListener implements Listener {
 					}
 				}
 
-				Grave grave = new Grave(plugin, new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlock,
-						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
 				grave.createHologram();
 				grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
 				plugin.addGrave(grave);

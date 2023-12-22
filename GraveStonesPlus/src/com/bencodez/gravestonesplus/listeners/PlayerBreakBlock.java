@@ -12,6 +12,7 @@ import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.player.PlayerBucketEmptyEvent;
 
+import com.bencodez.advancedcore.api.messages.StringParser;
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
@@ -116,7 +117,8 @@ public class PlayerBreakBlock implements Listener {
 					plugin.debug("No permission to break other graves");
 				}
 
-				event.getPlayer().sendMessage(plugin.getConfigFile().getFormatNotYourGrave());
+				event.getPlayer().sendMessage(
+						StringParser.getInstance().colorize(plugin.getConfigFile().getFormatNotYourGrave()));
 				event.setCancelled(true);
 				return;
 

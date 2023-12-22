@@ -86,7 +86,7 @@ public class Config extends YMLFile {
 	@ConfigDataString(path = "Format.GraveBroke")
 	private String formatGraveBroke = "You broke your grave!";
 	@Getter
-	@ConfigDataString(path = "Format.ItemsNotInCorrectSite")
+	@ConfigDataString(path = "Format.ItemsNotInCorrectSlot")
 	private String formatItemsNotInGrave = "Some items didn't return to the correct slot";
 	@Getter
 	@ConfigDataString(path = "Format.GraveLimitBreak")

@@ -76,15 +76,34 @@ public class Grave {
 
 	private boolean chunkLoaded = false;
 
-	public void loadChunk() {
-		Block block = gravesConfig.getLocation().getBlock();
-		if (!block.getChunk().isForceLoaded()) {
-			block.getChunk().setForceLoaded(true);
-			block.getChunk().load(false);
-			chunkLoaded = true;
+	public void loadChunk(boolean task) {
+		if (task) {
+			Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
-			unLoadChunk();
+				@Override
+				public void run() {
+					Block block = gravesConfig.getLocation().getBlock();
+					if (!block.getChunk().isForceLoaded()) {
+						block.getChunk().setForceLoaded(true);
+						block.getChunk().load(false);
+						chunkLoaded = true;
+
+						unLoadChunk();
+					}
+
+				}
+			});
+		} else {
+			Block block = gravesConfig.getLocation().getBlock();
+			if (!block.getChunk().isForceLoaded()) {
+				block.getChunk().setForceLoaded(true);
+				block.getChunk().load(false);
+				chunkLoaded = true;
+
+				unLoadChunk();
+			}
 		}
+
 	}
 
 	private void unLoadChunk() {
@@ -109,7 +128,7 @@ public class Grave {
 
 				@Override
 				public void run() {
-					loadChunk();
+					loadChunk(false);
 					Block block = gravesConfig.getLocation().getBlock();
 
 					itemDisplay = plugin.getGraveDisplayEntityHandler().createDisplay(grave);
@@ -125,6 +144,7 @@ public class Grave {
 
 				@Override
 				public void run() {
+					loadChunk(false);
 					Block block = gravesConfig.getLocation().getBlock();
 
 					block.setType(Material.PLAYER_HEAD);
@@ -135,6 +155,7 @@ public class Grave {
 					}
 					loadBlockMeta(block);
 				}
+
 			});
 		}
 	}
@@ -282,6 +303,7 @@ public class Grave {
 
 	public void removeGrave() {
 		remove = true;
+
 		gravesConfig.setDestroyed(true);
 		gravesConfig.setDestroyedTime(System.currentTimeMillis());
 		Bukkit.getScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
@@ -430,7 +452,7 @@ public class Grave {
 			public void onClick(ClickEvent clickEvent) {
 				Grave grave = (Grave) getData("grave");
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
-					loadChunk();
+					loadChunk(true);
 					grave.createSkull();
 					Bukkit.getScheduler().runTask(plugin, new Runnable() {
 
@@ -542,6 +564,7 @@ public class Grave {
 					public void onClick(ClickEvent clickEvent) {
 
 					}
+
 				});
 		inv.openInventory(p);
 

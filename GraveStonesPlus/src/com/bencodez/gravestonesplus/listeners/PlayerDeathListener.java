@@ -177,7 +177,7 @@ public class PlayerDeathListener implements Listener {
 
 				Grave grave = new Grave(plugin, new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlock,
 						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
-				grave.loadChunk();
+				grave.loadChunk(false);
 
 				if (!plugin.isUsingDisplayEntities()) {
 					Block block = emptyBlock.getBlock();

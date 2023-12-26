@@ -2,7 +2,9 @@ package com.bencodez.gravestonesplus;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
@@ -52,7 +54,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private List<Grave> graves;
 
 	@Getter
-	private List<Grave> brokenGraves;
+	private Set<Grave> brokenGraves;
 
 	public void addGrave(Grave grave) {
 		graves.add(grave);
@@ -64,6 +66,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		brokenGraves.add(grave);
 		gravesConfig.setGraves(graves);
 		gravesConfig.setBrokenGraves(brokenGraves);
+
 	}
 
 	public void recreateBrokenGrave(Grave grave) {
@@ -91,13 +94,13 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	public void onPostLoad() {
 		graveDisplayEntityHandler = new GraveDisplayEntityHandle(this);
 		graves = Collections.synchronizedList(new ArrayList<Grave>());
-		brokenGraves = Collections.synchronizedList(new ArrayList<Grave>());
+		brokenGraves = Collections.synchronizedSet(new HashSet<Grave>());
 
 		List<GravesConfig> gravesbroken1 = gravesConfig.loadBrokenGraves();
 		if (gravesbroken1 != null) {
 			for (GravesConfig gr : gravesbroken1) {
 				Grave grave = new Grave(this, gr);
-				grave.loadChunk();
+				grave.loadChunk(false);
 				grave.removeHologramsAround();
 				if (gr.isDestroyed()) {
 					if (gr.getDestroyedTime() == 0) {
@@ -125,7 +128,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (graves1 != null) {
 			for (GravesConfig gr : graves1) {
 				Grave grave = new Grave(this, gr);
-				grave.loadChunk();
+				grave.loadChunk(false);
 				grave.removeHologramsAround();
 				grave.loadBlockMeta(gr.getLocation().getBlock());
 				grave.checkBlockDisplay();

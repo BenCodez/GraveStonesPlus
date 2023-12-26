@@ -3,6 +3,7 @@ package com.bencodez.gravestonesplus.config;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.yml.YMLFile;
@@ -38,7 +39,7 @@ public class GraveLocations extends YMLFile {
 		setValue("brokengraves", grave);
 	}
 
-	public void setBrokenGraves(List<Grave> graves) {
+	public void setBrokenGraves(Set<Grave> graves) {
 		ArrayList<GravesConfig> gravesConfig = new ArrayList<GravesConfig>();
 		for (Grave grave : graves) {
 			gravesConfig.add(grave.getGravesConfig());

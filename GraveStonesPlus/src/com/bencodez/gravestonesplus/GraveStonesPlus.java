@@ -13,6 +13,8 @@ import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
 import org.bukkit.entity.Player;
+import org.bukkit.permissions.Permission;
+import org.bukkit.permissions.PermissionDefault;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
@@ -189,6 +191,17 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 					}
 				}
 			}, 1000 * 10, 1000 * 5);
+		}
+
+		Permission perm = Bukkit.getPluginManager().getPermission("GraveStonesPlus.BreakOtherGraves");
+		if (perm != null) {
+			if (configFile.isGiveBreakOtherGravesPermission()) {
+				perm.setDefault(PermissionDefault.TRUE);
+				getLogger().info(
+						"Giving GraveStonesPlus.BreakOtherGraves permission by default, can be disabled in the config");
+			} else {
+				perm.setDefault(PermissionDefault.OP);
+			}
 		}
 
 		if (Bukkit.getPluginManager().isPluginEnabled("PvPManager")) {

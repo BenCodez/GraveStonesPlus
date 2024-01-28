@@ -4,6 +4,11 @@ DebugLevel: NONE
 # GraveStonesPlus.BreakOtherGraves
 BreakOtherGravesWithPermission: false
 
+# If true GraveStonesPlus.BreakOtherGraves will be given to all players by default
+# Requires BreakOtherGravesWithPermission enabled to work
+# Requires a restart
+GiveBreakOtherGravesPermission: false
+
 # List of worlds with graves disabled
 DisabledWorlds: []
 

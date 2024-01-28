@@ -79,6 +79,10 @@ public class Config extends YMLFile {
 	@Getter
 	private boolean createGraveForEmptyInventories = false;
 
+	@ConfigDataBoolean(path = "GiveBreakOtherGravesPermission")
+	@Getter
+	private boolean giveBreakOtherGravesPermission = false;
+
 	@Getter
 	@ConfigDataString(path = "Format.Death")
 	private String formatDeath = "Your grave is at %x%, %y%, %z%";

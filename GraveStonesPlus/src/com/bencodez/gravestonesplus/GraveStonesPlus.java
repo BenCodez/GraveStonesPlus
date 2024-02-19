@@ -98,61 +98,74 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		graves = Collections.synchronizedList(new ArrayList<Grave>());
 		brokenGraves = Collections.synchronizedSet(new HashSet<Grave>());
 
-		List<GravesConfig> gravesbroken1 = gravesConfig.loadBrokenGraves();
-		if (gravesbroken1 != null) {
-			for (GravesConfig gr : gravesbroken1) {
-				Grave grave = new Grave(this, gr);
-				try {
-					grave.loadChunk(false);
-				} catch (Exception e) {
-					e.printStackTrace();
+		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				List<GravesConfig> gravesbroken1 = gravesConfig.loadBrokenGraves();
+				if (gravesbroken1 != null) {
+					for (GravesConfig gr : gravesbroken1) {
+						Grave grave = new Grave(plugin, gr);
+						try {
+							grave.loadChunk(false);
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+						grave.removeHologramsAround();
+						if (gr.isDestroyed()) {
+							if (gr.getDestroyedTime() == 0) {
+								gr.setDestroyedTime(System.currentTimeMillis());
+								debug("Fixed broken grave time: " + grave.getGravesConfig().getLocation());
+								debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
+								brokenGraves.add(grave);
+							} else {
+								if (System.currentTimeMillis()
+										- gr.getDestroyedTime() > configFile.getBokenGraveTimeLimit() * 60 * 1000) {
+									debug("Broken Grave at " + grave.getGravesConfig().getLocation()
+											+ " has reached it's time limit and will be removed");
+								} else {
+									debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
+									brokenGraves.add(grave);
+								}
+							}
+						}
+					}
+
+					// remove graves from file
+					gravesConfig.setBrokenGraves(brokenGraves);
 				}
-				grave.removeHologramsAround();
-				if (gr.isDestroyed()) {
-					if (gr.getDestroyedTime() == 0) {
-						gr.setDestroyedTime(System.currentTimeMillis());
-						debug("Fixed broken grave time: " + grave.getGravesConfig().getLocation());
-						debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
-						brokenGraves.add(grave);
-					} else {
-						if (System.currentTimeMillis() - gr.getDestroyedTime() > configFile.getBokenGraveTimeLimit()
-								* 60 * 1000) {
-							debug("Broken Grave at " + grave.getGravesConfig().getLocation()
-									+ " has reached it's time limit and will be removed");
+			}
+		});
+
+		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				List<GravesConfig> graves1 = gravesConfig.loadGraves();
+				if (graves1 != null) {
+					for (GravesConfig gr : graves1) {
+						Grave grave = new Grave(plugin, gr);
+						try {
+							grave.loadChunk(false);
+						} catch (Exception e) {
+							e.printStackTrace();
+						}
+						grave.removeHologramsAround();
+						grave.loadBlockMeta(gr.getLocation().getBlock());
+						grave.checkBlockDisplay();
+						if (grave.isValid()) {
+							grave.createHologram();
+							grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
+							graves.add(grave);
+							debug("Grave loaded: " + grave.getGravesConfig().getLocation());
 						} else {
-							debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
-							brokenGraves.add(grave);
+							grave.removeGrave();
+							debug("Grave at " + grave.getGravesConfig().getLocation() + " is not valid");
 						}
 					}
 				}
 			}
-			// remove graves from file
-			gravesConfig.setBrokenGraves(brokenGraves);
-		}
-
-		List<GravesConfig> graves1 = gravesConfig.loadGraves();
-		if (graves1 != null) {
-			for (GravesConfig gr : graves1) {
-				Grave grave = new Grave(this, gr);
-				try {
-					grave.loadChunk(false);
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
-				grave.removeHologramsAround();
-				grave.loadBlockMeta(gr.getLocation().getBlock());
-				grave.checkBlockDisplay();
-				if (grave.isValid()) {
-					grave.createHologram();
-					grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
-					graves.add(grave);
-					debug("Grave loaded: " + grave.getGravesConfig().getLocation());
-				} else {
-					grave.removeGrave();
-					debug("Grave at " + grave.getGravesConfig().getLocation() + " is not valid");
-				}
-			}
-		}
+		});
 
 		commandLoader = new CommandLoader(this);
 		commandLoader.loadCommands();

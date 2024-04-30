@@ -92,6 +92,19 @@ public class PlayerDeathListener implements Listener {
 			}
 		}
 
+		Location emptyBlock = null;
+		if (deathLocation.getBlock().isEmpty() && deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()
+				&& deathLocation.getBlockY() < deathLocation.getWorld().getMaxHeight()) {
+			emptyBlock = deathLocation;
+		} else {
+			emptyBlock = getAirBlock(deathLocation);
+		}
+
+		if (emptyBlock == null) {
+			plugin.getLogger().info("Failed to find air block, can't make grave");
+			return;
+		}
+
 		PlayerInventory inv = event.getEntity().getInventory();
 		HashMap<String, String> placeholders = new HashMap<String, String>();
 		placeholders.put("player", event.getEntity().getName());
@@ -157,30 +170,20 @@ public class PlayerDeathListener implements Listener {
 		if (!keepItems.isEmpty()) {
 			deathItems.put(event.getEntity().getUniqueId(), keepItems);
 		}
+		final Location emptyBlockFinal = emptyBlock;
+
 		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
 
 			@Override
 			public void run() {
-				Location emptyBlock = null;
-				if (deathLocation.getBlock().isEmpty()
-						&& deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()
-						&& deathLocation.getBlockY() < deathLocation.getWorld().getMaxHeight()) {
-					emptyBlock = deathLocation;
-				} else {
-					emptyBlock = getAirBlock(deathLocation);
-				}
 
-				if (emptyBlock == null) {
-					plugin.getLogger().info("Failed to find air block, can't make grave");
-					return;
-				}
-
-				Grave grave = new Grave(plugin, new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlock,
-						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
+				Grave grave = new Grave(plugin,
+						new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlockFinal, itemsWithSlot,
+								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
 				grave.loadChunk(false);
 
 				if (!plugin.isUsingDisplayEntities()) {
-					Block block = emptyBlock.getBlock();
+					Block block = emptyBlockFinal.getBlock();
 					block.setType(Material.PLAYER_HEAD);
 					if (block.getState() instanceof Skull) {
 						Skull skull = (Skull) block.getState();
@@ -192,20 +195,20 @@ public class PlayerDeathListener implements Listener {
 				grave.createHologram();
 				grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
 				plugin.addGrave(grave);
-				grave.loadBlockMeta(emptyBlock.getBlock());
+				grave.loadBlockMeta(emptyBlockFinal.getBlock());
 				if (plugin.isUsingDisplayEntities()) {
 					grave.createSkull();
 				}
 
 				HashMap<String, String> placeholders = new HashMap<String, String>();
-				placeholders.put("x", "" + emptyBlock.getBlockX());
-				placeholders.put("y", "" + emptyBlock.getBlockY());
-				placeholders.put("z", "" + emptyBlock.getBlockZ());
+				placeholders.put("x", "" + emptyBlockFinal.getBlockX());
+				placeholders.put("y", "" + emptyBlockFinal.getBlockY());
+				placeholders.put("z", "" + emptyBlockFinal.getBlockZ());
 
 				entity.sendMessage(StringParser.getInstance().colorize(StringParser.getInstance()
 						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders)));
 
-				plugin.getLogger().info("Grave: " + emptyBlock.toString());
+				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
 			}
 		}, 2);
 

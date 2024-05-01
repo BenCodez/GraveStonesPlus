@@ -61,7 +61,7 @@ public class PlayerBreakBlock implements Listener {
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onWaterMove(BlockFromToEvent event) {
-		if (event.getBlock().getType().equals(Material.WATER)) {
+		if (event.getBlock().getType().equals(Material.WATER) || event.getBlock().getType().equals(Material.LAVA)) {
 			if (event.getToBlock().hasMetadata("Grave")) {
 				event.setCancelled(true);
 				return;

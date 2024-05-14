@@ -205,8 +205,11 @@ public class PlayerDeathListener implements Listener {
 				placeholders.put("y", "" + emptyBlockFinal.getBlockY());
 				placeholders.put("z", "" + emptyBlockFinal.getBlockZ());
 
-				entity.sendMessage(StringParser.getInstance().colorize(StringParser.getInstance()
-						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders)));
+				String msg = StringParser.getInstance().colorize(StringParser.getInstance()
+						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
+				if (!msg.isEmpty()) {
+					entity.sendMessage();
+				}
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
 			}

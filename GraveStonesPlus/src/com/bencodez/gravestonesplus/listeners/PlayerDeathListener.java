@@ -24,6 +24,7 @@ import com.bencodez.advancedcore.api.misc.ArrayUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GravesConfig;
+import com.bencodez.simpleapi.messages.MessageAPI;
 
 public class PlayerDeathListener implements Listener {
 	private GraveStonesPlus plugin;
@@ -88,7 +89,7 @@ public class PlayerDeathListener implements Listener {
 				oldest.dropItemsOnGround(entity);
 				oldest.removeGrave();
 				entity.sendMessage(
-						StringParser.getInstance().colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+						MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
 			}
 		}
 
@@ -205,7 +206,7 @@ public class PlayerDeathListener implements Listener {
 				placeholders.put("y", "" + emptyBlockFinal.getBlockY());
 				placeholders.put("z", "" + emptyBlockFinal.getBlockZ());
 
-				String msg = StringParser.getInstance().colorize(StringParser.getInstance()
+				String msg = MessageAPI.colorize(StringParser.getInstance()
 						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
 				if (!msg.isEmpty()) {
 					entity.sendMessage();

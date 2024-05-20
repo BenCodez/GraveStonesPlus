@@ -12,10 +12,10 @@ import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.player.PlayerBucketEmptyEvent;
 
-import com.bencodez.advancedcore.api.messages.StringParser;
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.simpleapi.messages.MessageAPI;
 
 // TODO: Auto-generated Javadoc
 /**
@@ -118,7 +118,7 @@ public class PlayerBreakBlock implements Listener {
 				}
 
 				event.getPlayer().sendMessage(
-						StringParser.getInstance().colorize(plugin.getConfigFile().getFormatNotYourGrave()));
+						MessageAPI.colorize(plugin.getConfigFile().getFormatNotYourGrave()));
 				event.setCancelled(true);
 				return;
 

@@ -11,8 +11,8 @@ import org.bukkit.command.CommandSender;
 import org.bukkit.command.TabCompleter;
 
 import com.bencodez.advancedcore.api.command.TabCompleteHandler;
-import com.bencodez.advancedcore.api.messages.StringParser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.simpleapi.messages.MessageAPI;
 
 // TODO: Auto-generated Javadoc
 /**
@@ -45,7 +45,7 @@ public class GraveStonesPlusTabCompleter implements TabCompleter {
 				args.length - 1));
 
 		for (String str : cmds) {
-			if (StringParser.getInstance().startsWithIgnoreCase(str, args[args.length - 1])) {
+			if (MessageAPI.startsWithIgnoreCase(str, args[args.length - 1])) {
 				tab.add(str);
 			}
 		}

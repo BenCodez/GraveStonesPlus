@@ -18,7 +18,6 @@ import org.bukkit.permissions.PermissionDefault;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
-import com.bencodez.advancedcore.api.metrics.BStatsMetrics;
 import com.bencodez.advancedcore.api.updater.Updater;
 import com.bencodez.advancedcore.api.yml.YMLConfig;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
@@ -33,6 +32,7 @@ import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
+import com.bencodez.simpleapi.metrics.BStatsMetrics;
 
 import lombok.Getter;
 import lombok.Setter;

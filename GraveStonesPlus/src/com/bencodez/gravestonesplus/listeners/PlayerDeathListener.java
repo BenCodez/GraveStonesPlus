@@ -19,11 +19,11 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
 
-import com.bencodez.advancedcore.api.messages.StringParser;
-import com.bencodez.advancedcore.api.misc.ArrayUtils;
+import com.bencodez.advancedcore.api.messages.PlaceholderUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GravesConfig;
+import com.bencodez.simpleapi.array.ArrayUtils;
 import com.bencodez.simpleapi.messages.MessageAPI;
 
 public class PlayerDeathListener implements Listener {
@@ -88,8 +88,7 @@ public class PlayerDeathListener implements Listener {
 			if (oldest != null) {
 				oldest.dropItemsOnGround(entity);
 				oldest.removeGrave();
-				entity.sendMessage(
-						MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+				entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
 			}
 		}
 
@@ -110,8 +109,7 @@ public class PlayerDeathListener implements Listener {
 		HashMap<String, String> placeholders = new HashMap<String, String>();
 		placeholders.put("player", event.getEntity().getName());
 		placeholders.put("displayname", event.getEntity().getDisplayName());
-		String text = StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(),
-				placeholders);
+		String text = PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(), placeholders);
 
 		final String deathMessage = event.getDeathMessage();
 		final int droppedExp = event.getDroppedExp();
@@ -206,8 +204,8 @@ public class PlayerDeathListener implements Listener {
 				placeholders.put("y", "" + emptyBlockFinal.getBlockY());
 				placeholders.put("z", "" + emptyBlockFinal.getBlockZ());
 
-				String msg = MessageAPI.colorize(StringParser.getInstance()
-						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
+				String msg = MessageAPI.colorize(
+						PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
 				if (!msg.isEmpty()) {
 					entity.sendMessage();
 				}
@@ -295,7 +293,7 @@ public class PlayerDeathListener implements Listener {
 			if (item.hasItemMeta()) {
 				ItemMeta meta = item.getItemMeta();
 				if (meta.hasLore()) {
-					if (ArrayUtils.getInstance().containsIgnoreCase(meta.getLore(), text)) {
+					if (ArrayUtils.containsIgnoreCase(meta.getLore(), text)) {
 						return true;
 					}
 				}

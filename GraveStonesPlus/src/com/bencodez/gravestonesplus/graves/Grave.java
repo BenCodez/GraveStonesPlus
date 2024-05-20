@@ -27,10 +27,11 @@ import com.bencodez.advancedcore.api.inventory.BInventory;
 import com.bencodez.advancedcore.api.inventory.BInventory.ClickEvent;
 import com.bencodez.advancedcore.api.inventory.BInventoryButton;
 import com.bencodez.advancedcore.api.item.ItemBuilder;
-import com.bencodez.advancedcore.api.messages.StringParser;
+import com.bencodez.advancedcore.api.messages.PlaceholderUtils;
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.advancedcore.api.user.AdvancedCoreUser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.simpleapi.messages.MessageAPI;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -233,7 +234,7 @@ public class Grave {
 			topHologram.kill();
 		}
 		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
-				StringParser.getInstance().replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders),
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders),
 				true, false, plugin.getKey(), 1, "Grave", this);
 		// topHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
@@ -241,7 +242,7 @@ public class Grave {
 			middleHologram.kill();
 		}
 		middleHologram = new Hologram(
-				hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
+				hologramLocation.subtract(0, .25, 0), PlaceholderUtils
 						.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders),
 				true, false, plugin.getKey(), 1, "Grave", this);
 
@@ -251,7 +252,7 @@ public class Grave {
 			bottomHologram.kill();
 		}
 		bottomHologram = new Hologram(
-				hologramLocation.subtract(0, .25, 0), StringParser.getInstance()
+				hologramLocation.subtract(0, .25, 0), PlaceholderUtils
 						.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders),
 				true, false, plugin.getKey(), 1, "Grave", this);
 		// bottomHologram.getPersistentDataHolder().set(plugin.getKey(),
@@ -416,7 +417,7 @@ public class Grave {
 				Grave grave = (Grave) getData("grave");
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
 					grave.removeGrave();
-					clickEvent.getWhoClicked().sendMessage(StringParser.getInstance().colorize("&cGrave removed"));
+					clickEvent.getWhoClicked().sendMessage(MessageAPI.colorize("&cGrave removed"));
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
 					openGUIWithItems(clickEvent.getPlayer());
 				} else {
@@ -462,7 +463,7 @@ public class Grave {
 						}
 					});
 					plugin.recreateBrokenGrave(grave);
-					clickEvent.getWhoClicked().sendMessage(StringParser.getInstance().colorize("&cGrave readded"));
+					clickEvent.getWhoClicked().sendMessage(MessageAPI.colorize("&cGrave readded"));
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
 					openGUIWithItems(clickEvent.getPlayer());
 				} else {

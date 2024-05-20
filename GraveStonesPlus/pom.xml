@@ -110,6 +110,11 @@
 					</filters>
 					<relocations>
 						<relocation>
+							<pattern>com.bencodez.simpleapi</pattern>
+							<shadedPattern>
+								${project.groupId}.advancedcore.simpleapi</shadedPattern>
+						</relocation>
+						<relocation>
 							<pattern>com.bencodez.advancedcore</pattern>
 							<shadedPattern>
 								${project.groupId}.gravestonesplus.advancedcore</shadedPattern>

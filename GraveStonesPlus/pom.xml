@@ -1,4 +1,6 @@
-<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 	<modelVersion>4.0.0</modelVersion>
 	<groupId>com.bencodez</groupId>
 	<artifactId>GraveStonesPlus</artifactId>
@@ -109,7 +111,8 @@
 					<relocations>
 						<relocation>
 							<pattern>com.bencodez.advancedcore</pattern>
-							<shadedPattern>${project.groupId}.gravestonesplus.advancedcore</shadedPattern>
+							<shadedPattern>
+								${project.groupId}.gravestonesplus.advancedcore</shadedPattern>
 						</relocation>
 						<relocation>
 							<pattern>net.pl3x.bukkit.chatapi</pattern>
@@ -117,24 +120,29 @@
 						</relocation>
 						<relocation>
 							<pattern>me.mrten.mysqlapi</pattern>
-							<shadedPattern>${project.groupId}.gravestonesplus.mysqlapi</shadedPattern>
+							<shadedPattern>
+								${project.groupId}.gravestonesplus.mysqlapi</shadedPattern>
 						</relocation>
 						<relocation>
 							<pattern>com.zaxxer.HikariCP</pattern>
-							<shadedPattern>${project.groupId}.gravestonesplus.HikariCP</shadedPattern>
+							<shadedPattern>
+								${project.groupId}.gravestonesplus.HikariCP</shadedPattern>
 						</relocation>
 						<relocation>
 							<pattern>com.zaxxer.hikari</pattern>
-							<shadedPattern>${project.groupId}.gravestonesplus.hikari</shadedPattern>
+							<shadedPattern>
+								${project.groupId}.gravestonesplus.hikari</shadedPattern>
 						</relocation>
 						<relocation>
 							<pattern>xyz.upperlevel.spigot.book</pattern>
-							<shadedPattern>${project.groupId}.gravestonesplus.upperlevel.book</shadedPattern>
+							<shadedPattern>
+								${project.groupId}.gravestonesplus.upperlevel.book</shadedPattern>
 						</relocation>
 						<relocation>
 							<pattern>org.bstats</pattern>
 							<!-- Replace this with your package! -->
-							<shadedPattern>${project.groupId}.gravestonesplus.bstats</shadedPattern>
+							<shadedPattern>
+								${project.groupId}.gravestonesplus.bstats</shadedPattern>
 						</relocation>
 					</relocations>
 				</configuration>
@@ -146,7 +154,8 @@
 						</goals>
 						<configuration>
 							<artifactSet>
-								<!-- Lets exclude google code, because the server already has this 
+								<!-- Lets exclude google code, because the
+								server already has this 
 									code in it (guava, etc) -->
 								<excludes>
 									<exclude>com.google.*:*</exclude>
@@ -195,7 +204,8 @@
 							<goal>copy-resources</goal>
 						</goals>
 						<configuration>
-							<outputDirectory>${user.home}/Documents/Test Server/plugins</outputDirectory>
+							<outputDirectory>${user.home}/Documents/Test
+								Server/plugins</outputDirectory>
 							<resources>
 								<resource>
 									<directory>${basedir}/target</directory>

@@ -99,10 +99,9 @@ public class PlayerBreakBlock implements Listener {
 				}
 				Grave grave = (Grave) obj;
 
-				if (grave.isOwner(event.getPlayer())) {
+				if (grave.isOwner(event.getPlayer()) && !grave.getGravesConfig().isDestroyed()) {
 					event.setDropItems(false);
 					grave.claim(event.getPlayer(), event.getPlayer().getInventory());
-					grave.removeGrave();
 					return;
 				}
 

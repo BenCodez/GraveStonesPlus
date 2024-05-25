@@ -72,6 +72,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	}
 
 	public void recreateBrokenGrave(Grave grave) {
+		grave.getGravesConfig().setDestroyed(false);
 		graves.add(grave);
 		brokenGraves.remove(grave);
 		gravesConfig.setGraves(graves);

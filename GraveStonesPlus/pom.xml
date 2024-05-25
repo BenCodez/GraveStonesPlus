@@ -112,7 +112,7 @@
 						<relocation>
 							<pattern>com.bencodez.simpleapi</pattern>
 							<shadedPattern>
-								${project.groupId}.advancedcore.simpleapi</shadedPattern>
+								${project.groupId}.gravestonesplus.simpleapi</shadedPattern>
 						</relocation>
 						<relocation>
 							<pattern>com.bencodez.advancedcore</pattern>

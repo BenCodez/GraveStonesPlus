@@ -99,6 +99,11 @@ public class PlayerBreakBlock implements Listener {
 				}
 				Grave grave = (Grave) obj;
 
+				if (grave.getGravesConfig().isDestroyed()) {
+					plugin.debug("Grave already broken: " + grave.getGravesConfig().getLocation().toString());
+					return;
+				}
+
 				if (grave.isOwner(event.getPlayer())) {
 					event.setDropItems(false);
 					grave.claim(event.getPlayer(), event.getPlayer().getInventory());
@@ -117,8 +122,7 @@ public class PlayerBreakBlock implements Listener {
 					plugin.debug("No permission to break other graves");
 				}
 
-				event.getPlayer().sendMessage(
-						MessageAPI.colorize(plugin.getConfigFile().getFormatNotYourGrave()));
+				event.getPlayer().sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatNotYourGrave()));
 				event.setCancelled(true);
 				return;
 

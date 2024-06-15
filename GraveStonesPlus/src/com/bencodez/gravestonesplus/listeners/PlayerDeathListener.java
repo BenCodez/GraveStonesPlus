@@ -207,7 +207,7 @@ public class PlayerDeathListener implements Listener {
 				String msg = MessageAPI.colorize(
 						PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
 				if (!msg.isEmpty()) {
-					entity.sendMessage();
+					entity.sendMessage(msg);
 				}
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());

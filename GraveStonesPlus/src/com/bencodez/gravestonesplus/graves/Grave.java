@@ -194,8 +194,8 @@ public class Grave {
 	}
 
 	public void onClick(Player player) {
-		player.sendMessage(gravesConfig.getPlayerName() + "'s grave. Died at " + gravesConfig.getTime() + ". Reason: "
-				+ gravesConfig.getDeathMessage());
+		player.sendMessage(gravesConfig.getPlayerName() + "'s grave. Died at " + new Date(gravesConfig.getTime())
+				+ ". Reason: " + gravesConfig.getDeathMessage());
 	}
 
 	public void removeHologramsAround() {
@@ -234,27 +234,25 @@ public class Grave {
 			topHologram.kill();
 		}
 		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
-				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders),
-				true, false, plugin.getKey(), 1, "Grave", this);
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders), true,
+				false, plugin.getKey(), 1, "Grave", this);
 		// topHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		if (middleHologram != null) {
 			middleHologram.kill();
 		}
-		middleHologram = new Hologram(
-				hologramLocation.subtract(0, .25, 0), PlaceholderUtils
-						.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders),
-				true, false, plugin.getKey(), 1, "Grave", this);
+		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true,
+				false, plugin.getKey(), 1, "Grave", this);
 
 		// middleHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		if (bottomHologram != null) {
 			bottomHologram.kill();
 		}
-		bottomHologram = new Hologram(
-				hologramLocation.subtract(0, .25, 0), PlaceholderUtils
-						.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders),
-				true, false, plugin.getKey(), 1, "Grave", this);
+		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true,
+				false, plugin.getKey(), 1, "Grave", this);
 		// bottomHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
 		checkGlowing();

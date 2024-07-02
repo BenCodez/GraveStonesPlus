@@ -20,6 +20,7 @@ import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.ClickType;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
+import org.bukkit.inventory.meta.CompassMeta;
 import org.bukkit.persistence.PersistentDataType;
 
 import com.bencodez.advancedcore.api.hologram.Hologram;
@@ -607,7 +608,20 @@ public class Grave {
 
 		int chance = plugin.getConfigFile().getPercentageDrops();
 		boolean notInCorrectSlot = false;
-		for (Entry<Integer, ItemStack> item : getGravesConfig().getItems().entrySet()) {
+		for (ItemStack item : player.getInventory().getContents()) {
+			if (item != null && item.getType().equals(Material.COMPASS)) {
+				if (item.hasItemMeta()) {
+					CompassMeta meta = (CompassMeta) item.getItemMeta();
+					if (meta.getLodestone().equals(getGravesConfig().getLocation())) {
+						player.getInventory().remove(item);
+					}
+				}
+			}
+		}
+
+		for (Entry<Integer, ItemStack> item :
+
+		getGravesConfig().getItems().entrySet()) {
 			if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
 
 				if (item.getKey().intValue() >= 0) {

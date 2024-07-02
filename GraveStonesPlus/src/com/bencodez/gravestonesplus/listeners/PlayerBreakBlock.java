@@ -88,7 +88,7 @@ public class PlayerBreakBlock implements Listener {
 	 * grave.createSkull(); return; } } } }
 	 */
 
-	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	@EventHandler(priority = EventPriority.LOW)
 	public void onBlockBreak(BlockBreakEvent event) {
 		if (event.getPlayer() != null) {
 			if (event.getBlock().getType().equals(Material.PLAYER_HEAD)) {
@@ -107,6 +107,10 @@ public class PlayerBreakBlock implements Listener {
 				if (grave.isOwner(event.getPlayer())) {
 					event.setDropItems(false);
 					grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+					return;
+				}
+				
+				if (event.isCancelled()) {
 					return;
 				}
 

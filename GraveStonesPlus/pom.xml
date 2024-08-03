@@ -110,6 +110,11 @@
 					</filters>
 					<relocations>
 						<relocation>
+							<pattern>com.tcoded.folialib</pattern>
+							<shadedPattern>
+								${project.groupId}.votingplugin.simpleapi.folialib</shadedPattern>
+						</relocation>
+						<relocation>
 							<pattern>com.bencodez.simpleapi</pattern>
 							<shadedPattern>
 								${project.groupId}.gravestonesplus.simpleapi</shadedPattern>

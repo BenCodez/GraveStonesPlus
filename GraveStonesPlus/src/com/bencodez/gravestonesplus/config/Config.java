@@ -100,6 +100,10 @@ public class Config extends YMLFile {
 	private String formatNotYourGrave = "Not your grave!";
 
 	@Getter
+	@ConfigDataString(path = "Format.ClickMessage")
+	private String formatClickMessage = "%player%'s grave. Died at %time%. Reason: %reason%";
+
+	@Getter
 	@ConfigDataBoolean(path = "Format.Help.RequirePermission")
 	private boolean formatHelpRequirePermission = true;
 

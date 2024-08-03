@@ -195,8 +195,12 @@ public class Grave {
 	}
 
 	public void onClick(Player player) {
-		player.sendMessage(gravesConfig.getPlayerName() + "'s grave. Died at " + new Date(gravesConfig.getTime())
-				+ ". Reason: " + gravesConfig.getDeathMessage());
+		HashMap<String, String> placeholders = new HashMap<String, String>();
+		placeholders.put("player", gravesConfig.getPlayerName());
+		placeholders.put("time", "" + new Date(gravesConfig.getTime()));
+		placeholders.put("reason", gravesConfig.getDeathMessage());
+		player.sendMessage(MessageAPI.colorize(
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatClickMessage(), placeholders)));
 	}
 
 	public void removeHologramsAround() {

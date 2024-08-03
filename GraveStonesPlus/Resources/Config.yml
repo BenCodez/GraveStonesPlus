@@ -63,6 +63,7 @@ Format:
   GraveLimitBreak: 'Breaking oldest grave due to limit reached'
   ItemsNotInCorrectSlot: "Some items didn't return to the correct slot"
   NotYourGrave: 'Not your grave!'
+  ClickMessage: "%player%'s grave. Died at %time%. Reason: %reason%"
   # Hologram message
   Grave:
     Top: '%player% died here!'

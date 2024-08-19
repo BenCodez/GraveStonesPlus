@@ -4,11 +4,9 @@ main: com.bencodez.gravestonesplus.GraveStonesPlus
 description: Description
 author: BenCodez
 api-version: 1.13
-softdepend:
-- Vault
 libraries:
   - org.openjdk.nashorn:nashorn-core:15.3
-softdepend: [ProtocolLib, Vault, PvPManager, WorldGuard, WorldGuardExtraFlags]
+softdepend: [ProtocolLib, Vault, PvPManager, WorldGuard, WorldGuardExtraFlags, Slimefun]
 commands:
   gravestonesplus:
     description: Main plugin command

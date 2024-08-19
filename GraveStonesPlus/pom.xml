@@ -256,6 +256,10 @@
 			<id>CodeMC</id>
 			<url>https://repo.codemc.org/repository/maven-public/</url>
 		</repository>
+		<repository>
+			<id>jitpack.io</id>
+			<url>https://jitpack.io</url>
+		</repository>
 	</repositories>
 	<dependencies>
 		<dependency>
@@ -274,6 +278,12 @@
 			<groupId>me.NoChance.PvPManager</groupId>
 			<artifactId>PvPManager</artifactId>
 			<version>3.12</version>
+			<scope>provided</scope>
+		</dependency>
+		<dependency>
+			<groupId>com.github.Slimefun</groupId>
+			<artifactId>Slimefun4</artifactId>
+			<version>2fd0f8a0d8</version>
 			<scope>provided</scope>
 		</dependency>
 	</dependencies>

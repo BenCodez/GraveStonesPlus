@@ -122,7 +122,9 @@ public class PlayerDeathListener implements Listener {
 		for (int i = 0; i < 36; i++) {
 			ItemStack item = inv.getItem(i);
 			if (item != null) {
-				if (keepItemsWithMatchingLore(item, text)) {
+				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item)) {
+					// Slimefun will put items back to player inventory
+                } else if (keepItemsWithMatchingLore(item, text)) {
 					keepItems.put(i, item);
 				} else if (!hasCurseOfVanishing(item)) {
 					itemsWithSlot.put(i, item);
@@ -132,35 +134,45 @@ public class PlayerDeathListener implements Listener {
 
 		// store items outside of player inventory
 		if (inv.getHelmet() != null) {
-			if (keepItemsWithMatchingLore(inv.getHelmet(), text)) {
+			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getHelmet())) {
+				// Slimefun will put items back to player inventory
+			} else if (keepItemsWithMatchingLore(inv.getHelmet(), text)) {
 				keepItems.put(-1, inv.getHelmet());
 			} else if (!hasCurseOfVanishing(inv.getHelmet())) {
 				itemsWithSlot.put(-1, inv.getHelmet());
 			}
 		}
 		if (inv.getChestplate() != null) {
-			if (keepItemsWithMatchingLore(inv.getChestplate(), text)) {
+			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getChestplate())) {
+				// Slimefun will put items back to player inventory
+			} else if (keepItemsWithMatchingLore(inv.getChestplate(), text)) {
 				keepItems.put(-2, inv.getChestplate());
 			} else if (!hasCurseOfVanishing(inv.getChestplate())) {
 				itemsWithSlot.put(-2, inv.getChestplate());
 			}
 		}
 		if (inv.getLeggings() != null) {
-			if (keepItemsWithMatchingLore(inv.getLeggings(), text)) {
+			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getLeggings())) {
+				// Slimefun will put items back to player inventory
+			} else if (keepItemsWithMatchingLore(inv.getLeggings(), text)) {
 				keepItems.put(-3, inv.getLeggings());
 			} else if (!hasCurseOfVanishing(inv.getLeggings())) {
 				itemsWithSlot.put(-3, inv.getLeggings());
 			}
 		}
 		if (inv.getBoots() != null) {
-			if (keepItemsWithMatchingLore(inv.getBoots(), text)) {
+			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getBoots())) {
+				// Slimefun will put items back to player inventory
+			} else if (keepItemsWithMatchingLore(inv.getBoots(), text)) {
 				keepItems.put(-4, inv.getBoots());
 			} else if (!hasCurseOfVanishing(inv.getBoots())) {
 				itemsWithSlot.put(-4, inv.getBoots());
 			}
 		}
 		if (inv.getItemInOffHand() != null) {
-			if (keepItemsWithMatchingLore(inv.getItemInOffHand(), text)) {
+			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getItemInOffHand())) {
+				// Slimefun will put items back to player inventory
+			} else if (keepItemsWithMatchingLore(inv.getItemInOffHand(), text)) {
 				keepItems.put(-5, inv.getItemInOffHand());
 			} else if (!hasCurseOfVanishing(inv.getItemInOffHand())) {
 				itemsWithSlot.put(-5, inv.getItemInOffHand());

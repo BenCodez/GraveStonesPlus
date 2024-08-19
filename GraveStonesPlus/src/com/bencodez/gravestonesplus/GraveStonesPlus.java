@@ -9,6 +9,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
 
+import com.bencodez.gravestonesplus.pluginhandles.SlimefunHandle;
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
@@ -229,6 +230,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (Bukkit.getPluginManager().isPluginEnabled("PvPManager")) {
 			pvpManager = new PvpManagerHandle(this);
 		}
+		if (Bukkit.getPluginManager().isPluginEnabled("Slimefun")) {
+			slimefun = new SlimefunHandle(this);
+		}
 
 		Bukkit.getScheduler().runTaskAsynchronously(plugin, new Runnable() {
 
@@ -273,6 +277,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	private PvpManagerHandle pvpManager;
+
+	@Getter
+	private SlimefunHandle slimefun;
 
 	public int numberOfGraves(UUID uuid) {
 		int num = 0;

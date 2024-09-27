@@ -703,7 +703,15 @@ public class Grave {
 	}
 
 	public void checkBlockDisplay() {
-		itemDisplay = plugin.getGraveDisplayEntityHandler().getItemDisplay(this);
+		boolean hasDisplayEntities = true;
+		try {
+			EntityType type = EntityType.ITEM_DISPLAY;
+		} catch (NoSuchFieldError e) {
+			hasDisplayEntities = false;
+		}
+		if (hasDisplayEntities) {
+			itemDisplay = plugin.getGraveDisplayEntityHandler().getItemDisplay(this);
+		}
 	}
 
 }

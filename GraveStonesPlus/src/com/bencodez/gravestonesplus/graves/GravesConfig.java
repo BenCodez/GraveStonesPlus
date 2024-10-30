@@ -115,9 +115,11 @@ public class GravesConfig implements ConfigurationSerializable {
 							NumberConversions.toInt(deserialize.get("Y")),
 							NumberConversions.toInt(deserialize.get("Z"))),
 					(HashMap<Integer, ItemStack>) deserialize.get("Items"),
-					NumberConversions.toInt(deserialize.get("EXP")), deserialize.get("DeathMessage").toString(),
+					NumberConversions.toInt(deserialize.get("EXP")),
+					(deserialize.get("DeathMessage") != null ? deserialize.get("DeathMessage").toString() : ""),
 					NumberConversions.toLong(deserialize.get("Time")),
-					Boolean.valueOf(deserialize.get("Destroyed").toString()),
+					Boolean.valueOf(
+							(deserialize.get("Destroyed") != null ? deserialize.get("Destroyed").toString() : "false")),
 					NumberConversions.toLong(deserialize.get("DestroyedTime")), UUID.fromString(str),
 					UUID.fromString(str1));
 		} else {
@@ -128,9 +130,11 @@ public class GravesConfig implements ConfigurationSerializable {
 							NumberConversions.toInt(deserialize.get("Y")),
 							NumberConversions.toInt(deserialize.get("Z"))),
 					(HashMap<Integer, ItemStack>) deserialize.get("Items"),
-					NumberConversions.toInt(deserialize.get("EXP")), deserialize.get("DeathMessage").toString(),
+					NumberConversions.toInt(deserialize.get("EXP")),
+					(deserialize.get("DeathMessage") != null ? deserialize.get("DeathMessage").toString() : ""),
 					NumberConversions.toLong(deserialize.get("Time")),
-					Boolean.valueOf(deserialize.get("Destroyed").toString()),
+					Boolean.valueOf(
+							(deserialize.get("Destroyed") != null ? deserialize.get("Destroyed").toString() : "false")),
 					NumberConversions.toLong(deserialize.get("DestroyedTime")), null, null);
 		}
 	}

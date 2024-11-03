@@ -404,16 +404,16 @@ public class Grave {
 		}
 	}
 
-	@SuppressWarnings("deprecation")
 	public BInventoryButton getGUIItem() {
 		Location loc = gravesConfig.getLocation();
-		BInventoryButton b = new BInventoryButton(new ItemBuilder(Material.PLAYER_HEAD)
-				.setSkullOwner(gravesConfig.getPlayerName()).setName("&3&l" + gravesConfig.getPlayerName())
-				.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
-						+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
-				.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
-				.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to remove")
-				.addLoreLine("&cShift left click to view items")) {
+		BInventoryButton b = new BInventoryButton(
+				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
+						.setName("&3&l" + gravesConfig.getPlayerName())
+						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
+								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+						.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
+						.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to remove")
+						.addLoreLine("&cShift left click to view items")) {
 
 			@Override
 			public void onClick(ClickEvent clickEvent) {
@@ -440,17 +440,17 @@ public class Grave {
 		return b;
 	}
 
-	@SuppressWarnings("deprecation")
 	public BInventoryButton getGUIItemBroken() {
 		Location loc = gravesConfig.getLocation();
-		BInventoryButton b = new BInventoryButton(new ItemBuilder(Material.PLAYER_HEAD)
-				.setSkullOwner(gravesConfig.getPlayerName()).setName("&3&l" + gravesConfig.getPlayerName())
-				.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
-						+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
-				.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
-				.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to create")
-				.addLoreLine("&cShift left click to view items")
-				.addLoreLine("&aTime of removal: " + new Date(gravesConfig.getDestroyedTime()))) {
+		BInventoryButton b = new BInventoryButton(
+				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
+						.setName("&3&l" + gravesConfig.getPlayerName())
+						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
+								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+						.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
+						.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to create")
+						.addLoreLine("&cShift left click to view items")
+						.addLoreLine("&aTime of removal: " + new Date(gravesConfig.getDestroyedTime()))) {
 
 			@Override
 			public void onClick(ClickEvent clickEvent) {
@@ -705,6 +705,7 @@ public class Grave {
 	public void checkBlockDisplay() {
 		boolean hasDisplayEntities = true;
 		try {
+			@SuppressWarnings("unused")
 			EntityType type = EntityType.ITEM_DISPLAY;
 		} catch (NoSuchFieldError e) {
 			hasDisplayEntities = false;

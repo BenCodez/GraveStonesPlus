@@ -9,7 +9,6 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
 
-import com.bencodez.gravestonesplus.pluginhandles.SlimefunHandle;
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
@@ -19,7 +18,6 @@ import org.bukkit.permissions.PermissionDefault;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
-import com.bencodez.advancedcore.api.yml.YMLConfig;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
@@ -32,6 +30,8 @@ import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
+import com.bencodez.gravestonesplus.pluginhandles.SlimefunHandle;
+import com.bencodez.simpleapi.file.YMLConfig;
 import com.bencodez.simpleapi.metrics.BStatsMetrics;
 import com.bencodez.simpleapi.updater.Updater;
 

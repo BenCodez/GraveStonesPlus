@@ -6,9 +6,10 @@ import java.util.List;
 import java.util.Set;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
-import com.bencodez.advancedcore.api.yml.YMLFile;
+import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GravesConfig;
+import com.bencodez.simpleapi.file.YMLFile;
 
 public class GraveLocations extends YMLFile {
 	public GraveLocations(AdvancedCorePlugin plugin) {
@@ -52,7 +53,7 @@ public class GraveLocations extends YMLFile {
 		if (getData() != null) {
 			return (List<GravesConfig>) getData().getList("graves");
 		} else {
-			getPlugin().debug("Graves.yml: Data == null");
+			GraveStonesPlus.getPlugin().debug("Graves.yml: Data == null");
 			return new ArrayList<GravesConfig>();
 		}
 	}
@@ -62,7 +63,7 @@ public class GraveLocations extends YMLFile {
 		if (getData() != null) {
 			return (List<GravesConfig>) getData().getList("brokengraves");
 		} else {
-			getPlugin().debug("Graves.yml: Data == null");
+			GraveStonesPlus.getPlugin().debug("Graves.yml: Data == null");
 			return new ArrayList<GravesConfig>();
 		}
 	}

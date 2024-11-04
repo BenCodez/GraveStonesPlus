@@ -4,7 +4,7 @@ import java.io.File;
 import java.util.ArrayList;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
-import com.bencodez.advancedcore.api.yml.YMLFile;
+import com.bencodez.simpleapi.file.YMLFile;
 import com.bencodez.simpleapi.file.annotation.AnnotationHandler;
 import com.bencodez.simpleapi.file.annotation.ConfigDataBoolean;
 import com.bencodez.simpleapi.file.annotation.ConfigDataInt;

@@ -356,6 +356,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			}
 		});
 		setLoadUserData(false);
+		setLoadVault(false);
 	}
 
 	@Getter

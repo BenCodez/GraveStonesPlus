@@ -283,7 +283,7 @@
 		<dependency>
 			<groupId>com.github.Slimefun</groupId>
 			<artifactId>Slimefun4</artifactId>
-			<version>2fd0f8a0d8</version>
+			<version>LATEST</version>
 			<scope>provided</scope>
 		</dependency>
 	</dependencies>

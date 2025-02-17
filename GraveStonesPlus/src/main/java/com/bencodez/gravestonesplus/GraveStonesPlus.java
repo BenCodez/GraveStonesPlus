@@ -273,6 +273,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 		});
 
+		plugin.getLogger().info("Enabled GraveStonesPlus!");
+
 	}
 
 	@Getter

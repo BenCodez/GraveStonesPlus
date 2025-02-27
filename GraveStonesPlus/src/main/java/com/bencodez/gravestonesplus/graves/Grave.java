@@ -80,7 +80,7 @@ public class Grave {
 
 	public void loadChunk(boolean task) {
 		if (task) {
-			Bukkit.getScheduler().runTask(plugin, new Runnable() {
+			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 				@Override
 				public void run() {
@@ -94,7 +94,7 @@ public class Grave {
 					}
 
 				}
-			});
+			}, gravesConfig.getLocation());
 		} else {
 			Block block = gravesConfig.getLocation().getBlock();
 			if (!block.getChunk().isForceLoaded()) {
@@ -109,7 +109,7 @@ public class Grave {
 	}
 
 	private void unLoadChunk() {
-		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
+		plugin.getBukkitScheduler().runTaskLater(plugin, new Runnable() {
 
 			@Override
 			public void run() {
@@ -119,14 +119,14 @@ public class Grave {
 					chunkLoaded = false;
 				}
 			}
-		}, 20 * 6);
+		}, 20 * 6, gravesConfig.getLocation());
 
 	}
 
 	public void createSkull() {
 		if (plugin.isUsingDisplayEntities()) {
 			final Grave grave = this;
-			Bukkit.getScheduler().runTask(plugin, new Runnable() {
+			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 				@Override
 				public void run() {
@@ -140,9 +140,9 @@ public class Grave {
 					block.setType(Material.BARRIER);
 					loadBlockMeta(block);
 				}
-			});
+			}, gravesConfig.getLocation());
 		} else {
-			Bukkit.getScheduler().runTask(plugin, new Runnable() {
+			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 				@Override
 				public void run() {
@@ -158,19 +158,19 @@ public class Grave {
 					loadBlockMeta(block);
 				}
 
-			});
+			}, gravesConfig.getLocation());
 		}
 	}
 
 	public void removeSkull() {
-		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 			@Override
 			public void run() {
 				Block block = gravesConfig.getLocation().getBlock();
 				block.setType(Material.AIR);
 			}
-		});
+		}, gravesConfig.getLocation());
 	}
 
 	public boolean isGrave(Block clicked) {
@@ -310,7 +310,7 @@ public class Grave {
 
 		gravesConfig.setDestroyed(true);
 		gravesConfig.setDestroyedTime(System.currentTimeMillis());
-		Bukkit.getScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
+		plugin.getBukkitScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
 
 			@Override
 			public void run() {
@@ -320,7 +320,7 @@ public class Grave {
 				}
 				gravesConfig.getLocation().getBlock().setType(Material.AIR);
 			}
-		});
+		}, gravesConfig.getLocation());
 		removeHologram();
 		removeTimer();
 		GraveStonesPlus.plugin.removeGrave(this);
@@ -368,7 +368,6 @@ public class Grave {
 						glowingHologram = new Hologram(
 								gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, -2, .5), "", false,
 								true, plugin.getKey(), 1, "Grave", this);
-
 					}
 					glowingHologram.glow(true);
 				} else {
@@ -426,13 +425,13 @@ public class Grave {
 				} else {
 					Location loc = grave.getGravesConfig().getLocation();
 					Player p = clickEvent.getWhoClicked();
-					Bukkit.getScheduler().runTask(plugin, new Runnable() {
+					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 						@Override
 						public void run() {
 							p.teleport(loc.clone().add(0, 1, 0));
 						}
-					});
+					}, loc);
 				}
 			}
 		};
@@ -458,13 +457,13 @@ public class Grave {
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
 					loadChunk(true);
 					grave.createSkull();
-					Bukkit.getScheduler().runTask(plugin, new Runnable() {
+					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 						@Override
 						public void run() {
 							grave.createHologram();
 						}
-					});
+					}, grave.getGravesConfig().getLocation());
 					plugin.recreateBrokenGrave(grave);
 					clickEvent.getWhoClicked().sendMessage(MessageAPI.colorize("&cGrave readded"));
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
@@ -473,13 +472,13 @@ public class Grave {
 
 					Location loc = grave.getGravesConfig().getLocation();
 					Player p = clickEvent.getWhoClicked();
-					Bukkit.getScheduler().runTask(plugin, new Runnable() {
+					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 						@Override
 						public void run() {
 							p.teleport(loc.clone().add(0, 1, 0));
 						}
-					});
+					}, loc);
 				}
 
 			}
@@ -593,7 +592,7 @@ public class Grave {
 				}
 			}
 		}
-		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 			@Override
 			public void run() {
@@ -603,7 +602,7 @@ public class Grave {
 					}
 				}
 			}
-		});
+		}, loc);
 	}
 
 	public void claim(Player player, PlayerInventory currentInv) {
@@ -691,13 +690,13 @@ public class Grave {
 		if (Bukkit.isPrimaryThread()) {
 			removeHologramsAround();
 		} else {
-			Bukkit.getScheduler().runTask(plugin, new Runnable() {
+			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 				@Override
 				public void run() {
 					removeHologramsAround();
 				}
-			});
+			}, gravesConfig.getLocation());
 		}
 		plugin.removeGrave(this);
 	}

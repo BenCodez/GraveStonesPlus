@@ -3,7 +3,6 @@ package com.bencodez.gravestonesplus.listeners;
 import java.util.HashMap;
 import java.util.UUID;
 
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -124,7 +123,7 @@ public class PlayerDeathListener implements Listener {
 			if (item != null) {
 				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item)) {
 					// Slimefun will put items back to player inventory
-                } else if (keepItemsWithMatchingLore(item, text)) {
+				} else if (keepItemsWithMatchingLore(item, text)) {
 					keepItems.put(i, item);
 				} else if (!hasCurseOfVanishing(item)) {
 					itemsWithSlot.put(i, item);
@@ -183,7 +182,7 @@ public class PlayerDeathListener implements Listener {
 		}
 		final Location emptyBlockFinal = emptyBlock;
 
-		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
+		plugin.getBukkitScheduler().runTaskLater(plugin, new Runnable() {
 
 			@Override
 			public void run() {
@@ -224,7 +223,7 @@ public class PlayerDeathListener implements Listener {
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
 			}
-		}, 2);
+		}, 2, emptyBlockFinal);
 
 	}
 

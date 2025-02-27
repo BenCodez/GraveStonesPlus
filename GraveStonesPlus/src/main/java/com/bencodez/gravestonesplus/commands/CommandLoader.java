@@ -7,7 +7,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.regex.Pattern;
 
-import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -241,7 +240,7 @@ public class CommandLoader {
 					@Override
 					public void execute(CommandSender sender, String[] args) {
 						final Player p = (Player) sender;
-						Bukkit.getScheduler().runTask(plugin, new Runnable() {
+						plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 							@Override
 							public void run() {
@@ -272,7 +271,7 @@ public class CommandLoader {
 								sendMessage(sender, "Finished removing armor stands in a radius of 10, removed "
 										+ amount + " armor stands");
 							}
-						});
+						}, p.getLocation());
 
 					}
 				});
@@ -286,13 +285,13 @@ public class CommandLoader {
 				if (grave != null) {
 					Location loc = grave.getGravesConfig().getLocation();
 					Player p = (Player) sender;
-					Bukkit.getScheduler().runTask(plugin, new Runnable() {
+					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 						@Override
 						public void run() {
 							p.teleport(loc.clone().add(0, 1, 0));
 						}
-					});
+					}, loc);
 				} else {
 					sendMessage(sender, "&cYou don't have a grave");
 				}
@@ -316,13 +315,13 @@ public class CommandLoader {
 					compass.setItemMeta(meta);
 
 					final ItemStack itemToGive = compass;
-					Bukkit.getScheduler().runTask(plugin, new Runnable() {
+					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 						@Override
 						public void run() {
 							plugin.getFullInventoryHandler().giveItem(p, itemToGive);
 						}
-					});
+					}, ((Player) sender).getLocation());
 				} else {
 					sendMessage(sender, "&cYou don't have a grave");
 				}

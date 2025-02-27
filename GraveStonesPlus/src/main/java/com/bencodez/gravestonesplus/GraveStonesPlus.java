@@ -100,7 +100,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		graves = Collections.synchronizedList(new ArrayList<Grave>());
 		brokenGraves = Collections.synchronizedSet(new HashSet<Grave>());
 
-		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 			@Override
 			public void run() {
@@ -139,7 +139,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			}
 		});
 
-		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 			@Override
 			public void run() {
@@ -242,7 +242,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			}
 		});
 
-		Bukkit.getScheduler().runTaskAsynchronously(this, new Runnable() {
+		plugin.getBukkitScheduler().runTaskAsynchronously(this, new Runnable() {
 
 			@Override
 			public void run() {

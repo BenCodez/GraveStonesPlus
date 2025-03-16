@@ -35,6 +35,9 @@ GraveLimit: 10
 # Use this if performance takes a hit with armor stands
 DisableArmorStands: false
 
+# If enabled it will give a compass on respawn pointing to last grave
+GiveCompassOnRespawn: false
+
 # Chance for items to drops
 # This perctange is caculated on every item
 PercentageDrops: 100

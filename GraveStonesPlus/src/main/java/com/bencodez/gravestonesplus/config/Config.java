@@ -33,6 +33,10 @@ public class Config extends YMLFile {
 	private boolean breakOtherGravesWithPermission = false;
 
 	@Getter
+	@ConfigDataBoolean(path = "GiveCompassOnRespawn")
+	private boolean giveCompassOnRespawn = false;
+
+	@Getter
 	@ConfigDataListString(path = "DisabledWorlds")
 	private ArrayList<String> disabledWorlds = new ArrayList<String>();
 

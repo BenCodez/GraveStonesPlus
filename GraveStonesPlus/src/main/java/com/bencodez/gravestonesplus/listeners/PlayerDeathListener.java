@@ -16,7 +16,6 @@ import org.bukkit.event.entity.PlayerDeathEvent;
 import org.bukkit.event.player.PlayerRespawnEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
-import org.bukkit.inventory.meta.CompassMeta;
 import org.bukkit.inventory.meta.ItemMeta;
 
 import com.bencodez.advancedcore.api.messages.PlaceholderUtils;
@@ -293,29 +292,10 @@ public class PlayerDeathListener implements Listener {
 		if (plugin.getConfigFile().isGiveCompassOnRespawn()) {
 			Grave grave = plugin.getLatestGrave(player);
 			if (grave != null) {
-				giveCompass(player, grave);
+				grave.giveCompass(player);
 			}
 		}
 
-	}
-
-	public void giveCompass(Player p, Grave grave) {
-		ItemStack compass = new ItemStack(Material.COMPASS);
-		CompassMeta meta = (CompassMeta) compass.getItemMeta();
-		meta.setLodestone(grave.getGravesConfig().getLocation());
-		meta.setLodestoneTracked(false);
-		meta.setDisplayName(p.getName() + " last grave: ");
-
-		compass.setItemMeta(meta);
-
-		final ItemStack itemToGive = compass;
-		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				plugin.getFullInventoryHandler().giveItem(p, itemToGive);
-			}
-		}, p.getLocation());
 	}
 
 	public boolean isSlotAvailable(ItemStack slot) {

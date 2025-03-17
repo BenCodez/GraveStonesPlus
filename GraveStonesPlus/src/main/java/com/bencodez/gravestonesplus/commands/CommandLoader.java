@@ -8,14 +8,11 @@ import java.util.Set;
 import java.util.regex.Pattern;
 
 import org.bukkit.Location;
-import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
-import org.bukkit.inventory.ItemStack;
-import org.bukkit.inventory.meta.CompassMeta;
 import org.bukkit.permissions.Permission;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -305,23 +302,7 @@ public class CommandLoader {
 			public void execute(CommandSender sender, String[] args) {
 				Grave grave = plugin.getLatestGrave((Player) sender);
 				if (grave != null) {
-					ItemStack compass = new ItemStack(Material.COMPASS);
-					CompassMeta meta = (CompassMeta) compass.getItemMeta();
-					Player p = (Player) sender;
-					meta.setLodestone(grave.getGravesConfig().getLocation());
-					meta.setLodestoneTracked(false);
-					meta.setDisplayName(p.getName() + " last grave: ");
-
-					compass.setItemMeta(meta);
-
-					final ItemStack itemToGive = compass;
-					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-						@Override
-						public void run() {
-							plugin.getFullInventoryHandler().giveItem(p, itemToGive);
-						}
-					}, ((Player) sender).getLocation());
+					grave.giveCompass((Player) sender);
 				} else {
 					sendMessage(sender, "&cYou don't have a grave");
 				}

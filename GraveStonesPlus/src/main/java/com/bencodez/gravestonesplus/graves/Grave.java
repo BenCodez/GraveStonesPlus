@@ -11,6 +11,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
 import org.bukkit.Material;
+import org.bukkit.NamespacedKey;
 import org.bukkit.block.Block;
 import org.bukkit.block.Skull;
 import org.bukkit.entity.Entity;
@@ -605,22 +606,54 @@ public class Grave {
 		}, loc);
 	}
 
+	public void removeCompass() {
+		NamespacedKey key = new NamespacedKey(plugin, "gravecompass");
+		for (Player player : Bukkit.getOnlinePlayers()) {
+			for (ItemStack item : player.getInventory().getContents()) {
+				if (item != null && item.getType().equals(Material.COMPASS)) {
+					if (item.hasItemMeta()) {
+						CompassMeta meta = (CompassMeta) item.getItemMeta();
+						if (meta.getPersistentDataContainer().has(key, PersistentDataType.LONG)) {
+							if (meta.getPersistentDataContainer().get(key, PersistentDataType.LONG)
+									.equals(getGravesConfig().getTime())
+									|| meta.getLodestone().equals(getGravesConfig().getLocation())) {
+								player.getInventory().remove(item);
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+
+	public void giveCompass(Player p) {
+		ItemStack compass = new ItemStack(Material.COMPASS);
+		CompassMeta meta = (CompassMeta) compass.getItemMeta();
+		meta.setLodestone(getGravesConfig().getLocation());
+		meta.setLodestoneTracked(false);
+		NamespacedKey key = new NamespacedKey(plugin, "gravecompass");
+		meta.getPersistentDataContainer().set(key, PersistentDataType.LONG, getGravesConfig().getTime());
+		meta.setDisplayName(p.getName() + " last grave: ");
+
+		compass.setItemMeta(meta);
+
+		final ItemStack itemToGive = compass;
+		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				plugin.getFullInventoryHandler().giveItem(p, itemToGive);
+			}
+		}, p.getLocation());
+	}
+
 	public void claim(Player player, PlayerInventory currentInv) {
 		AdvancedCoreUser user = plugin.getUserManager().getUser(player);
 		user.giveExp(getGravesConfig().getExp());
 
 		int chance = plugin.getConfigFile().getPercentageDrops();
 		boolean notInCorrectSlot = false;
-		for (ItemStack item : player.getInventory().getContents()) {
-			if (item != null && item.getType().equals(Material.COMPASS)) {
-				if (item.hasItemMeta()) {
-					CompassMeta meta = (CompassMeta) item.getItemMeta();
-					if (meta.getLodestone().equals(getGravesConfig().getLocation())) {
-						player.getInventory().remove(item);
-					}
-				}
-			}
-		}
+		removeCompass();
 
 		for (Entry<Integer, ItemStack> item :
 

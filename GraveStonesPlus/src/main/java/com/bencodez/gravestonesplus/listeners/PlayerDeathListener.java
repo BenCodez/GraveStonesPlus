@@ -111,6 +111,9 @@ public class PlayerDeathListener implements Listener {
 		String text = PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(), placeholders);
 
 		final String deathMessage = event.getDeathMessage();
+		if (plugin.getConfigFile().isKeepAllExp()) {
+			event.setDroppedExp(entity.getTotalExperience());
+		}
 		final int droppedExp = event.getDroppedExp();
 		event.setDroppedExp(0);
 		event.getDrops().clear();

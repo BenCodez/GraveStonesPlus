@@ -41,6 +41,10 @@ public class Config extends YMLFile {
 	private ArrayList<String> disabledWorlds = new ArrayList<String>();
 
 	@Getter
+	@ConfigDataBoolean(path = "KeepAllExp")
+	private boolean keepAllExp = false;
+
+	@Getter
 	@ConfigDataBoolean(path = "GlowingEffectNearGrave")
 	private boolean glowingEffectNearGrave = true;
 

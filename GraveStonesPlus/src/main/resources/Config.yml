@@ -47,6 +47,9 @@ PercentageDrops: 100
 # Set to '' to disable
 KeepItemsWithLore: ''
 
+# Keep all player exp, default is minecraft drop rate
+KeepAllExp: false
+
 # Use display entities rather than real blocks
 # 1.19.4+ only
 # The benefits is that the grave can't be destroyed by normal means, perfect for graves

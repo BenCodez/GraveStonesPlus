@@ -293,10 +293,19 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		if (plugin.getConfigFile().isGiveCompassOnRespawn()) {
-			Grave grave = plugin.getLatestGrave(player);
-			if (grave != null) {
-				grave.giveCompass(player);
-			}
+			final Player p = player;
+			plugin.getBukkitScheduler().runTaskLaterAsynchronously(plugin, new Runnable() {
+
+				@Override
+				public void run() {
+
+					Grave grave = plugin.getLatestGrave(p);
+					if (grave != null) {
+						grave.giveCompass(p);
+					}
+
+				}
+			}, 5);
 		}
 
 	}

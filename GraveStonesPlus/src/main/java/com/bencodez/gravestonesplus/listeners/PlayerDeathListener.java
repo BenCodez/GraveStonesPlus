@@ -74,7 +74,7 @@ public class PlayerDeathListener implements Listener {
 			}
 		}
 
-		if (event.getEntity().getInventory().isEmpty()) {
+		if (isInventoryEmpty(event.getEntity().getInventory())) {
 			if (!plugin.getConfigFile().isCreateGraveForEmptyInventories()) {
 				plugin.getLogger().info("Not creating grave, player has an empty inventory");
 				return;
@@ -228,6 +228,27 @@ public class PlayerDeathListener implements Listener {
 			}
 		}, 2, emptyBlockFinal);
 
+	}
+
+	private boolean isInventoryEmpty(PlayerInventory inventory) {
+		// Check main inventory slots
+		for (ItemStack item : inventory.getContents()) {
+			if (item != null && !item.getType().isAir()) {
+				return false;
+			}
+		}
+		// Check armor slots
+		for (ItemStack item : inventory.getArmorContents()) {
+			if (item != null && !item.getType().isAir()) {
+				return false;
+			}
+		}
+		// Check offhand slot
+		ItemStack offHandItem = inventory.getItemInOffHand();
+		if (offHandItem != null && !offHandItem.getType().isAir()) {
+			return false;
+		}
+		return true;
 	}
 
 	@EventHandler(priority = EventPriority.HIGH)

@@ -43,6 +43,10 @@ public class Config extends YMLFile {
 	@Getter
 	@ConfigDataBoolean(path = "KeepAllExp")
 	private boolean keepAllExp = false;
+	
+	@Getter
+	@ConfigDataBoolean(path = "DropItemsOnGraveRemoval")
+	private boolean dropItemsOnGraveRemoval = true;
 
 	@Getter
 	@ConfigDataBoolean(path = "GlowingEffectNearGrave")

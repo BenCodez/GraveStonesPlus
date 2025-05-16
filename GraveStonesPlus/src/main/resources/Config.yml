@@ -31,6 +31,9 @@ GraveClaimDistance: 10
 # Limit number of graves to can be created by a single person
 GraveLimit: 10
 
+# Drop items from grave if a grave gets removed due to GraveLimit above
+DropItemsOnGraveRemoval: true
+
 # If true, armor stands are disabled
 # Use this if performance takes a hit with armor stands
 DisableArmorStands: false

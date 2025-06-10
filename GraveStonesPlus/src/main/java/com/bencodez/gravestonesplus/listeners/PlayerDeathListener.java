@@ -114,7 +114,7 @@ public class PlayerDeathListener implements Listener {
 
 		final String deathMessage = event.getDeathMessage();
 		if (plugin.getConfigFile().isKeepAllExp()) {
-			event.setDroppedExp(entity.getTotalExperience());
+			event.setDroppedExp(getTotalExperience(event.getEntity()));
 		}
 		final int droppedExp = event.getDroppedExp();
 		event.setDroppedExp(0);
@@ -230,6 +230,38 @@ public class PlayerDeathListener implements Listener {
 			}
 		}, 2, emptyBlockFinal);
 
+	}
+
+	/**
+	 * Calculates a player's total experience as an integer. This sums up the XP for
+	 * each completed level plus the XP in the current level.
+	 */
+	private int getTotalExperience(Player player) {
+		int level = player.getLevel();
+		int exp = 0;
+
+		// Sum XP required for each full level they've completed
+		for (int i = 0; i < level; i++) {
+			exp += getExpForLevel(i);
+		}
+
+		// Add the XP they've earned toward the next level
+		exp += Math.round(player.getExp() * player.getExpToLevel());
+
+		return exp;
+	}
+
+	/**
+	 * Returns the XP required to go from level n to n+1.
+	 */
+	private int getExpForLevel(int n) {
+		if (n <= 15) {
+			return 2 * n + 7;
+		} else if (n <= 30) {
+			return 5 * n - 38;
+		} else {
+			return 9 * n - 158;
+		}
 	}
 
 	private boolean isInventoryEmpty(PlayerInventory inventory) {

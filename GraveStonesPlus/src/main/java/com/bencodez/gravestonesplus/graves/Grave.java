@@ -261,6 +261,7 @@ public class Grave {
 				false, plugin.getKey(), 1, "Grave", this);
 		// bottomHologram.getPersistentDataHolder().set(plugin.getKey(),
 		// PersistentDataType.INTEGER, 1);
+
 		checkGlowing();
 	}
 
@@ -358,7 +359,7 @@ public class Grave {
 	}
 
 	public void checkGlowing() {
-		if (gravesConfig.getUuid() != null) {
+		if (gravesConfig.getUuid() != null && plugin.getConfigFile().isGlowingEffectNearGrave()) {
 			Player p = Bukkit.getPlayer(gravesConfig.getUuid());
 			if (p != null) {
 

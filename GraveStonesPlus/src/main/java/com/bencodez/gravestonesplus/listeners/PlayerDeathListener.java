@@ -1,8 +1,14 @@
 package com.bencodez.gravestonesplus.listeners;
 
-import java.util.HashMap;
-import java.util.UUID;
-
+import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.graves.GravesConfig;
+import com.bencodez.gravestonesplus.nbt.NBTRule;
+import com.bencodez.gravestonesplus.nbt.NBTConfigManager;
+import com.bencodez.simpleapi.array.ArrayUtils;
+import com.bencodez.simpleapi.messages.MessageAPI;
+import de.tr7zw.nbtapi.NBTCompound;
+import de.tr7zw.nbtapi.NBTItem;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
@@ -18,12 +24,11 @@ import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
 
-import com.bencodez.advancedcore.api.messages.PlaceholderUtils;
-import com.bencodez.gravestonesplus.GraveStonesPlus;
-import com.bencodez.gravestonesplus.graves.Grave;
-import com.bencodez.gravestonesplus.graves.GravesConfig;
-import com.bencodez.simpleapi.array.ArrayUtils;
-import com.bencodez.simpleapi.messages.MessageAPI;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
+import java.util.UUID;
+import java.util.function.BiConsumer;
 
 public class PlayerDeathListener implements Listener {
 	private GraveStonesPlus plugin;
@@ -40,10 +45,104 @@ public class PlayerDeathListener implements Listener {
 	private final HashMap<UUID, HashMap<Integer, ItemStack>> deathItems = new HashMap<UUID, HashMap<Integer, ItemStack>>();
 
 	/**
-	 * On player interact.
+	 * Generic NBT rule matching method.
+	 * Checks if the given item matches any rule in the provided list of NBT rules.
 	 *
-	 * @param event the event
+	 * @param item The item to check.
+	 * @param rules The list of rules to match against.
+	 * @return True if the item matches any rule; otherwise, false.
 	 */
+	private boolean doesItemMatchAnyRule(ItemStack item, List<NBTRule> rules) {
+		if (item == null || item.getType().isAir() || rules == null || rules.isEmpty()) {
+			return false;
+		}
+
+		NBTItem nbtItem = new NBTItem(item);
+		// If the NBTItem has no NBT data, no need to check further
+		if (!nbtItem.hasNBTData()) {
+			return false;
+		}
+
+		for (NBTRule rule : rules) {
+			String path = rule.getPath();
+			String type = rule.getType();
+			Object expectedValue = rule.getValue();
+
+			// Debug log (optional, enable only for troubleshooting)
+			// plugin.getLogger().info("  Evaluating NBT rule: " + rule.getName() + " for item: " + item.getType().name() + " (Path: " + path + ", Type: " + type + ", Expected Value: " + expectedValue + ")");
+
+			String[] pathParts = path.split("\\.");
+			NBTCompound currentCompound = nbtItem;
+
+			// Traverse the path up to the compound tag preceding the final tag
+			for (int i = 0; i < pathParts.length - 1; i++) {
+				String part = pathParts[i];
+				// Warning for paths containing list indices (not fully supported by this direct implementation)
+				if (part.matches("\\d+")) {
+					plugin.getLogger().warning("NBT rule '" + rule.getName() + "' path '" + path + "' contains list index which is not fully supported by this direct implementation.");
+					currentCompound = null;
+					break;
+				}
+
+				if (currentCompound.hasTag(part)) {
+					currentCompound = currentCompound.getCompound(part);
+				} else {
+					currentCompound = null; // A compound tag in the path does not exist
+					break;
+				}
+			}
+
+			if (currentCompound == null) {
+				continue; // Path does not match, try next rule
+			}
+
+			String finalTag = pathParts[pathParts.length - 1];
+
+			if (!currentCompound.hasTag(finalTag)) {
+				continue; // Final tag does not exist, try next rule
+			}
+
+			// If the rule type is "EXISTS", it matches as long as the tag exists
+			if ("EXISTS".equalsIgnoreCase(type)) {
+				return true;
+			}
+
+			Object actualValue = null;
+			try {
+				// Read the actual NBT value based on the rule type
+				switch (type) {
+					case "STRING": actualValue = currentCompound.getString(finalTag); break;
+					case "INTEGER": actualValue = currentCompound.getInteger(finalTag); break;
+					case "BOOLEAN": actualValue = currentCompound.getBoolean(finalTag); break;
+					case "DOUBLE": actualValue = currentCompound.getDouble(finalTag); break;
+					case "BYTE": actualValue = currentCompound.getByte(finalTag); break;
+					case "SHORT": actualValue = currentCompound.getShort(finalTag); break;
+					case "LONG": actualValue = currentCompound.getLong(finalTag); break;
+					case "FLOAT": actualValue = currentCompound.getFloat(finalTag); break;
+					default:
+						plugin.getLogger().warning("NBT rule '" + rule.getName() + "' has unsupported type: " + type);
+						continue; // Unsupported type, try next rule
+				}
+			} catch (Exception e) {
+				plugin.getLogger().warning("Error reading NBT for rule '" + rule.getName() + "' (Path: " + path + ", Type: " + type + "): " + e.getMessage());
+				continue; // Failed to read NBT, try next rule
+			}
+
+			// Compare actual and expected values
+			if (actualValue instanceof Number && expectedValue instanceof Number) {
+				// For number types, use doubleValue for floating-point comparison to avoid precision issues
+				if (((Number) actualValue).doubleValue() == ((Number) expectedValue).doubleValue()) {
+					return true;
+				}
+			} else if (actualValue != null && actualValue.equals(expectedValue)) {
+				// For non-number types, use the equals method for comparison
+				return true;
+			}
+		}
+		return false; // No rule matched
+	}
+
+
 	@EventHandler(priority = EventPriority.HIGHEST)
 	public void onPlayerDeath(PlayerDeathEvent event) {
 		final Location deathLocation = event.getEntity().getLocation();
@@ -107,91 +206,103 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		PlayerInventory inv = event.getEntity().getInventory();
-		HashMap<String, String> placeholders = new HashMap<String, String>();
-		placeholders.put("player", event.getEntity().getName());
-		placeholders.put("displayname", event.getEntity().getDisplayName());
-		String text = PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(), placeholders);
+
+		// Important improvement: Define the placeholder map here and use it inside processItem
+		// This ensures that placeholders are correctly replaced for Lore rules each time an item is processed
+		final HashMap<String, String> playerPlaceholders = new HashMap<>();
+		playerPlaceholders.put("player", entity.getName());
+		playerPlaceholders.put("displayname", entity.getDisplayName());
+		// Add any other player-related placeholders you might need here
 
 		final String deathMessage = event.getDeathMessage();
 		if (plugin.getConfigFile().isKeepAllExp()) {
 			event.setDroppedExp(getTotalExperience(event.getEntity()));
 		}
 		final int droppedExp = event.getDroppedExp();
-		event.setDroppedExp(0);
-		event.getDrops().clear();
-		// store items with slot number
-		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>();
-		HashMap<Integer, ItemStack> keepItems = new HashMap<Integer, ItemStack>();
+		event.setDroppedExp(0); // Clear Bukkit's default dropped experience
+		event.getDrops().clear(); // Clear Bukkit's default dropped items
 
-		for (int i = 0; i < 36; i++) {
-			ItemStack item = inv.getItem(i);
-			if (item != null) {
-				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item)) {
-					// Slimefun will put items back to player inventory
-				} else if (keepItemsWithMatchingLore(item, text)) {
-					keepItems.put(i, item);
-				} else if (!hasCurseOfVanishing(item)) {
-					itemsWithSlot.put(i, item);
+		// Store items that will go into the grave and items that will be kept
+		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>(); // Items to be placed in the grave
+		HashMap<Integer, ItemStack> keepItems = new HashMap<Integer, ItemStack>();     // Items to be kept in the player's inventory
+
+		BiConsumer<Integer,ItemStack> processItem = (idx,item) -> {
+			if (item != null && !item.getType().isAir()) { // Ensure item exists and is not air
+				//plugin.getLogger().info("Processing item: " + item.getType().name() + " at slot " + idx); // Debug log
+
+				// --- Priority 1: Ignore NBT Rules ---
+				if (plugin.nbtConfigManager != null && doesItemMatchAnyRule(item, plugin.nbtConfigManager.getIgnoreNbtRules())) {
+					//plugin.getLogger().info("  Item " + item.getType().name() + " matched an 'ignore' NBT rule. Skipping further processing.");
+					return; // Return immediately, this item is not handled by GraveStonesPlus
 				}
-			}
-		}
 
-		// store items outside of player inventory
-		if (inv.getHelmet() != null) {
-			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getHelmet())) {
-				// Slimefun will put items back to player inventory
-			} else if (keepItemsWithMatchingLore(inv.getHelmet(), text)) {
-				keepItems.put(-1, inv.getHelmet());
-			} else if (!hasCurseOfVanishing(inv.getHelmet())) {
-				itemsWithSlot.put(-1, inv.getHelmet());
+				// --- Priority 2: Slimefun Soulbound Items ---
+				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item)) {
+					//plugin.getLogger().info("  Item " + item.getType().name() + " is Slimefun Soulbound. Allowing Slimefun to handle.");
+					return; // Assume Slimefun will handle and keep these items itself, so we don't interfere
+				}
+
+				// --- Priority 3: Lore Matching Rules ---
+				// Here, playerPlaceholders will be used to replace placeholders in the keepItemsWithLore config
+				final String loreToMatch = com.bencodez.advancedcore.api.messages.PlaceholderUtils.replacePlaceHolder(
+						plugin.getConfigFile().getKeepItemsWithLore(),
+						playerPlaceholders);
+				if (keepItemsWithMatchingLore(item, loreToMatch)) {
+					keepItems.put(idx, item);
+					//plugin.getLogger().info("  Item " + item.getType().name() + " kept due to matching lore: '" + loreToMatch + "'");
+					return;
+				}
+
+				// --- Priority 4: Keep NBT Rules ---
+				if (plugin.nbtConfigManager != null && doesItemMatchAnyRule(item, plugin.nbtConfigManager.getKeepNbtRules())) {
+					keepItems.put(idx, item);
+					//plugin.getLogger().info("  Item " + item.getType().name() + " kept due to matching NBT 'keep' rule.");
+					return;
+				}
+
+				// --- Priority 5: Grave NBT Rules ---
+				if (plugin.nbtConfigManager != null && doesItemMatchAnyRule(item, plugin.nbtConfigManager.getGraveNbtRules())) {
+					itemsWithSlot.put(idx, item);
+					//plugin.getLogger().info("  Item " + item.getType().name() + " put in grave due to matching NBT 'grave' rule.");
+					return;
+				}
+
+				// --- Priority 6: Curse of Vanishing ---
+				if (hasCurseOfVanishing(item)) {
+					//plugin.getLogger().info("  Item " + item.getType().name() + " has Curse of Vanishing and not kept by any rule, will be removed.");
+					return; // The item will not be added to any list, thus being removed
+				}
+
+				// --- Priority 7: Default behavior (if none of the above rules match) ---
+				itemsWithSlot.put(idx, item);
+				//plugin.getLogger().info("  Item " + item.getType().name() + " (default) put in grave.");
+
+			} else {
+				// plugin.getLogger().info("  Slot " + idx + " is empty or air, skipping.");
 			}
+		};
+
+		// Iterate through player inventory slots and process items
+		for (int i = 0; i < 36; i++) { // Main inventory (0-35)
+			ItemStack item = inv.getItem(i);
+			processItem.accept(i,item);
 		}
-		if (inv.getChestplate() != null) {
-			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getChestplate())) {
-				// Slimefun will put items back to player inventory
-			} else if (keepItemsWithMatchingLore(inv.getChestplate(), text)) {
-				keepItems.put(-2, inv.getChestplate());
-			} else if (!hasCurseOfVanishing(inv.getChestplate())) {
-				itemsWithSlot.put(-2, inv.getChestplate());
-			}
-		}
-		if (inv.getLeggings() != null) {
-			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getLeggings())) {
-				// Slimefun will put items back to player inventory
-			} else if (keepItemsWithMatchingLore(inv.getLeggings(), text)) {
-				keepItems.put(-3, inv.getLeggings());
-			} else if (!hasCurseOfVanishing(inv.getLeggings())) {
-				itemsWithSlot.put(-3, inv.getLeggings());
-			}
-		}
-		if (inv.getBoots() != null) {
-			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getBoots())) {
-				// Slimefun will put items back to player inventory
-			} else if (keepItemsWithMatchingLore(inv.getBoots(), text)) {
-				keepItems.put(-4, inv.getBoots());
-			} else if (!hasCurseOfVanishing(inv.getBoots())) {
-				itemsWithSlot.put(-4, inv.getBoots());
-			}
-		}
-		if (inv.getItemInOffHand() != null) {
-			if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(inv.getItemInOffHand())) {
-				// Slimefun will put items back to player inventory
-			} else if (keepItemsWithMatchingLore(inv.getItemInOffHand(), text)) {
-				keepItems.put(-5, inv.getItemInOffHand());
-			} else if (!hasCurseOfVanishing(inv.getItemInOffHand())) {
-				itemsWithSlot.put(-5, inv.getItemInOffHand());
-			}
-		}
+		processItem.accept(-1,inv.getHelmet());      // Helmet
+		processItem.accept(-2,inv.getChestplate());  // Chestplate
+		processItem.accept(-3, inv.getLeggings());   // Leggings
+		processItem.accept(-4, inv.getBoots());      // Boots
+		processItem.accept(-5, inv.getItemInOffHand()); // Offhand
+
+
 		if (!keepItems.isEmpty()) {
 			deathItems.put(event.getEntity().getUniqueId(), keepItems);
 		}
+
 		final Location emptyBlockFinal = emptyBlock;
 
 		plugin.getBukkitScheduler().runTaskLater(plugin, new Runnable() {
-
 			@Override
 			public void run() {
-
 				Grave grave = new Grave(plugin,
 						new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlockFinal, itemsWithSlot,
 								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
@@ -221,7 +332,7 @@ public class PlayerDeathListener implements Listener {
 				placeholders.put("z", "" + emptyBlockFinal.getBlockZ());
 
 				String msg = MessageAPI.colorize(
-						PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
+						com.bencodez.advancedcore.api.messages.PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
 				if (!msg.isEmpty()) {
 					entity.sendMessage(msg);
 				}
@@ -278,7 +389,7 @@ public class PlayerDeathListener implements Listener {
 			}
 		}
 		// Check offhand slot
-		ItemStack offHandItem = inventory.getItemInOffHand();
+		ItemStack offHandItem = inventory.getItemInOffHand(); // Corrected method call from IgetItemInOffHand()
 		if (offHandItem != null && !offHandItem.getType().isAir()) {
 			return false;
 		}
@@ -294,91 +405,90 @@ public class PlayerDeathListener implements Listener {
 			PlayerInventory playerInventory = player.getInventory();
 
 			for (Integer i : items.keySet()) {
-				if (i >= 0) {
-					if (playerInventory.getItem(i) == null
-							|| playerInventory.getItem(i).getType().equals(Material.AIR)) {
-						playerInventory.setItem(i, items.get(i));
-					} else {
-						// if slot is taken
-						playerInventory.addItem(items.get(i));
-					}
-				} else {
-					switch (i) {
-					case -1:
-						if (isSlotAvailable(playerInventory.getHelmet())) {
-							playerInventory.setHelmet(items.get(i));
-						} else {
-							playerInventory.addItem(items.get(i));
-						}
-						break;
-					case -2:
-						if (isSlotAvailable(playerInventory.getChestplate())) {
-							playerInventory.setChestplate(items.get(i));
-						} else {
-							playerInventory.addItem(items.get(i));
-						}
-						break;
-					case -3:
-						if (isSlotAvailable(playerInventory.getLeggings())) {
-							playerInventory.setLeggings(items.get(i));
-						} else {
-							playerInventory.addItem(items.get(i));
-						}
-						break;
-					case -4:
-						if (isSlotAvailable(playerInventory.getBoots())) {
-							playerInventory.setBoots(items.get(i));
-						} else {
-							playerInventory.addItem(items.get(i));
-						}
-						break;
-					case -5:
-						if (isSlotAvailable(playerInventory.getItemInOffHand())) {
-							playerInventory.setItemInOffHand(items.get(i));
-						} else {
-							playerInventory.addItem(items.get(i));
-						}
-						break;
-					}
+				ItemStack itemToRestore = items.get(i);
+				if (itemToRestore == null || itemToRestore.getType().isAir()) {
+					continue; // Ensure item is not null or air
 				}
 
+				if (i >= 0) { // Regular inventory slot
+					if (playerInventory.getItem(i) == null
+							|| playerInventory.getItem(i).getType().equals(Material.AIR)) {
+						playerInventory.setItem(i, itemToRestore);
+					} else {
+						// If slot is occupied, try to add to the first available inventory spot
+						playerInventory.addItem(itemToRestore);
+					}
+				} else { // Armor slot or offhand
+					switch (i) {
+						case -1: // Helmet
+							if (isSlotAvailable(playerInventory.getHelmet())) {
+								playerInventory.setHelmet(itemToRestore);
+							} else {
+								playerInventory.addItem(itemToRestore);
+							}
+							break;
+						case -2: // Chestplate
+							if (isSlotAvailable(playerInventory.getChestplate())) {
+								playerInventory.setChestplate(itemToRestore);
+							} else {
+								playerInventory.addItem(itemToRestore);
+							}
+							break;
+						case -3: // Leggings
+							if (isSlotAvailable(playerInventory.getLeggings())) {
+								playerInventory.setLeggings(itemToRestore);
+							} else {
+								playerInventory.addItem(itemToRestore);
+							}
+							break;
+						case -4: // Boots
+							if (isSlotAvailable(playerInventory.getBoots())) {
+								playerInventory.setBoots(itemToRestore);
+							} else {
+								playerInventory.addItem(itemToRestore);
+							}
+							break;
+						case -5: // Offhand
+							if (isSlotAvailable(playerInventory.getItemInOffHand())) {
+								playerInventory.setItemInOffHand(itemToRestore);
+							} else {
+								playerInventory.addItem(itemToRestore);
+							}
+							break;
+					}
+				}
 			}
-
-			deathItems.remove(playerUUID);
+			deathItems.remove(playerUUID); // Remove record after returning items
 		}
 
 		if (plugin.getConfigFile().isGiveCompassOnRespawn()) {
 			final Player p = player;
 			plugin.getBukkitScheduler().runTaskLaterAsynchronously(plugin, new Runnable() {
-
 				@Override
 				public void run() {
-
 					Grave grave = plugin.getLatestGrave(p);
 					if (grave != null) {
 						grave.giveCompass(p);
 					}
-
 				}
 			}, 5);
 		}
-
 	}
 
 	public boolean isSlotAvailable(ItemStack slot) {
-		if (slot == null || slot.getType().isAir()) {
-			return true;
-		}
-		return false;
+		return slot == null || slot.getType().isAir();
 	}
 
 	public boolean keepItemsWithMatchingLore(ItemStack item, String text) {
-
-		if (!text.isEmpty()) {
-			if (item.hasItemMeta()) {
-				ItemMeta meta = item.getItemMeta();
-				if (meta.hasLore()) {
-					if (ArrayUtils.containsIgnoreCase(meta.getLore(), text)) {
+		if (item == null || item.getType().isAir() || text == null || text.isEmpty()) {
+			return false;
+		}
+		if (item.hasItemMeta()) {
+			ItemMeta meta = item.getItemMeta();
+			if (meta.hasLore()) {
+				// Iterate through each line of the item's Lore and compare with the provided text
+				for (String loreLine : meta.getLore()) {
+					if (loreLine.equalsIgnoreCase(text)) { // Use equalsIgnoreCase for case-insensitive comparison
 						return true;
 					}
 				}
@@ -388,7 +498,7 @@ public class PlayerDeathListener implements Listener {
 	}
 
 	public boolean hasCurseOfVanishing(ItemStack item) {
-		if (item.hasItemMeta()) {
+		if (item != null && item.hasItemMeta()) {
 			return item.getItemMeta().getEnchants().containsKey(Enchantment.VANISHING_CURSE);
 		}
 		return false;
@@ -424,14 +534,12 @@ public class PlayerDeathListener implements Listener {
 
 	public boolean isReplaceable(Material material) {
 		switch (material.toString()) {
-		case "TALL_GRASS":
-			return true;
-		case "GRASS":
-			return true;
-		case "SHORT_GRASS":
-			return true;
-		default:
-			return false;
+			case "TALL_GRASS":
+			case "GRASS":
+			case "SHORT_GRASS":
+				return true;
+			default:
+				return false;
 		}
 	}
 }

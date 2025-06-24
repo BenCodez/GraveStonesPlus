@@ -6,7 +6,7 @@ author: BenCodez
 api-version: 1.13
 libraries:
   - org.openjdk.nashorn:nashorn-core:15.3
-softdepend: [ProtocolLib, Vault, PvPManager, WorldGuard, WorldGuardExtraFlags, Slimefun]
+softdepend: [ProtocolLib, Vault, PvPManager, WorldGuard, WorldGuardExtraFlags, Slimefun, NBTAPI]
 folia-supported: true
 commands:
   gravestonesplus:

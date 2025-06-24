@@ -1,0 +1,94 @@
+# nbt_rules.yml
+
+# ----------------------------------------------------------------------------------
+# NBT Item Processing Rules
+#
+# These rules define how items with specific NBT tags are handled upon player death.
+# Rules are processed in the following priority order:
+#
+# 1. ignore_nbt_rules: Items matching these rules will be completely ignored
+#    by GraveStonesPlus. They will not be put into graves nor kept in inventory.
+#    This is useful for items handled by other plugins (e.g., MMOItems' automatic
+#    death-drop prevention) or items you simply want to vanish.
+#
+# 2. keep_nbt_rules: Items matching these rules will be kept in the player's
+#    inventory upon respawn. This takes precedence over items being placed in graves.
+#
+# 3. grave_nbt_rules: Items matching these rules will be specifically placed
+#    into the generated grave. This is useful for items you want to ensure are
+#    always in the grave, even if they might otherwise be subject to other default behaviors.
+#
+# If an item does not match any of the above NBT rules, the plugin will then check
+# for Lore-based keeping rules, Curse of Vanishing, and finally default to placing
+# the item in the grave if no other condition applies.
+#
+# Rule Structure:
+#   <rule_name>:
+#     path: "<NBT_path>"  # The NBT path to the tag (e.g., "tag.MMOITEMS_DISABLE_DEATH_DROP")
+#     type: "<NBT_type>"  # The expected NBT tag type (STRING, INTEGER, BOOLEAN, DOUBLE, BYTE, SHORT, LONG, FLOAT, EXISTS)
+#     value: <expected_value> # The value to match (for EXISTS type, this field is ignored but can be any placeholder)
+# ----------------------------------------------------------------------------------
+
+# Rules for items to be COMPLETELY IGNORED by GraveStonesPlus.
+# These items will not be placed in graves or returned to the player's inventory
+# by this plugin. Useful for items handled externally (e.g., by MMOItems).
+ignore_nbt_rules:
+  # Example: Ignore items with the MMOITEMS_DISABLE_DEATH_DROP byte tag set to 1
+  mmo_items_ignore:
+    path: "MMOITEMS_DISABLE_DEATH_DROP"
+    type: "BYTE"
+    value: 1
+
+  # Example: Ignore items from a custom plugin that have a specific boolean tag
+  custom_plugin_ignore_item:
+    path: "MyCustomPlugin.ShouldIgnore"
+    type: "BOOLEAN"
+    value: true
+
+  # Example: Ignore any item that simply has a "Soulbound" tag, regardless of its value
+  any_soulbound_item_ignore:
+    path: "Soulbound"
+    type: "EXISTS"
+    value: true # Value is ignored for EXISTS type
+
+# Rules for items to be KEPT in the player's inventory upon respawn.
+# These take precedence over items being put into graves.
+keep_nbt_rules:
+  # Example: Keep items tagged as a "Legendary" custom sword
+  legendary_sword_keep:
+    path: "test.CustomItem.Tier"
+    type: "STRING"
+    value: "Legendary"
+
+  # Example: Keep any item that has a "BindOnPickup" NBT tag, regardless of its value
+  bound_on_pickup_item_keep:
+    path: "test.BindOnPickup"
+    type: "EXISTS"
+    value: true
+
+  # Example: Keep quest items with a specific ID
+  quest_item_id_keep:
+    path: "test.QuestID"
+    type: "INTEGER"
+    value: 12345
+
+# Rules for items to be SPECIFICALLY PLACED into the grave.
+# These rules ensure an item goes into the grave, but have lower priority than 'ignore' and 'keep' rules.
+grave_nbt_rules:
+  # Example: Always put a "SpecialRelic" item into the grave
+  special_relic_to_grave:
+    path: "test.RelicType"
+    type: "STRING"
+    value: "Ancient"
+
+  # Example: Place items with a custom "GraveOnly" flag into the grave
+  force_grave_item:
+    path: "test.ForceGrave"
+    type: "BOOLEAN"
+    value: true
+
+  # Example: Place items with a specific level tag if it's above a certain value
+  high_level_gear_to_grave:
+    path: "test.Level"
+    type: "INTEGER"
+    value: 50 # Items with tag.Level = 50 will go to grave

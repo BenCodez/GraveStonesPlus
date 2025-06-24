@@ -37,6 +37,7 @@ import com.bencodez.simpleapi.updater.Updater;
 
 import lombok.Getter;
 import lombok.Setter;
+import com.bencodez.gravestonesplus.nbt.NBTConfigManager;
 
 public class GraveStonesPlus extends AdvancedCorePlugin {
 
@@ -93,6 +94,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	private GraveDisplayEntityHandle graveDisplayEntityHandler;
+
+	@Getter
+	public NBTConfigManager nbtConfigManager;
+
 
 	@Override
 	public void onPostLoad() {
@@ -314,6 +319,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		configFile = new Config(this);
 		configFile.reloadData();
 		gravesConfig = new GraveLocations(this);
+		nbtConfigManager = new NBTConfigManager(this);
+
+
 
 		updateAdvancedCoreHook();
 	}
@@ -334,6 +342,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	public void reload() {
 		configFile.reloadData();
 		gravesConfig.reloadData();
+		nbtConfigManager.reloadConfig();
 		updateAdvancedCoreHook();
 		reloadAdvancedCore(false);
 	}

@@ -96,8 +96,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private GraveDisplayEntityHandle graveDisplayEntityHandler;
 
 	@Getter
-	public NBTConfigManager nbtConfigManager;
+	private NBTConfigManager nbtConfigManager;
 
+	@Getter
+	private boolean nbtAPIHooked = false;
 
 	@Override
 	public void onPostLoad() {
@@ -320,8 +322,13 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		configFile.reloadData();
 		gravesConfig = new GraveLocations(this);
 		nbtConfigManager = new NBTConfigManager(this);
-
-
+		try {
+			Class.forName("de.tr7z.nbtapi.NBTCompound");
+		} catch (ClassNotFoundException e) {
+			plugin.getLogger().info("NBTAPI not found, some features may not work.");
+		} finally {
+			nbtAPIHooked = true;
+		}
 
 		updateAdvancedCoreHook();
 	}

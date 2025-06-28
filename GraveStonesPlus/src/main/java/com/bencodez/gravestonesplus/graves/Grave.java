@@ -653,86 +653,95 @@ public class Grave {
 		user.giveExp(getGravesConfig().getExp());
 
 		int chance = plugin.getConfigFile().getPercentageDrops();
-		boolean notInCorrectSlot = false;
-		removeCompass();
 
-		for (Entry<Integer, ItemStack> item :
+		plugin.getBukkitScheduler().runTaskAsynchronously(plugin, () -> {
+			removeCompass();
+			boolean notInCorrectSlot = false;
 
-		getGravesConfig().getItems().entrySet()) {
-			if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
-
-				if (item.getKey().intValue() >= 0) {
-					ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
-					if (isSlotAvailable(currentItem)) {
-						currentInv.setItem(item.getKey().intValue(), item.getValue());
+			for (Entry<Integer, ItemStack> item : getGravesConfig().getItems().entrySet()) {
+				if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
+					if (item.getKey().intValue() >= 0) {
+						ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
+						if (isSlotAvailable(currentItem)) {
+							// Schedule setting the item on the main thread
+							plugin.getBukkitScheduler().runTask(plugin, () -> {
+								currentInv.setItem(item.getKey().intValue(), item.getValue());
+							});
+						} else {
+							notInCorrectSlot = true;
+							user.giveItem(item.getValue());
+						}
 					} else {
-						notInCorrectSlot = true;
-						user.giveItem(item.getValue());
-					}
-				} else {
-					switch (item.getKey().intValue()) {
-					case -1:
-						if (isSlotAvailable(currentInv.getHelmet())) {
-							currentInv.setHelmet(item.getValue());
-						} else {
-							user.giveItem(item.getValue());
-							notInCorrectSlot = true;
+						switch (item.getKey().intValue()) {
+						case -1:
+							if (isSlotAvailable(currentInv.getHelmet())) {
+								plugin.getBukkitScheduler().runTask(plugin, () -> {
+									currentInv.setHelmet(item.getValue());
+								});
+							} else {
+								user.giveItem(item.getValue());
+								notInCorrectSlot = true;
+							}
+							break;
+						case -2:
+							if (isSlotAvailable(currentInv.getChestplate())) {
+								plugin.getBukkitScheduler().runTask(plugin, () -> {
+									currentInv.setChestplate(item.getValue());
+								});
+							} else {
+								user.giveItem(item.getValue());
+								notInCorrectSlot = true;
+							}
+							break;
+						case -3:
+							if (isSlotAvailable(currentInv.getLeggings())) {
+								plugin.getBukkitScheduler().runTask(plugin, () -> {
+									currentInv.setLeggings(item.getValue());
+								});
+							} else {
+								user.giveItem(item.getValue());
+								notInCorrectSlot = true;
+							}
+							break;
+						case -4:
+							if (isSlotAvailable(currentInv.getBoots())) {
+								plugin.getBukkitScheduler().runTask(plugin, () -> {
+									currentInv.setBoots(item.getValue());
+								});
+							} else {
+								user.giveItem(item.getValue());
+								notInCorrectSlot = true;
+							}
+							break;
+						case -5:
+							if (isSlotAvailable(currentInv.getItemInOffHand())) {
+								plugin.getBukkitScheduler().runTask(plugin, () -> {
+									currentInv.setItemInOffHand(item.getValue());
+								});
+							} else {
+								user.giveItem(item.getValue());
+								notInCorrectSlot = true;
+							}
+							break;
 						}
-						break;
-					case -2:
-						if (isSlotAvailable(currentInv.getChestplate())) {
-							currentInv.setChestplate(item.getValue());
-						} else {
-							user.giveItem(item.getValue());
-							notInCorrectSlot = true;
-						}
-						break;
-					case -3:
-						if (isSlotAvailable(currentInv.getLeggings())) {
-							currentInv.setLeggings(item.getValue());
-						} else {
-							user.giveItem(item.getValue());
-							notInCorrectSlot = true;
-						}
-						break;
-					case -4:
-						if (isSlotAvailable(currentInv.getBoots())) {
-							currentInv.setBoots(item.getValue());
-						} else {
-							user.giveItem(item.getValue());
-							notInCorrectSlot = true;
-						}
-						break;
-					case -5:
-						if (isSlotAvailable(currentInv.getItemInOffHand())) {
-							currentInv.setItemInOffHand(item.getValue());
-						} else {
-							user.giveItem(item.getValue());
-							notInCorrectSlot = true;
-						}
-						break;
 					}
 				}
 			}
-		}
-		user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
-		if (notInCorrectSlot) {
-			user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
-		}
-		removeGrave();
-		removeHologram();
-		if (Bukkit.isPrimaryThread()) {
-			removeHologramsAround();
-		} else {
-			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
-				@Override
-				public void run() {
-					removeHologramsAround();
-				}
-			}, gravesConfig.getLocation());
-		}
-		plugin.removeGrave(this);
+			user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
+			if (notInCorrectSlot) {
+				user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
+			}
+
+			plugin.getBukkitScheduler().runTask(plugin, () -> {
+				removeGrave();
+				removeHologram();
+				removeHologramsAround();
+			});
+
+			plugin.removeGrave(this);
+
+		});
 	}
 
 	public void checkBlockDisplay() {

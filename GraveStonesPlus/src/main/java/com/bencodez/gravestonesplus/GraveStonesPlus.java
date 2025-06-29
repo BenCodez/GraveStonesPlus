@@ -324,10 +324,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		nbtConfigManager = new NBTConfigManager(this);
 		try {
 			Class.forName("de.tr7z.nbtapi.NBTCompound");
+			nbtAPIHooked = true;
 		} catch (ClassNotFoundException e) {
 			plugin.getLogger().info("NBTAPI not found, some features may not work.");
-		} finally {
-			nbtAPIHooked = true;
+			nbtAPIHooked = false;
 		}
 
 		updateAdvancedCoreHook();

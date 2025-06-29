@@ -42,125 +42,190 @@ public class PlayerDeathListener implements Listener {
 
 	@EventHandler(priority = EventPriority.HIGHEST)
 	public void onPlayerDeath(PlayerDeathEvent event) {
-		Player player = event.getEntity();
-		Location deathLocation = player.getLocation();
-
-		// Synchronous checks with original log messages
+		final Location deathLocation = event.getEntity().getLocation();
 		if (plugin.getConfigFile().getDisabledWorlds().contains(deathLocation.getWorld().getName())) {
-			plugin.getLogger().info("Graves in " + deathLocation.getWorld().getName() + " are disabled");
+			plugin.debug("Graves in " + deathLocation.getWorld().getName() + " are disabled");
 			return;
 		}
-		if (player.hasMetadata("NPC")) {
+
+		if (event.getEntity().hasMetadata("NPC")) {
 			plugin.getLogger().info("Not creating grave for NPC");
 			return;
 		}
-		if (!player.hasPermission("GraveStonesPlus.AllowGrave")) {
-			plugin.getLogger().info("Not creating grave for " + player.getName() + ", no permission");
+
+		if (!event.getEntity().hasPermission("GraveStonesPlus.AllowGrave")) {
+			plugin.getLogger().info("Not creating grave for " + event.getEntity().getName() + ", no permission");
 			return;
 		}
+
 		if (event.getKeepInventory()) {
 			plugin.getLogger().info("Inventory was not dropped, not making grave");
 			return;
 		}
-		if (plugin.getPvpManager() != null && !plugin.getPvpManager().canHaveGrave(player)) {
-			plugin.getLogger().info("Can't create grave, player was in combat");
-			return;
-		}
-		if (isInventoryEmpty(player.getInventory()) && !plugin.getConfigFile().isCreateGraveForEmptyInventories()) {
-			plugin.getLogger().info("Not creating grave, player has an empty inventory");
-			return;
-		}
 
-		// Handle grave limit removal sync
-		if (plugin.numberOfGraves(player.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {
-			Grave oldest = plugin.getOldestGrave(player.getUniqueId());
-			if (oldest != null) {
-				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-					oldest.dropItemsOnGround(player);
-				}
-				oldest.removeGrave();
-				player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+		if (plugin.getPvpManager() != null) {
+			if (!plugin.getPvpManager().canHaveGrave(event.getEntity())) {
+				plugin.getLogger().info("Can't create grave, player was in combat");
+				return;
 			}
 		}
 
-		// Prepare data for async processing
+		if (isInventoryEmpty(event.getEntity().getInventory())) {
+			if (!plugin.getConfigFile().isCreateGraveForEmptyInventories()) {
+				plugin.getLogger().info("Not creating grave, player has an empty inventory");
+				return;
+			}
+		}
+
+		final Player entity = event.getEntity();
+		if (plugin.numberOfGraves(entity.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {
+			Grave oldest = plugin.getOldestGrave(entity.getUniqueId());
+			if (oldest != null) {
+				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
+					oldest.dropItemsOnGround(entity);
+				}
+				oldest.removeGrave();
+				entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+			}
+		}
+
+		Location emptyBlock = null;
+		if (deathLocation.getBlock().isEmpty() && deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()
+				&& deathLocation.getBlockY() < deathLocation.getWorld().getMaxHeight()) {
+			emptyBlock = deathLocation;
+		} else {
+			emptyBlock = getAirBlock(deathLocation);
+		}
+
+		if (emptyBlock == null) {
+			plugin.getLogger().info("Failed to find air block, can't make grave");
+			return;
+		}
+
+		PlayerInventory inv = event.getEntity().getInventory();
+
+		// Important improvement: Define the placeholder map here and use it inside
+		// processItem
+		// This ensures that placeholders are correctly replaced for Lore rules each
+		// time an item is processed
+		final HashMap<String, String> playerPlaceholders = new HashMap<>();
+		playerPlaceholders.put("player", entity.getName());
+		playerPlaceholders.put("displayname", entity.getDisplayName());
+		// Add any other player-related placeholders you might need here
+
 		final String deathMessage = event.getDeathMessage();
-		final int droppedExp = plugin.getConfigFile().isKeepAllExp() ? getTotalExperience(player)
-				: event.getDroppedExp();
-		event.setDroppedExp(0);
-		event.getDrops().clear();
+		if (plugin.getConfigFile().isKeepAllExp()) {
+			event.setDroppedExp(getTotalExperience(event.getEntity()));
+		}
+		final int droppedExp = event.getDroppedExp();
+		event.setDroppedExp(0); // Clear Bukkit's default dropped experience
+		event.getDrops().clear(); // Clear Bukkit's default dropped items
 
-		// Async processing
-		plugin.getBukkitScheduler().runTaskAsynchronously(plugin, () -> {
-			HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<>();
-			HashMap<Integer, ItemStack> keepItems = new HashMap<>();
+		// Store items that will go into the grave and items that will be kept
+		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>(); // Items to be placed in the
+																						// grave
+		HashMap<Integer, ItemStack> keepItems = new HashMap<Integer, ItemStack>(); // Items to be kept in the player's
+																					// inventory
 
-			// Placeholder setup
-			HashMap<String, String> placeholders = new HashMap<>();
-			placeholders.put("player", player.getName());
-			placeholders.put("displayname", player.getDisplayName());
+		BiConsumer<Integer, ItemStack> processItem = (idx, item) -> {
+			if (item != null && !item.getType().isAir()) { // Ensure item exists and is not air
+				// plugin.getLogger().info("Processing item: " + item.getType().name() + " at
+				// slot " + idx); // Debug log
 
-			BiConsumer<Integer, ItemStack> processItem = (idx, item) -> {
-				if (item == null || item.getType().isAir())
-					return;
+				// --- Priority 1: Ignore NBT Rules ---
 				if (plugin.getNbtConfigManager() != null
-						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getIgnoreNbtRules()))
-					return;
-				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item))
-					return;
-				String loreToMatch = com.bencodez.advancedcore.api.messages.PlaceholderUtils
-						.replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(), placeholders);
+						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getIgnoreNbtRules())) {
+					// plugin.getLogger().info(" Item " + item.getType().name() + " matched an
+					// 'ignore' NBT rule. Skipping further processing.");
+					return; // Return immediately, this item is not handled by GraveStonesPlus
+				}
+
+				// --- Priority 2: Slimefun Soulbound Items ---
+				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item)) {
+					// plugin.getLogger().info(" Item " + item.getType().name() + " is Slimefun
+					// Soulbound. Allowing Slimefun to handle.");
+					return; // Assume Slimefun will handle and keep these items itself, so we don't
+							// interfere
+				}
+
+				// --- Priority 3: Lore Matching Rules ---
+				// Here, playerPlaceholders will be used to replace placeholders in the
+				// keepItemsWithLore config
+				final String loreToMatch = com.bencodez.advancedcore.api.messages.PlaceholderUtils
+						.replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(), playerPlaceholders);
 				if (keepItemsWithMatchingLore(item, loreToMatch)) {
 					keepItems.put(idx, item);
+					// plugin.getLogger().info(" Item " + item.getType().name() + " kept due to
+					// matching lore: '" + loreToMatch + "'");
 					return;
 				}
+
+				// --- Priority 4: Keep NBT Rules ---
 				if (plugin.getNbtConfigManager() != null
 						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getKeepNbtRules())) {
 					keepItems.put(idx, item);
+					// plugin.getLogger().info(" Item " + item.getType().name() + " kept due to
+					// matching NBT 'keep' rule.");
 					return;
 				}
+
+				// --- Priority 5: Grave NBT Rules ---
 				if (plugin.getNbtConfigManager() != null
 						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getGraveNbtRules())) {
 					itemsWithSlot.put(idx, item);
+					// plugin.getLogger().info(" Item " + item.getType().name() + " put in grave due
+					// to matching NBT 'grave' rule.");
 					return;
 				}
-				if (hasCurseOfVanishing(item))
-					return;
+
+				// --- Priority 6: Curse of Vanishing ---
+				if (hasCurseOfVanishing(item)) {
+					// plugin.getLogger().info(" Item " + item.getType().name() + " has Curse of
+					// Vanishing and not kept by any rule, will be removed.");
+					return; // The item will not be added to any list, thus being removed
+				}
+
+				// --- Priority 7: Default behavior (if none of the above rules match) ---
 				itemsWithSlot.put(idx, item);
-			};
+				// plugin.getLogger().info(" Item " + item.getType().name() + " (default) put in
+				// grave.");
 
-			// Process inventory
-			PlayerInventory inv = player.getInventory();
-			for (int i = 0; i < 36; i++)
-				processItem.accept(i, inv.getItem(i));
-			processItem.accept(-1, inv.getHelmet());
-			processItem.accept(-2, inv.getChestplate());
-			processItem.accept(-3, inv.getLeggings());
-			processItem.accept(-4, inv.getBoots());
-			processItem.accept(-5, inv.getItemInOffHand());
-
-			if (!keepItems.isEmpty())
-				deathItems.put(player.getUniqueId(), keepItems);
-
-			// Find air block sync
-			Location airBlock = getAirBlock(deathLocation);
-			if (airBlock == null) {
-				plugin.getLogger().info("Failed to find air block, can't make grave");
-				return;
+			} else {
+				// plugin.getLogger().info(" Slot " + idx + " is empty or air, skipping.");
 			}
+		};
 
-			// Schedule sync task for grave creation
-			plugin.getBukkitScheduler().runTask(plugin, () -> {
-				Grave grave = new Grave(plugin, new GravesConfig(player.getUniqueId(), player.getName(), airBlock,
-						itemsWithSlot, droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
+		// Iterate through player inventory slots and process items
+		for (int i = 0; i < 36; i++) { // Main inventory (0-35)
+			ItemStack item = inv.getItem(i);
+			processItem.accept(i, item);
+		}
+		processItem.accept(-1, inv.getHelmet()); // Helmet
+		processItem.accept(-2, inv.getChestplate()); // Chestplate
+		processItem.accept(-3, inv.getLeggings()); // Leggings
+		processItem.accept(-4, inv.getBoots()); // Boots
+		processItem.accept(-5, inv.getItemInOffHand()); // Offhand
+
+		if (!keepItems.isEmpty()) {
+			deathItems.put(event.getEntity().getUniqueId(), keepItems);
+		}
+
+		final Location emptyBlockFinal = emptyBlock;
+
+		plugin.getBukkitScheduler().runTaskLater(plugin, new Runnable() {
+			@Override
+			public void run() {
+				Grave grave = new Grave(plugin,
+						new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlockFinal, itemsWithSlot,
+								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
 				grave.loadChunk(false);
 
 				if (!plugin.isUsingDisplayEntities()) {
-					Block block = airBlock.getBlock();
+					Block block = emptyBlockFinal.getBlock();
 					block.setType(Material.PLAYER_HEAD);
 					if (block.getState() instanceof Skull) {
 						Skull skull = (Skull) block.getState();
-						skull.setOwningPlayer(player);
+						skull.setOwningPlayer(event.getEntity());
 						skull.update();
 					}
 				}
@@ -168,22 +233,26 @@ public class PlayerDeathListener implements Listener {
 				grave.createHologram();
 				grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
 				plugin.addGrave(grave);
-				grave.loadBlockMeta(airBlock.getBlock());
+				grave.loadBlockMeta(emptyBlockFinal.getBlock());
 				if (plugin.isUsingDisplayEntities()) {
 					grave.createSkull();
 				}
 
-				HashMap<String, String> msgPlaceholders = new HashMap<>();
-				msgPlaceholders.put("x", String.valueOf(airBlock.getBlockX()));
-				msgPlaceholders.put("y", String.valueOf(airBlock.getBlockY()));
-				msgPlaceholders.put("z", String.valueOf(airBlock.getBlockZ()));
+				HashMap<String, String> placeholders = new HashMap<String, String>();
+				placeholders.put("x", "" + emptyBlockFinal.getBlockX());
+				placeholders.put("y", "" + emptyBlockFinal.getBlockY());
+				placeholders.put("z", "" + emptyBlockFinal.getBlockZ());
+
 				String msg = MessageAPI.colorize(com.bencodez.advancedcore.api.messages.PlaceholderUtils
-						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), msgPlaceholders));
-				if (!msg.isEmpty())
-					player.sendMessage(msg);
-				plugin.getLogger().info("Grave at: " + airBlock);
-			});
-		});
+						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
+				if (!msg.isEmpty()) {
+					entity.sendMessage(msg);
+				}
+
+				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
+			}
+		}, 2, emptyBlockFinal);
+
 	}
 
 	private boolean doesItemMatchAnyRule(ItemStack item, List<NBTRule> keepNbtRules) {

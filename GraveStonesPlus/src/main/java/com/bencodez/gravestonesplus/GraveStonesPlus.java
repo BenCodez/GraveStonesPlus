@@ -280,6 +280,20 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 		});
 
+		plugin.getBukkitScheduler().runTaskAsynchronously(this, new Runnable() {
+
+			@Override
+			public void run() {
+				try {
+					Class.forName("de.tr7z.nbtapi.NBTCompound");
+					nbtAPIHooked = true;
+				} catch (ClassNotFoundException e) {
+					plugin.getLogger().info("NBTAPI not found, some features may not work.");
+					nbtAPIHooked = false;
+				}
+			}
+		});
+
 		plugin.getLogger().info("Enabled GraveStonesPlus!");
 
 	}
@@ -322,13 +336,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		configFile.reloadData();
 		gravesConfig = new GraveLocations(this);
 		nbtConfigManager = new NBTConfigManager(this);
-		try {
-			Class.forName("de.tr7z.nbtapi.NBTCompound");
-			nbtAPIHooked = true;
-		} catch (ClassNotFoundException e) {
-			plugin.getLogger().info("NBTAPI not found, some features may not work.");
-			nbtAPIHooked = false;
-		}
 
 		updateAdvancedCoreHook();
 	}

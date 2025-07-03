@@ -240,6 +240,13 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (Bukkit.getPluginManager().isPluginEnabled("Slimefun")) {
 			slimefun = new SlimefunHandle(this);
 		}
+		
+		if (Bukkit.getPluginManager().isPluginEnabled("NBTAPI")) {
+		    nbtAPIHooked = true;
+		} else {
+		    plugin.getLogger().info("NBTAPI not found, some features may not work.");
+		    nbtAPIHooked = false;
+		}
 
 		plugin.getBukkitScheduler().runTaskAsynchronously(plugin, new Runnable() {
 
@@ -278,20 +285,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 				}
 			}
 
-		});
-
-		plugin.getBukkitScheduler().runTaskAsynchronously(this, new Runnable() {
-
-			@Override
-			public void run() {
-				try {
-					Class.forName("de.tr7z.nbtapi.NBTCompound");
-					nbtAPIHooked = true;
-				} catch (ClassNotFoundException e) {
-					plugin.getLogger().info("NBTAPI not found, some features may not work.");
-					nbtAPIHooked = false;
-				}
-			}
 		});
 
 		plugin.getLogger().info("Enabled GraveStonesPlus!");

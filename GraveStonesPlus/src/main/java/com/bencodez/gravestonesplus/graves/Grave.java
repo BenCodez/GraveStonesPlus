@@ -320,6 +320,7 @@ public class Grave {
 					itemDisplay.remove();
 					itemDisplay = null;
 				}
+				gravesConfig.getLocation().getBlock().removeMetadata("Grave", plugin);
 				gravesConfig.getLocation().getBlock().setType(Material.AIR);
 			}
 		}, gravesConfig.getLocation());

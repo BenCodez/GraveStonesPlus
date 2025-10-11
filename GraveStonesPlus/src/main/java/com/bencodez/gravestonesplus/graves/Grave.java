@@ -3,6 +3,7 @@ package com.bencodez.gravestonesplus.graves;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Timer;
 import java.util.TimerTask;
@@ -649,99 +650,127 @@ public class Grave {
 		}, p.getLocation());
 	}
 
-	public void claim(Player player, PlayerInventory currentInv) {
+	public void claim(Player player) {
 		AdvancedCoreUser user = plugin.getUserManager().getUser(player);
 		user.giveExp(getGravesConfig().getExp());
 
-		int chance = plugin.getConfigFile().getPercentageDrops();
+		final int chance = plugin.getConfigFile().getPercentageDrops();
 
+		// 1) Build the to-give list off-thread (NO inventory access here)
 		plugin.getBukkitScheduler().runTaskAsynchronously(plugin, () -> {
 			removeCompass();
-			boolean notInCorrectSlot = false;
 
-			for (Entry<Integer, ItemStack> item : getGravesConfig().getItems().entrySet()) {
+			// Clone items we intend to give (and apply chance)
+			java.util.List<Map.Entry<Integer, ItemStack>> toProcess = new java.util.ArrayList<>();
+			for (Map.Entry<Integer, ItemStack> e : getGravesConfig().getItems().entrySet()) {
 				if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
-					if (item.getKey().intValue() >= 0) {
-						ItemStack currentItem = currentInv.getItem(item.getKey().intValue());
-						if (isSlotAvailable(currentItem)) {
-							// Schedule setting the item on the main thread
-							plugin.getBukkitScheduler().runTask(plugin, () -> {
-								currentInv.setItem(item.getKey().intValue(), item.getValue());
-							});
-						} else {
-							notInCorrectSlot = true;
-							user.giveItem(item.getValue());
-						}
-					} else {
-						switch (item.getKey().intValue()) {
-						case -1:
-							if (isSlotAvailable(currentInv.getHelmet())) {
-								plugin.getBukkitScheduler().runTask(plugin, () -> {
-									currentInv.setHelmet(item.getValue());
-								});
-							} else {
-								user.giveItem(item.getValue());
-								notInCorrectSlot = true;
-							}
-							break;
-						case -2:
-							if (isSlotAvailable(currentInv.getChestplate())) {
-								plugin.getBukkitScheduler().runTask(plugin, () -> {
-									currentInv.setChestplate(item.getValue());
-								});
-							} else {
-								user.giveItem(item.getValue());
-								notInCorrectSlot = true;
-							}
-							break;
-						case -3:
-							if (isSlotAvailable(currentInv.getLeggings())) {
-								plugin.getBukkitScheduler().runTask(plugin, () -> {
-									currentInv.setLeggings(item.getValue());
-								});
-							} else {
-								user.giveItem(item.getValue());
-								notInCorrectSlot = true;
-							}
-							break;
-						case -4:
-							if (isSlotAvailable(currentInv.getBoots())) {
-								plugin.getBukkitScheduler().runTask(plugin, () -> {
-									currentInv.setBoots(item.getValue());
-								});
-							} else {
-								user.giveItem(item.getValue());
-								notInCorrectSlot = true;
-							}
-							break;
-						case -5:
-							if (isSlotAvailable(currentInv.getItemInOffHand())) {
-								plugin.getBukkitScheduler().runTask(plugin, () -> {
-									currentInv.setItemInOffHand(item.getValue());
-								});
-							} else {
-								user.giveItem(item.getValue());
-								notInCorrectSlot = true;
-							}
-							break;
-						}
-					}
+					// clone the stack to avoid shared mutation
+					ItemStack cloned = e.getValue() == null ? null : e.getValue().clone();
+					toProcess.add(new java.util.AbstractMap.SimpleEntry<>(e.getKey(), cloned));
 				}
 			}
 
-			user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
-			if (notInCorrectSlot) {
-				user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
-			}
-
+			// 2) Do ALL inventory operations on main thread in one task
 			plugin.getBukkitScheduler().runTask(plugin, () -> {
+				PlayerInventory inv = player.getInventory();
+				java.util.List<ItemStack> leftovers = new java.util.ArrayList<>();
+				boolean notInCorrectSlot = false;
+
+				for (Map.Entry<Integer, ItemStack> e : toProcess) {
+					Integer key = e.getKey();
+					ItemStack stack = e.getValue();
+					if (stack == null || stack.getType().isAir())
+						continue;
+
+					if (key >= 0) {
+						// preferred regular slot
+						ItemStack cur = inv.getItem(key);
+						if (isSlotAvailable(cur)) {
+							inv.setItem(key, stack);
+						} else {
+							notInCorrectSlot = true;
+							leftovers.add(stack);
+						}
+					} else {
+						// special slots
+						switch (key) {
+						case -1: { // helmet
+							ItemStack cur = inv.getHelmet();
+							if (isSlotAvailable(cur))
+								inv.setHelmet(stack);
+							else {
+								leftovers.add(stack);
+								notInCorrectSlot = true;
+							}
+							break;
+						}
+						case -2: { // chest
+							ItemStack cur = inv.getChestplate();
+							if (isSlotAvailable(cur))
+								inv.setChestplate(stack);
+							else {
+								leftovers.add(stack);
+								notInCorrectSlot = true;
+							}
+							break;
+						}
+						case -3: { // legs
+							ItemStack cur = inv.getLeggings();
+							if (isSlotAvailable(cur))
+								inv.setLeggings(stack);
+							else {
+								leftovers.add(stack);
+								notInCorrectSlot = true;
+							}
+							break;
+						}
+						case -4: { // boots
+							ItemStack cur = inv.getBoots();
+							if (isSlotAvailable(cur))
+								inv.setBoots(stack);
+							else {
+								leftovers.add(stack);
+								notInCorrectSlot = true;
+							}
+							break;
+						}
+						case -5: { // offhand
+							ItemStack cur = inv.getItemInOffHand();
+							if (isSlotAvailable(cur))
+								inv.setItemInOffHand(stack);
+							else {
+								leftovers.add(stack);
+								notInCorrectSlot = true;
+							}
+							break;
+						}
+						default: {
+							// unknown sentinel -> treat as leftover
+							leftovers.add(stack);
+							notInCorrectSlot = true;
+						}
+						}
+					}
+				}
+
+				// 3) Give leftovers via your *synchronous* safe giver (the deterministic one)
+				// IMPORTANT: call the version that ensures main-thread or assumes we’re on it.
+				if (!leftovers.isEmpty()) {
+					user.giveItems(leftovers.toArray(new ItemStack[0]));
+				}
+
+				// 4) Messages (on main thread)
+				user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
+				if (notInCorrectSlot) {
+					user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
+				}
+
+				// 5) Cleanup on main
 				removeGrave();
 				removeHologram();
 				removeHologramsAround();
+				plugin.removeGrave(this);
 			});
-
-			plugin.removeGrave(this);
-
 		});
 	}
 

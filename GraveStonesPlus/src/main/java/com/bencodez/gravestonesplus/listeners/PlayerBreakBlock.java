@@ -106,7 +106,7 @@ public class PlayerBreakBlock implements Listener {
 
 				if (grave.isOwner(event.getPlayer())) {
 					event.setDropItems(false);
-					grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+					grave.claim(event.getPlayer());
 					return;
 				}
 				
@@ -117,7 +117,7 @@ public class PlayerBreakBlock implements Listener {
 				if (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")) {
 					if (plugin.getConfigFile().isBreakOtherGravesWithPermission()) {
 						event.setDropItems(false);
-						grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+						grave.claim(event.getPlayer());
 						return;
 					} else {
 						plugin.debug("Config option disabled to break other graves");

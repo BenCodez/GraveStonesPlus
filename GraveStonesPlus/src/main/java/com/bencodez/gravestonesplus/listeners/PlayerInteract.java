@@ -68,13 +68,13 @@ public class PlayerInteract implements Listener {
 				}
 
 				if (grave.isOwner(event.getPlayer())) {
-					grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+					grave.claim(event.getPlayer());
 					return;
 				}
 
 				if (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")) {
 					if (plugin.getConfigFile().isBreakOtherGravesWithPermission()) {
-						grave.claim(event.getPlayer(), event.getPlayer().getInventory());
+						grave.claim(event.getPlayer());
 						return;
 					} else {
 						plugin.debug("Config option disabled to break other graves");

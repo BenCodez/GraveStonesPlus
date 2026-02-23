@@ -8,7 +8,7 @@ import java.util.Set;
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
-import com.bencodez.gravestonesplus.graves.GravesConfig;
+import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.file.YMLFile;
 
 public class GraveLocations extends YMLFile {

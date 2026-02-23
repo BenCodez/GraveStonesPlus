@@ -34,6 +34,7 @@ import com.bencodez.advancedcore.api.messages.PlaceholderUtils;
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.advancedcore.api.user.AdvancedCoreUser;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.messages.MessageAPI;
 
 import lombok.Getter;

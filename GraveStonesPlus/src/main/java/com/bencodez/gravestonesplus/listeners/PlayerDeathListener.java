@@ -22,8 +22,8 @@ import org.bukkit.inventory.meta.ItemMeta;
 
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
-import com.bencodez.gravestonesplus.graves.GravesConfig;
 import com.bencodez.gravestonesplus.nbt.NBTRule;
+import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.messages.MessageAPI;
 
 public class PlayerDeathListener implements Listener {

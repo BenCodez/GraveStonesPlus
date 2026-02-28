@@ -2,9 +2,7 @@ package com.bencodez.gravestonesplus;
 
 import java.util.ArrayList;
 import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
-import java.util.Set;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
@@ -22,14 +20,16 @@ import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
 import com.bencodez.gravestonesplus.config.Config;
-import com.bencodez.gravestonesplus.config.GraveLocations;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GraveDisplayEntityHandle;
 import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.listeners.PlayerInteract;
+import com.bencodez.gravestonesplus.nbt.NBTConfigManager;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
 import com.bencodez.gravestonesplus.pluginhandles.SlimefunHandle;
+import com.bencodez.gravestonesplus.storage.GraveLocations;
+import com.bencodez.gravestonesplus.storage.GraveStorageManager;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.file.YMLConfig;
 import com.bencodez.simpleapi.metrics.BStatsMetrics;
@@ -37,7 +37,6 @@ import com.bencodez.simpleapi.updater.Updater;
 
 import lombok.Getter;
 import lombok.Setter;
-import com.bencodez.gravestonesplus.nbt.NBTConfigManager;
 
 public class GraveStonesPlus extends AdvancedCorePlugin {
 
@@ -58,28 +57,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private List<Grave> graves;
 
 	@Getter
-	private Set<Grave> brokenGraves;
+	private List<Grave> brokenGraves;
 
-	public void addGrave(Grave grave) {
-		graves.add(grave);
-		gravesConfig.setGraves(graves);
-	}
-
-	public void removeGrave(Grave grave) {
-		graves.remove(grave);
-		brokenGraves.add(grave);
-		gravesConfig.setGraves(graves);
-		gravesConfig.setBrokenGraves(brokenGraves);
-
-	}
-
-	public void recreateBrokenGrave(Grave grave) {
-		grave.getGravesConfig().setDestroyed(false);
-		graves.add(grave);
-		brokenGraves.remove(grave);
-		gravesConfig.setGraves(graves);
-		gravesConfig.setBrokenGraves(brokenGraves);
-	}
+	@Getter
+	private GraveStorageManager storageManager;
 
 	@Getter
 	public static GraveStonesPlus plugin;
@@ -101,17 +82,112 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Getter
 	private boolean nbtAPIHooked = false;
 
+	public void addGrave(Grave grave) {
+		if (grave == null || grave.getGravesConfig() == null) {
+			return;
+		}
+		graves.add(grave);
+
+		if (storageManager.isMySQL()) {
+			storageManager.upsertGrave(grave.getGravesConfig(), false);
+		} else {
+			storageManager.saveGravesFromObjects(graves);
+		}
+	}
+
+	public void removeGrave(Grave grave) {
+		if (grave == null || grave.getGravesConfig() == null) {
+			return;
+		}
+
+		// Remove from active list by key (not object identity)
+		removeFromListByKey(graves, grave);
+
+		// Add to broken list only once
+		if (!containsByKey(brokenGraves, grave)) {
+			brokenGraves.add(grave);
+		}
+
+		if (storageManager.isMySQL()) {
+			storageManager.updateExistingGrave(grave.getGravesConfig(), true);
+		} else {
+			storageManager.saveBrokenGravesFromObjects(brokenGraves);
+			storageManager.saveGravesFromObjects(graves);
+		}
+	}
+
+	public void recreateBrokenGrave(Grave grave) {
+		if (grave == null || grave.getGravesConfig() == null) {
+			return;
+		}
+
+		grave.getGravesConfig().setDestroyed(false);
+
+		if (!containsByKey(graves, grave)) {
+			graves.add(grave);
+		}
+		removeFromListByKey(brokenGraves, grave);
+
+		if (storageManager.isMySQL()) {
+			storageManager.setBroken(grave.getGravesConfig(), false);
+		} else {
+			storageManager.saveBrokenGravesFromObjects(brokenGraves);
+			storageManager.saveGravesFromObjects(graves);
+		}
+	}
+
+	private boolean containsByKey(List<Grave> list, Grave grave) {
+		if (list == null || grave == null || grave.getGravesConfig() == null
+				|| grave.getGravesConfig().getLocation() == null
+				|| grave.getGravesConfig().getLocation().getWorld() == null) {
+			return false;
+		}
+		String key = buildGraveKey(grave);
+		for (Grave g : list) {
+			if (g != null && g.getGravesConfig() != null && key.equals(buildGraveKey(g))) {
+				return true;
+			}
+		}
+		return false;
+	}
+
+	private void removeFromListByKey(List<Grave> list, Grave grave) {
+		if (list == null || grave == null || grave.getGravesConfig() == null
+				|| grave.getGravesConfig().getLocation() == null
+				|| grave.getGravesConfig().getLocation().getWorld() == null) {
+			return;
+		}
+		String key = buildGraveKey(grave);
+		for (int i = list.size() - 1; i >= 0; i--) {
+			Grave g = list.get(i);
+			if (g != null && g.getGravesConfig() != null && key.equals(buildGraveKey(g))) {
+				list.remove(i);
+			}
+		}
+	}
+
+	private String buildGraveKey(Grave grave) {
+		GravesConfig cfg = grave.getGravesConfig();
+		return cfg.getUuid().toString() + "|" + cfg.getLocation().getWorld().getUID().toString() + "|"
+				+ cfg.getLocation().getBlockX() + "," + cfg.getLocation().getBlockY() + ","
+				+ cfg.getLocation().getBlockZ() + "|" + cfg.getTime();
+	}
+
 	@Override
 	public void onPostLoad() {
 		graveDisplayEntityHandler = new GraveDisplayEntityHandle(this);
+
 		graves = Collections.synchronizedList(new ArrayList<Grave>());
-		brokenGraves = Collections.synchronizedSet(new HashSet<Grave>());
+		brokenGraves = Collections.synchronizedList(new ArrayList<Grave>());
 
+		storageManager = new GraveStorageManager(this);
+		storageManager.init();
+
+		// Load broken graves
 		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
 			@Override
 			public void run() {
-				List<GravesConfig> gravesbroken1 = gravesConfig.loadBrokenGraves();
+				List<GravesConfig> gravesbroken1 = storageManager.loadBrokenGraves();
 				if (gravesbroken1 != null) {
 					for (GravesConfig gr : gravesbroken1) {
 						Grave grave = new Grave(plugin, gr);
@@ -139,18 +215,16 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 							}
 						}
 					}
-
-					// remove graves from file
 					gravesConfig.setBrokenGraves(brokenGraves);
 				}
 			}
 		});
 
+		// Load active graves
 		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
 			@Override
 			public void run() {
-				List<GravesConfig> graves1 = gravesConfig.loadGraves();
+				List<GravesConfig> graves1 = storageManager.loadGraves();
 				if (graves1 != null) {
 					for (GravesConfig gr : graves1) {
 						Grave grave = new Grave(plugin, gr);
@@ -161,16 +235,26 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 						}
 						grave.removeHologramsAround();
 						grave.loadBlockMeta(gr.getLocation().getBlock());
-						grave.checkBlockDisplay();
+
+						// Display-entities: ensure display entity is present if block is barrier
+						grave.checkBlockDisplayAndFixIfMissing();
+
 						if (grave.isValid()) {
 							grave.createHologram();
 							grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
 							graves.add(grave);
 							debug("Grave loaded: " + grave.getGravesConfig().getLocation());
+
 						} else {
+							// Only remove if it truly isn't a grave anymore
 							grave.removeGrave();
 							debug("Grave at " + grave.getGravesConfig().getLocation() + " is not valid");
 						}
+					}
+
+					// For flatfile, save once after load to persist any displayUUID fixes
+					if (!storageManager.isMySQL()) {
+						storageManager.saveGravesFromObjects(graves);
 					}
 				}
 			}
@@ -184,8 +268,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		Bukkit.getPluginManager().registerEvents(new PlayerBreakBlock(this), this);
 		if (plugin.getConfigFile().isUseDisplayEntities()) {
 			usingDisplayEntities = true;
-			// Bukkit.getPluginManager().registerEvents(new PlayerInteractEntity(this),
-			// this);
 			plugin.debug("Using display entities");
 		}
 
@@ -194,7 +276,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 		if (getConfigFile().isGlowingEffectNearGrave()) {
 			new Timer().schedule(new TimerTask() {
-
 				@Override
 				public void run() {
 					if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
@@ -205,14 +286,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 									grave.checkGlowing();
 								} else {
 									Bukkit.getScheduler().runTask(plugin, new Runnable() {
-
 										@Override
 										public void run() {
 											grave.removeGrave();
 											grave.removeHologramsAround();
 										}
 									});
-
 								}
 							}
 						}
@@ -240,16 +319,15 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (Bukkit.getPluginManager().isPluginEnabled("Slimefun")) {
 			slimefun = new SlimefunHandle(this);
 		}
-		
+
 		if (Bukkit.getPluginManager().isPluginEnabled("NBTAPI")) {
-		    nbtAPIHooked = true;
+			nbtAPIHooked = true;
 		} else {
-		    plugin.getLogger().info("NBTAPI not found, some features may not work.");
-		    nbtAPIHooked = false;
+			plugin.getLogger().info("NBTAPI not found, some features may not work.");
+			nbtAPIHooked = false;
 		}
 
 		plugin.getBukkitScheduler().runTaskAsynchronously(plugin, new Runnable() {
-
 			@Override
 			public void run() {
 				new BStatsMetrics(plugin, 11838);
@@ -257,38 +335,13 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		});
 
 		plugin.getBukkitScheduler().runTaskAsynchronously(this, new Runnable() {
-
 			@Override
 			public void run() {
 				setUpdater(new Updater(plugin, 95132, false));
-				Updater.UpdateResult result = plugin.getUpdater().getResult();
-				switch (result) {
-				case FAIL_SPIGOT: {
-					plugin.getLogger().info("Failed to check for update for " + plugin.getName() + "!");
-					break;
-				}
-				case NO_UPDATE: {
-					plugin.getLogger()
-							.info(plugin.getName() + " is up to date! Version: " + plugin.getUpdater().getVersion());
-					break;
-				}
-				case UPDATE_AVAILABLE: {
-					plugin.getLogger()
-							.info(plugin.getName() + " has an update available! Your Version: "
-									+ plugin.getDescription().getVersion() + " New Version: "
-									+ plugin.getUpdater().getVersion());
-					break;
-				}
-				default: {
-					break;
-				}
-				}
 			}
-
 		});
 
 		plugin.getLogger().info("Enabled GraveStonesPlus!");
-
 	}
 
 	@Getter
@@ -296,6 +349,73 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	private SlimefunHandle slimefun;
+
+	@Override
+	public void onPreLoad() {
+		plugin = this;
+		configFile = new Config(this);
+		configFile.reloadData();
+		gravesConfig = new GraveLocations(this);
+		nbtConfigManager = new NBTConfigManager(this);
+		updateAdvancedCoreHook();
+	}
+
+	@Override
+	public void onUnLoad() {
+		// For flatfile, persist lists once at shutdown.
+		if (storageManager != null && !storageManager.isMySQL()) {
+			storageManager.saveBrokenGravesFromObjects(brokenGraves);
+			storageManager.saveGravesFromObjects(graves);
+		}
+
+		if (storageManager != null) {
+			storageManager.close();
+		}
+
+		for (Grave grave : graves) {
+			grave.removeHologram();
+			grave.removeTimer();
+		}
+
+		plugin = null;
+	}
+
+	@Override
+	public void reload() {
+		configFile.reloadData();
+		gravesConfig.reloadData();
+		nbtConfigManager.reloadConfig();
+		updateAdvancedCoreHook();
+		reloadAdvancedCore(false);
+	}
+
+	private void updateAdvancedCoreHook() {
+		getJavascriptEngine().put("GraveStonesPlus", this);
+		setConfigData(new YMLConfig(plugin, configFile.getData()) {
+			@Override
+			public void setValue(String path, Object value) {
+				configFile.setValue(path, value);
+			}
+
+			@Override
+			public void saveData() {
+				configFile.saveData();
+			}
+
+			@Override
+			public void createSection(String key) {
+				configFile.createSection(key);
+			}
+		});
+		setLoadUserData(false);
+		setLoadVault(false);
+	}
+
+	@Getter
+	private Config configFile;
+
+	@Getter
+	private GraveLocations gravesConfig;
 
 	public int numberOfGraves(UUID uuid) {
 		int num = 0;
@@ -321,67 +441,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
 		return oldest;
 	}
-
-	@Override
-	public void onPreLoad() {
-		plugin = this;
-		configFile = new Config(this);
-		configFile.reloadData();
-		gravesConfig = new GraveLocations(this);
-		nbtConfigManager = new NBTConfigManager(this);
-
-		updateAdvancedCoreHook();
-	}
-
-	@Override
-	public void onUnLoad() {
-		gravesConfig.setGraves(graves);
-		gravesConfig.setBrokenGraves(brokenGraves);
-		for (Grave grave : graves) {
-			grave.removeHologram();
-			grave.removeTimer();
-		}
-
-		plugin = null;
-	}
-
-	@Override
-	public void reload() {
-		configFile.reloadData();
-		gravesConfig.reloadData();
-		nbtConfigManager.reloadConfig();
-		updateAdvancedCoreHook();
-		reloadAdvancedCore(false);
-	}
-
-	private void updateAdvancedCoreHook() {
-		getJavascriptEngine().put("GraveStonesPlus", this);
-		setConfigData(new YMLConfig(plugin, configFile.getData()) {
-
-			@Override
-			public void setValue(String path, Object value) {
-				configFile.setValue(path, value);
-			}
-
-			@Override
-			public void saveData() {
-				configFile.saveData();
-			}
-
-			@Override
-			public void createSection(String key) {
-				configFile.createSection(key);
-			}
-		});
-		setLoadUserData(false);
-		setLoadVault(false);
-	}
-
-	@Getter
-	private Config configFile;
-
-	@Getter
-	private GraveLocations gravesConfig;
 
 	public List<Grave> getGraves(Player player) {
 		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
@@ -425,5 +484,4 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
 		return cGrave;
 	}
-
 }

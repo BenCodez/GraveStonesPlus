@@ -170,7 +170,7 @@ public class CommandLoader {
 
 			@Override
 			public void execute(CommandSender sender, String[] args) {
-				Set<Grave> graves = plugin.getBrokenGraves();
+				List<Grave> graves = plugin.getBrokenGraves();
 				BInventory inv = new BInventory("All Broken Graves");
 				for (Grave gr : graves) {
 					inv.addButton(gr.getGUIItemBroken());
@@ -185,7 +185,7 @@ public class CommandLoader {
 
 			@Override
 			public void execute(CommandSender sender, String[] args) {
-				Set<Grave> graves = plugin.getBrokenGraves();
+				List<Grave> graves = plugin.getBrokenGraves();
 				BInventory inv = new BInventory("All Broken Graves: " + args[1]);
 				for (Grave gr : graves) {
 					if (gr.isOwner(args[1])) {

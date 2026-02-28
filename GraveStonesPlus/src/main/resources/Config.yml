@@ -1,3 +1,31 @@
+# Options:
+# - FLATFILE
+# - MYSQL
+DataStorage: FLATFILE
+
+# Used when DataStorage is MYSQL
+Database:
+  Host: "localhost"
+  Port: 3306
+  Database: "gravestones"
+  Username: "root"
+  Password: ""
+
+  # Max number of connections in the pool
+  MaxConnections: 5
+
+  # Optional explicit table name override (leave empty to let the plugin choose)
+  # Name: ""
+
+  # Table name prefix
+  Prefix: ""
+
+  # Options:
+  # - MYSQL
+  # - MARIADB
+  # - POSTGRESQL
+  DbType: MYSQL
+
 DebugLevel: NONE
 
 # if enabled, you can break other graves with permission:

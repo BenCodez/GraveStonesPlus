@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project
-        xmlns="http://maven.apache.org/POM/4.0.0"
-        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-        xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    xmlns="http://maven.apache.org/POM/4.0.0"
+    xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.bencodez</groupId>
     <artifactId>GraveStonesPlus</artifactId>
@@ -35,6 +35,9 @@
             <resource>
                 <directory>src/main/resources</directory>
                 <filtering>false</filtering>
+                <excludes>
+                    <exclude>plugin.yml</exclude>
+                </excludes>
             </resource>
         </resources>
         <sourceDirectory>src/main/java</sourceDirectory>
@@ -267,7 +270,7 @@
         <dependency>
             <groupId>com.bencodez</groupId>
             <artifactId>advancedcore</artifactId>
-            <version>3.7.18</version>
+            <version>3.8</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
@@ -292,7 +295,8 @@
             <groupId>de.tr7zw</groupId>
             <artifactId>item-nbt-api-plugin</artifactId>
             <version>2.15.5</version>
-            <scope>provided</scope> </dependency>
+            <scope>provided</scope>
+        </dependency>
     </dependencies>
     <profiles>
         <profile>

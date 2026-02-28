@@ -1,14 +1,12 @@
-package com.bencodez.gravestonesplus.config;
+package com.bencodez.gravestonesplus.storage;
 
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Set;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
-import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.file.YMLFile;
 
 public class GraveLocations extends YMLFile {
@@ -40,9 +38,9 @@ public class GraveLocations extends YMLFile {
 		setValue("brokengraves", grave);
 	}
 
-	public void setBrokenGraves(Set<Grave> graves) {
+	public void setBrokenGraves(List<Grave> brokenGraves) {
 		ArrayList<GravesConfig> gravesConfig = new ArrayList<GravesConfig>();
-		for (Grave grave : graves) {
+		for (Grave grave : brokenGraves) {
 			gravesConfig.add(grave.getGravesConfig());
 		}
 		setBrokenGrave(gravesConfig);

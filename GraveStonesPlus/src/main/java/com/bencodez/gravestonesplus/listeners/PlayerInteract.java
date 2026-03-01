@@ -1,5 +1,6 @@
 package com.bencodez.gravestonesplus.listeners;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.event.EventHandler;
@@ -10,6 +11,8 @@ import org.bukkit.event.player.PlayerInteractEvent;
 
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.gravestonesplus.events.GraveInteractEvent;
+import com.bencodez.gravestonesplus.events.GraveInteractionType;
 import com.bencodez.gravestonesplus.graves.Grave;
 
 /**
@@ -45,42 +48,58 @@ public class PlayerInteract implements Listener {
 		Material type = clicked.getType();
 
 		if (action == Action.RIGHT_CLICK_BLOCK) {
-			/*
-			 * Fake chest safety: if this is a grave chest, prevent vanilla opening. We only
-			 * cancel when it is actually a grave, so normal chests still work.
-			 */
+			// Fake chest safety: if this is a grave chest, prevent vanilla opening.
 			if (type == Material.CHEST) {
 				Grave grave = getGraveFromBlock(clicked);
 				if (grave != null) {
+					GraveInteractEvent ge = new GraveInteractEvent(grave, event.getPlayer(),
+							GraveInteractionType.RIGHT_CLICK);
+					Bukkit.getPluginManager().callEvent(ge);
+					if (ge.isCancelled()) {
+						event.setCancelled(true);
+						return;
+					}
+
 					event.setCancelled(true);
 					handleRightClick(event, grave);
 				}
 				return;
 			}
 
-			/*
-			 * Existing types: player head / barrier.
-			 */
 			if (type == Material.PLAYER_HEAD || type == Material.BARRIER) {
 				Grave grave = getGraveFromBlock(clicked);
 				if (grave == null) {
 					return;
 				}
+
+				GraveInteractEvent ge = new GraveInteractEvent(grave, event.getPlayer(),
+						GraveInteractionType.RIGHT_CLICK);
+				Bukkit.getPluginManager().callEvent(ge);
+				if (ge.isCancelled()) {
+					event.setCancelled(true);
+					return;
+				}
+
 				handleRightClick(event, grave);
 			}
 			return;
 		}
 
 		if (action == Action.LEFT_CLICK_BLOCK) {
-			/*
-			 * Keep left-click behavior limited to your existing barrier logic. (You can add
-			 * CHEST here too if you want left-click to claim for chest mode.)
-			 */
 			if (type == Material.BARRIER) {
 				Grave grave = getGraveFromBlock(clicked);
 				if (grave == null) {
 					return;
 				}
+
+				GraveInteractEvent ge = new GraveInteractEvent(grave, event.getPlayer(),
+						GraveInteractionType.LEFT_CLICK);
+				Bukkit.getPluginManager().callEvent(ge);
+				if (ge.isCancelled()) {
+					event.setCancelled(true);
+					return;
+				}
+
 				handleLeftClickBarrier(event, grave);
 			}
 		}
@@ -99,9 +118,7 @@ public class PlayerInteract implements Listener {
 		}
 		Grave grave = (Grave) obj;
 
-		/*
-		 * Extra safety: ignore stale/invalid graves.
-		 */
+		// Extra safety: ignore stale/invalid graves
 		if (!grave.isValid()) {
 			return null;
 		}
@@ -109,16 +126,7 @@ public class PlayerInteract implements Listener {
 		return grave;
 	}
 
-	/**
-	 * Handles right-click interactions for a grave.
-	 *
-	 * @param event PlayerInteractEvent
-	 * @param grave Grave instance
-	 */
 	private void handleRightClick(PlayerInteractEvent event, Grave grave) {
-		/*
-		 * Extra safety: throttle spam/double fire from client or plugin interactions.
-		 */
 		long lastClick = grave.getLastClick();
 		long now = System.currentTimeMillis();
 		grave.setLastClick(now);
@@ -130,12 +138,6 @@ public class PlayerInteract implements Listener {
 		grave.onClick(event.getPlayer());
 	}
 
-	/**
-	 * Handles left-click interactions on barrier graves (claim/break behavior).
-	 *
-	 * @param event PlayerInteractEvent
-	 * @param grave Grave instance
-	 */
 	private void handleLeftClickBarrier(PlayerInteractEvent event, Grave grave) {
 		if (grave.isOwner(event.getPlayer())) {
 			grave.claim(event.getPlayer());

@@ -19,6 +19,8 @@ import org.bukkit.event.player.PlayerBucketEmptyEvent;
 
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.gravestonesplus.events.GraveInteractEvent;
+import com.bencodez.gravestonesplus.events.GraveInteractionType;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GraveDisplayType;
 import com.bencodez.simpleapi.messages.MessageAPI;
@@ -40,15 +42,10 @@ public class PlayerBreakBlock implements Listener {
 		this.plugin = plugin;
 	}
 
-	// --------------------
-	// Helpers
-	// --------------------
-
 	private boolean isProtected(Block b) {
 		if (b == null) {
 			return false;
 		}
-		// Supports both your MiscUtils block meta and plain Bukkit metadata
 		return MiscUtils.getInstance().getBlockMeta(b, "Grave") != null || b.hasMetadata("Grave");
 	}
 
@@ -79,14 +76,6 @@ public class PlayerBreakBlock implements Listener {
 		return b != null && isAnyGraveMarker(b.getType()) && isProtected(b);
 	}
 
-	/**
-	 * Bedrock-breaker style contraptions can break blocks that are NOT in event.getBlocks().
-	 * So we check the piston line + small bubble near its head.
-	 *
-	 * @param pistonBase Piston base block
-	 * @param extendLengthGuess Length guess
-	 * @return True if a protected grave marker would be affected
-	 */
 	private boolean pistonWouldAffectProtected(Block pistonBase, int extendLengthGuess) {
 		if (!isPistonBase(pistonBase)) {
 			return false;
@@ -98,7 +87,6 @@ public class PlayerBreakBlock implements Listener {
 		Directional data = (Directional) pistonBase.getBlockData();
 		int max = Math.min(12, Math.max(1, extendLengthGuess));
 
-		// Check line in front of piston
 		for (int i = 1; i <= max + 1; i++) {
 			Block front = pistonBase.getRelative(data.getFacing(), i);
 			if (isProtectedGraveMarker(front)) {
@@ -106,7 +94,6 @@ public class PlayerBreakBlock implements Listener {
 			}
 		}
 
-		// Check a small bubble around the piston head position (common exploit layouts)
 		Block headPos = pistonBase.getRelative(data.getFacing(), 1);
 		for (int dx = -1; dx <= 1; dx++) {
 			for (int dy = -1; dy <= 1; dy++) {
@@ -122,7 +109,7 @@ public class PlayerBreakBlock implements Listener {
 		return false;
 	}
 
-	private void restoreIfRemovedNextTick(Block b, Material expected) {
+	private void restoreIfRemovedNextTick(final Block b, final Material expected) {
 		if (b == null) {
 			return;
 		}
@@ -136,10 +123,6 @@ public class PlayerBreakBlock implements Listener {
 			}
 		});
 	}
-
-	// --------------------
-	// Explosions
-	// --------------------
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onEntityExplode(EntityExplodeEvent event) {
@@ -159,10 +142,6 @@ public class PlayerBreakBlock implements Listener {
 		}
 	}
 
-	// --------------------
-	// Drops
-	// --------------------
-
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onItemDrop(BlockDropItemEvent event) {
 		Block b = event.getBlock();
@@ -170,10 +149,6 @@ public class PlayerBreakBlock implements Listener {
 			event.setCancelled(true);
 		}
 	}
-
-	// --------------------
-	// Liquids
-	// --------------------
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onWaterMove(BlockFromToEvent event) {
@@ -193,10 +168,6 @@ public class PlayerBreakBlock implements Listener {
 		}
 	}
 
-	// --------------------
-	// Player breaks
-	// --------------------
-
 	@EventHandler(priority = EventPriority.LOW)
 	public void onBlockBreak(BlockBreakEvent event) {
 		if (event.getPlayer() == null) {
@@ -210,13 +181,19 @@ public class PlayerBreakBlock implements Listener {
 
 		Grave grave = getGrave(b);
 		if (grave == null) {
-			// Not a grave, allow normal behavior
 			return;
 		}
 
 		// Extra safety: only handle if this block is the correct marker for that grave
 		if (!grave.isValid()) {
-			// It's a grave meta but marker doesn't match expected; safest behavior is cancel break
+			event.setCancelled(true);
+			return;
+		}
+
+		// Fire interact event for break attempt
+		GraveInteractEvent ge = new GraveInteractEvent(grave, event.getPlayer(), GraveInteractionType.BREAK_ATTEMPT);
+		Bukkit.getPluginManager().callEvent(ge);
+		if (ge.isCancelled()) {
 			event.setCancelled(true);
 			return;
 		}
@@ -227,12 +204,6 @@ public class PlayerBreakBlock implements Listener {
 			return;
 		}
 
-		/*
-		 * Marker-specific behavior:
-		 * - DISPLAY_ENTITY uses BARRIER: never allow vanilla break; claim via your own interactions (left click logic elsewhere)
-		 * - CHEST is fake: prevent drops/open grief; allow claim via break if owner/permission
-		 * - PLAYER_HEAD: existing behavior (claim on break)
-		 */
 		GraveDisplayType type = plugin.getConfigFile().getGraveDisplayTypeEnum();
 		try {
 			String stored = grave.getGravesConfig().getGraveDisplayType();
@@ -243,13 +214,13 @@ public class PlayerBreakBlock implements Listener {
 			// keep config default
 		}
 
-		// Barrier graves are never breakable (consistent with prior behavior)
+		// Barrier graves are never breakable
 		if (type == GraveDisplayType.DISPLAY_ENTITY && b.getType() == Material.BARRIER) {
 			event.setCancelled(true);
 			return;
 		}
 
-		// From this point on, handle claim logic for breakable grave markers
+		// Claim logic for breakable grave markers (HEAD/CHEST)
 		if (grave.isOwner(event.getPlayer())) {
 			event.setDropItems(false);
 			grave.claim(event.getPlayer());
@@ -275,14 +246,9 @@ public class PlayerBreakBlock implements Listener {
 		event.setCancelled(true);
 	}
 
-	// --------------------
-	// Pistons (extend + retract)
-	// --------------------
-
 	@SuppressWarnings("deprecation")
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onPistonExtend(BlockPistonExtendEvent event) {
-		// If any moved block is a protected grave marker, cancel
 		for (Block block : event.getBlocks()) {
 			if (isProtectedGraveMarker(block)) {
 				event.setCancelled(true);
@@ -290,7 +256,6 @@ public class PlayerBreakBlock implements Listener {
 			}
 		}
 
-		// Bedrock breaker defense: cancel if piston would affect protected blocks even if not in moved list
 		if (pistonWouldAffectProtected(event.getBlock(), event.getLength())) {
 			event.setCancelled(true);
 		}
@@ -305,15 +270,10 @@ public class PlayerBreakBlock implements Listener {
 			}
 		}
 
-		// Use moved block count as a rough length guess for retract
 		if (pistonWouldAffectProtected(event.getBlock(), Math.max(1, event.getBlocks().size()))) {
 			event.setCancelled(true);
 		}
 	}
-
-	// --------------------
-	// Physics fallback (the "at all costs" layer)
-	// --------------------
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onPhysics(BlockPhysicsEvent event) {
@@ -323,7 +283,6 @@ public class PlayerBreakBlock implements Listener {
 			event.setCancelled(true);
 
 			Material t = b.getType();
-			// If it got removed, restore the correct marker type
 			if (t == Material.BARRIER) {
 				restoreIfRemovedNextTick(b, Material.BARRIER);
 			} else if (t == Material.PLAYER_HEAD) {

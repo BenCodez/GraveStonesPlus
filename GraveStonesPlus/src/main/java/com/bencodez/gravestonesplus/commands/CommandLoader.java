@@ -19,6 +19,7 @@ import org.bukkit.persistence.PersistentDataType;
 import com.bencodez.advancedcore.api.command.CommandHandler;
 import com.bencodez.advancedcore.api.inventory.BInventory;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
 
 import net.md_5.bungee.api.chat.TextComponent;
@@ -208,7 +209,7 @@ public class CommandLoader {
 				for (Grave gr : graves) {
 					if (!gr.isValid()) {
 						sendMessage(sender, "&aRemoving grave: " + gr.getAllGraveMessage());
-						gr.removeGrave();
+						gr.removeGrave(GraveRemoveReason.INVALID);
 					}
 				}
 
@@ -246,7 +247,7 @@ public class CommandLoader {
 								for (Grave gr : plugin.getGraves()) {
 									double distance = gr.getDistance(p);
 									if (distance < 10 && distance >= 0) {
-										gr.removeGrave();
+										gr.removeGrave(GraveRemoveReason.ADMIN_REMOVED);
 										amount++;
 									}
 								}

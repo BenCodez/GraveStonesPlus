@@ -11,6 +11,7 @@ import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
 import org.bukkit.configuration.serialization.ConfigurationSerialization;
 import org.bukkit.entity.Player;
+import org.bukkit.event.Event;
 import org.bukkit.permissions.Permission;
 import org.bukkit.permissions.PermissionDefault;
 
@@ -20,6 +21,7 @@ import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
 import com.bencodez.gravestonesplus.config.Config;
+import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GraveDisplayEntityHandle;
 import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
@@ -162,6 +164,20 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
 	}
 
+	public void callEventSync(final Event event) {
+		if (Bukkit.isPrimaryThread()) {
+			Bukkit.getPluginManager().callEvent(event);
+		} else {
+			Bukkit.getScheduler().runTask(this, new Runnable() {
+
+				@Override
+				public void run() {
+					Bukkit.getPluginManager().callEvent(event);
+				}
+			});
+		}
+	}
+
 	private String buildGraveKey(Grave grave) {
 		GravesConfig cfg = grave.getGravesConfig();
 		return cfg.getUuid().toString() + "|" + cfg.getLocation().getWorld().getUID().toString() + "|"
@@ -243,7 +259,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 						} else {
 							// Only remove if it truly isn't a grave anymore
-							grave.removeGrave();
+							grave.removeGrave(GraveRemoveReason.INVALID);
 							debug("Grave at " + grave.getGravesConfig().getLocation() + " is not valid");
 						}
 					}
@@ -282,7 +298,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 									Bukkit.getScheduler().runTask(plugin, new Runnable() {
 										@Override
 										public void run() {
-											grave.removeGrave();
+											grave.removeGrave(GraveRemoveReason.INVALID);
 											grave.removeHologramsAround();
 										}
 									});

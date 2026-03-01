@@ -20,6 +20,7 @@ import org.bukkit.inventory.PlayerInventory;
 import org.bukkit.inventory.meta.ItemMeta;
 
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.nbt.NBTRule;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
@@ -83,7 +84,7 @@ public class PlayerDeathListener implements Listener {
 				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
 					oldest.dropItemsOnGround(entity);
 				}
-				oldest.removeGrave();
+				oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
 				entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
 			}
 		}

@@ -25,6 +25,13 @@ Database:
   # - MARIADB
   # - POSTGRESQL
   DbType: MYSQL
+  
+# What block/entity to use to represent graves in the world.
+# Options:
+# - PLAYER_HEAD     (uses the player's skull)
+# - DISPLAY_ENTITY  (uses a display entity + barrier interaction block)
+# - CHEST           (fake chest block only; items are still stored internally)
+GraveDisplayType: PLAYER_HEAD
 
 DebugLevel: NONE
 
@@ -80,12 +87,6 @@ KeepItemsWithLore: ''
 
 # Keep all player exp, default is minecraft drop rate
 KeepAllExp: false
-
-# Use display entities rather than real blocks
-# 1.19.4+ only
-# The benefits is that the grave can't be destroyed by normal means, perfect for graves
-# Relatively new feature, could still have some bugs
-UseDisplayEntities: false
 
 # If true, a grave will be created if a player has an empty inventory
 # If false, no grave will be created

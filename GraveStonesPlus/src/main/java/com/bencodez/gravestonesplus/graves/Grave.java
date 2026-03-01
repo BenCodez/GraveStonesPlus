@@ -13,6 +13,7 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.block.Block;
+import org.bukkit.block.Chest;
 import org.bukkit.block.Skull;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
@@ -39,15 +40,20 @@ import com.bencodez.simpleapi.messages.MessageAPI;
 import lombok.Getter;
 import lombok.Setter;
 
+/**
+ * Represents a single grave instance in the world.
+ */
 public class Grave {
 
 	@Getter
-	private GravesConfig gravesConfig;
+	private final GravesConfig gravesConfig;
 
 	@Getter
 	private Hologram topHologram;
+
 	@Getter
 	private Hologram middleHologram;
+
 	@Getter
 	private Hologram bottomHologram;
 
@@ -61,7 +67,7 @@ public class Grave {
 	@Setter
 	private long lastClick = 0;
 
-	private GraveStonesPlus plugin;
+	private final GraveStonesPlus plugin;
 
 	@Getter
 	private boolean remove = false;
@@ -69,17 +75,33 @@ public class Grave {
 	@Getter
 	private ItemDisplay itemDisplay;
 
+	private boolean chunkLoaded = false;
+
+	/**
+	 * Constructor.
+	 *
+	 * @param plugin Plugin instance
+	 * @param gravesConfig Stored grave config
+	 */
 	public Grave(GraveStonesPlus plugin, GravesConfig gravesConfig) {
 		this.plugin = plugin;
 		this.gravesConfig = gravesConfig;
 	}
 
+	/**
+	 * Sets metadata for quick lookup.
+	 *
+	 * @param block Block
+	 */
 	public void loadBlockMeta(Block block) {
 		MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
 	}
 
-	private boolean chunkLoaded = false;
-
+	/**
+	 * Loads the chunk for this grave and releases it later.
+	 *
+	 * @param task If true, run chunk load in a scheduled task
+	 */
 	public void loadChunk(boolean task) {
 		if (task) {
 			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
@@ -104,7 +126,6 @@ public class Grave {
 				unLoadChunk();
 			}
 		}
-
 	}
 
 	private void unLoadChunk() {
@@ -121,32 +142,102 @@ public class Grave {
 		}, 20 * 6, gravesConfig.getLocation());
 	}
 
-	public void createSkull() {
-		if (plugin.isUsingDisplayEntities()) {
-			final Grave grave = this;
+	/**
+	 * Gets the display type stored on this grave, falling back to global config if missing/invalid.
+	 *
+	 * @return Grave display type
+	 */
+	private GraveDisplayType getStoredDisplayTypeOrDefault() {
+		try {
+			String raw = gravesConfig.getGraveDisplayType();
+			if (raw != null && !raw.trim().isEmpty()) {
+				return GraveDisplayType.valueOf(raw.trim().toUpperCase());
+			}
+		} catch (Exception ignored) {
+			// fall back below
+		}
+		return plugin.getConfigFile().getGraveDisplayTypeEnum();
+	}
+
+	/**
+	 * Stores the display type on the grave config for persistence.
+	 *
+	 * @param type Type to store
+	 */
+	private void storeDisplayType(GraveDisplayType type) {
+		if (type == null) {
+			return;
+		}
+		try {
+			gravesConfig.setGraveDisplayType(type.name());
+		} catch (Exception ignored) {
+			// Recommended: ensure GravesConfig has a setter.
+		}
+	}
+
+	/**
+	 * Creates the grave marker in the world based on the stored display type.
+	 */
+	public void createGrave() {
+		final Grave grave = this;
+
+		final GraveDisplayType typeToUse = getStoredDisplayTypeOrDefault();
+		storeDisplayType(typeToUse);
+
+		switch (typeToUse) {
+		case CHEST:
 			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 				@Override
 				public void run() {
 					loadChunk(false);
-					Block block = gravesConfig.getLocation().getBlock();
+
+					Block block = grave.getGravesConfig().getLocation().getBlock();
+					block.setType(Material.CHEST);
+
+					// Fake chest only: name is cosmetic, do not store items in chest inventory
+					if (block.getState() instanceof Chest) {
+						Chest chest = (Chest) block.getState();
+						String name = "&3" + grave.getGravesConfig().getPlayerName() + "'s Grave";
+						chest.setCustomName(MessageAPI.colorize(name));
+						chest.update(true);
+					}
+
+					loadBlockMeta(block);
+				}
+			}, gravesConfig.getLocation());
+			break;
+
+		case DISPLAY_ENTITY:
+			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
+
+				@Override
+				public void run() {
+					loadChunk(false);
+
+					Block block = grave.getGravesConfig().getLocation().getBlock();
 
 					itemDisplay = plugin.getGraveDisplayEntityHandler().createDisplay(grave);
-					getGravesConfig().setDisplayUUID(itemDisplay.getUniqueId());
-					itemDisplay.getPersistentDataContainer().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+					if (itemDisplay != null) {
+						getGravesConfig().setDisplayUUID(itemDisplay.getUniqueId());
+						itemDisplay.getPersistentDataContainer().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+					}
 
 					block.setType(Material.BARRIER);
 					loadBlockMeta(block);
 				}
 			}, gravesConfig.getLocation());
-		} else {
+			break;
+
+		case PLAYER_HEAD:
+		default:
 			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 				@Override
 				public void run() {
 					loadChunk(false);
-					Block block = gravesConfig.getLocation().getBlock();
 
+					Block block = grave.getGravesConfig().getLocation().getBlock();
 					block.setType(Material.PLAYER_HEAD);
 					if (block.getState() instanceof Skull) {
 						Skull skull = (Skull) block.getState();
@@ -156,9 +247,13 @@ public class Grave {
 					loadBlockMeta(block);
 				}
 			}, gravesConfig.getLocation());
+			break;
 		}
 	}
 
+	/**
+	 * Removes the world marker block (legacy method name kept).
+	 */
 	public void removeSkull() {
 		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
@@ -170,10 +265,21 @@ public class Grave {
 		}, gravesConfig.getLocation());
 	}
 
+	/**
+	 * Checks ownership.
+	 *
+	 * @param player Player
+	 * @return True if owner
+	 */
 	public boolean isOwner(Player player) {
 		return gravesConfig.getUuid().equals(player.getUniqueId());
 	}
 
+	/**
+	 * Click message handler.
+	 *
+	 * @param player Player
+	 */
 	public void onClick(Player player) {
 		HashMap<String, String> placeholders = new HashMap<String, String>();
 		placeholders.put("player", gravesConfig.getPlayerName());
@@ -183,15 +289,16 @@ public class Grave {
 				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatClickMessage(), placeholders)));
 	}
 
+	/**
+	 * Removes nearby hologram entities associated with the grave.
+	 */
 	public void removeHologramsAround() {
 		try {
 			Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
 			for (Entity entity : hologramLocation.getWorld().getNearbyEntities(hologramLocation, 1, 3, 1)) {
-				if (entity.getType().equals(EntityType.ARMOR_STAND)
-						|| entity.getType().equals(EntityType.ITEM_DISPLAY)) {
+				if (entity.getType().equals(EntityType.ARMOR_STAND) || entity.getType().equals(EntityType.ITEM_DISPLAY)) {
 					if (entity.getPersistentDataContainer().has(plugin.getKey(), PersistentDataType.INTEGER)) {
-						Integer value = entity.getPersistentDataContainer().get(plugin.getKey(),
-								PersistentDataType.INTEGER);
+						Integer value = entity.getPersistentDataContainer().get(plugin.getKey(), PersistentDataType.INTEGER);
 						if (value != null && value.intValue() == 1) {
 							entity.remove();
 						}
@@ -199,10 +306,13 @@ public class Grave {
 				}
 			}
 		} catch (Exception e) {
-			e.printStackTrace();
+			plugin.debug(e);
 		}
 	}
 
+	/**
+	 * Creates the hologram lines above the grave.
+	 */
 	public void createHologram() {
 		if (plugin.getConfigFile().isDisableArmorStands()) {
 			return;
@@ -218,26 +328,29 @@ public class Grave {
 			topHologram.kill();
 		}
 		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
-				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders), true,
-				false, plugin.getKey(), 1, "Grave", this);
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders), true, false,
+				plugin.getKey(), 1, "Grave", this);
 
 		if (middleHologram != null) {
 			middleHologram.kill();
 		}
 		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
-				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true,
-				false, plugin.getKey(), 1, "Grave", this);
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true, false,
+				plugin.getKey(), 1, "Grave", this);
 
 		if (bottomHologram != null) {
 			bottomHologram.kill();
 		}
 		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
-				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true,
-				false, plugin.getKey(), 1, "Grave", this);
+				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true, false,
+				plugin.getKey(), 1, "Grave", this);
 
 		checkGlowing();
 	}
 
+	/**
+	 * Removes the hologram for this grave.
+	 */
 	public void removeHologram() {
 		if (topHologram != null) {
 			topHologram.kill();
@@ -257,42 +370,73 @@ public class Grave {
 		}
 	}
 
+	/**
+	 * Checks if the grave marker is valid based on its stored display type.
+	 *
+	 * @return True if valid
+	 */
 	public boolean isValid() {
-		if (plugin.getConfigFile().isUseDisplayEntities()) {
-			// Display-entity mode: the grave is represented by a barrier block.
+		GraveDisplayType type = getStoredDisplayTypeOrDefault();
+
+		switch (type) {
+		case CHEST:
+			return gravesConfig.getLocation().getBlock().getType().equals(Material.CHEST);
+		case DISPLAY_ENTITY:
 			return gravesConfig.getLocation().getBlock().getType().equals(Material.BARRIER);
+		case PLAYER_HEAD:
+			return gravesConfig.getLocation().getBlock().getType().equals(Material.PLAYER_HEAD);
+		default:
+			return false;
 		}
-		// Skull mode
-		return gravesConfig.getLocation().getBlock().getType().equals(Material.PLAYER_HEAD);
 	}
 
+	/**
+	 * Human readable message for this grave.
+	 *
+	 * @return Message
+	 */
 	public String getGraveMessage() {
 		Location loc = gravesConfig.getLocation();
-		return "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY() + ","
-				+ loc.getBlockZ() + ") Time of death: " + new Date(gravesConfig.getTime());
+		return "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ()
+				+ ") Time of death: " + new Date(gravesConfig.getTime());
 	}
 
+	/**
+	 * Checks ownership by player name.
+	 *
+	 * @param player Player name
+	 * @return True if owner
+	 */
 	public boolean isOwner(String player) {
 		return gravesConfig.getPlayerName().equalsIgnoreCase(player);
 	}
 
+	/**
+	 * Removes the grave and marks it destroyed.
+	 */
 	public void removeGrave() {
 		remove = true;
 
 		gravesConfig.setDestroyed(true);
 		gravesConfig.setDestroyedTime(System.currentTimeMillis());
+
 		plugin.getBukkitScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
 
 			@Override
 			public void run() {
-				if (itemDisplay != null) {
-					itemDisplay.remove();
-					itemDisplay = null;
+				// Only remove the ItemDisplay if this grave is a display-entity grave
+				if (getStoredDisplayTypeOrDefault() == GraveDisplayType.DISPLAY_ENTITY) {
+					if (itemDisplay != null) {
+						itemDisplay.remove();
+						itemDisplay = null;
+					}
 				}
+
 				gravesConfig.getLocation().getBlock().removeMetadata("Grave", plugin);
 				gravesConfig.getLocation().getBlock().setType(Material.AIR);
 			}
 		}, gravesConfig.getLocation());
+
 		removeHologram();
 		removeTimer();
 		plugin.removeGrave(this);
@@ -316,6 +460,11 @@ public class Grave {
 		}, timeLimit * 60 * 1000 + 500);
 	}
 
+	/**
+	 * Checks and schedules removal based on time limit.
+	 *
+	 * @param timeLimit Time limit in minutes (your existing semantics)
+	 */
 	public void checkTimeLimit(int timeLimit) {
 		if (timeLimit > 0) {
 			long deathTime = gravesConfig.getTime();
@@ -328,13 +477,18 @@ public class Grave {
 		}
 	}
 
+	/**
+	 * GUI item for active grave list.
+	 *
+	 * @return Button
+	 */
 	public BInventoryButton getGUIItem() {
 		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(
 				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
 						.setName("&3&l" + gravesConfig.getPlayerName())
-						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
-								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY()
+								+ "," + loc.getBlockZ() + ")")
 						.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
 						.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to remove")
 						.addLoreLine("&cShift left click to view items")) {
@@ -364,13 +518,18 @@ public class Grave {
 		return b;
 	}
 
+	/**
+	 * GUI item for broken grave list.
+	 *
+	 * @return Button
+	 */
 	public BInventoryButton getGUIItemBroken() {
 		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(
 				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
 						.setName("&3&l" + gravesConfig.getPlayerName())
-						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
-								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY()
+								+ "," + loc.getBlockZ() + ")")
 						.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
 						.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to create")
 						.addLoreLine("&cShift left click to view items")
@@ -381,7 +540,7 @@ public class Grave {
 				Grave grave = (Grave) getData("grave");
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
 					loadChunk(true);
-					grave.createSkull();
+					grave.createGrave();
 					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 
 						@Override
@@ -394,7 +553,6 @@ public class Grave {
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
 					openGUIWithItems(clickEvent.getPlayer());
 				} else {
-
 					Location loc = grave.getGravesConfig().getLocation();
 					Player p = clickEvent.getWhoClicked();
 					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
@@ -412,21 +570,36 @@ public class Grave {
 		return b;
 	}
 
+	/**
+	 * All graves message.
+	 *
+	 * @return Message
+	 */
 	public String getAllGraveMessage() {
 		Location loc = gravesConfig.getLocation();
-		return "Player: " + gravesConfig.getPlayerName() + ", Location: " + loc.getWorld().getName() + " ("
-				+ loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ() + ") Time of death: "
-				+ new Date(gravesConfig.getTime());
+		return "Player: " + gravesConfig.getPlayerName() + ", Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
+				+ loc.getBlockY() + "," + loc.getBlockZ() + ") Time of death: " + new Date(gravesConfig.getTime());
 	}
 
+	/**
+	 * Distance from player to grave.
+	 *
+	 * @param p Player
+	 * @return Distance, or -1 if different world
+	 */
 	public double getDistance(Player p) {
 		if (p.getWorld().getUID().equals(gravesConfig.getLocation().getWorld().getUID())) {
 			return gravesConfig.getLocation().distance(p.getLocation());
-		} else {
-			return -1;
 		}
+		return -1;
 	}
 
+	/**
+	 * Checks if a clicked block is this grave.
+	 *
+	 * @param clicked Clicked block
+	 * @return True if matches location
+	 */
 	public boolean isGrave(Block clicked) {
 		Block currentBlock = gravesConfig.getLocation().getBlock();
 		if (currentBlock.getLocation().getWorld().getUID().equals(clicked.getWorld().getUID())) {
@@ -447,16 +620,14 @@ public class Grave {
 	 * is not discoverable on the first tick.
 	 */
 	public void checkBlockDisplayAndFixIfMissing() {
-		if (!plugin.getConfigFile().isUseDisplayEntities()) {
+		if (getStoredDisplayTypeOrDefault() != GraveDisplayType.DISPLAY_ENTITY) {
 			return;
 		}
 
-		// Only makes sense if the world block is a barrier grave
 		if (!gravesConfig.getLocation().getBlock().getType().equals(Material.BARRIER)) {
 			return;
 		}
 
-		// 1) Try direct lookup by stored UUID
 		if (gravesConfig.getDisplayUUID() != null) {
 			Entity e = Bukkit.getEntity(gravesConfig.getDisplayUUID());
 			if (e instanceof ItemDisplay) {
@@ -467,7 +638,6 @@ public class Grave {
 			}
 		}
 
-		// 2) Fallback to handler scan
 		if (itemDisplay == null) {
 			try {
 				itemDisplay = plugin.getGraveDisplayEntityHandler().getItemDisplay(this);
@@ -479,7 +649,6 @@ public class Grave {
 			}
 		}
 
-		// 3) If still missing, recreate display entity
 		if (itemDisplay == null) {
 			try {
 				itemDisplay = plugin.getGraveDisplayEntityHandler().createDisplay(this);
@@ -493,6 +662,11 @@ public class Grave {
 		}
 	}
 
+	/**
+	 * Gives the player a compass pointing at this grave.
+	 *
+	 * @param p Player
+	 */
 	public void giveCompass(Player p) {
 		ItemStack compass = new ItemStack(Material.COMPASS);
 		CompassMeta meta = (CompassMeta) compass.getItemMeta();
@@ -514,6 +688,9 @@ public class Grave {
 		}, p.getLocation());
 	}
 
+	/**
+	 * Removes the grave timer.
+	 */
 	public void removeTimer() {
 		if (timer != null) {
 			timer.cancel();
@@ -521,6 +698,12 @@ public class Grave {
 		}
 	}
 
+	/**
+	 * Checks if a player can break/claim this grave.
+	 *
+	 * @param player Player
+	 * @return True if can break
+	 */
 	public boolean canPlayerBreak(Player player) {
 		if (isOwner(player)) {
 			return true;
@@ -528,24 +711,68 @@ public class Grave {
 		return player.hasPermission("GraveStonesPlus.BreakOtherGraves");
 	}
 
+	/**
+	 * Creates or removes the "glowing" helper hologram near the grave based on config.
+	 * This implementation is intentionally conservative and only spawns a marker hologram.
+	 */
 	public void checkGlowing() {
-		// existing logic unchanged in your file
+		if (!plugin.getConfigFile().isGlowingEffectNearGrave()) {
+			if (glowingHologram != null) {
+				glowingHologram.kill();
+				glowingHologram = null;
+			}
+			return;
+		}
+
+		if (plugin.getConfigFile().isDisableArmorStands()) {
+			// If armor stands/holograms are disabled, don't attempt glowing hologram
+			if (glowingHologram != null) {
+				glowingHologram.kill();
+				glowingHologram = null;
+			}
+			return;
+		}
+
+		try {
+			Location base = gravesConfig.getLocation().getBlock().getLocation().clone().add(0.5, 0.1, 0.5);
+
+			// Create a subtle marker slightly above the block; can be used by your visuals
+			Location glowLoc = base.clone().add(0, 0.75, 0);
+
+			if (glowingHologram != null) {
+				glowingHologram.kill();
+				glowingHologram = null;
+			}
+
+			// This line is intentionally empty/short; you can style it later without breaking API.
+			glowingHologram = new Hologram(glowLoc, MessageAPI.colorize("&e"), true, false, plugin.getKey(), 1, "Grave", this);
+		} catch (Exception e) {
+			plugin.debug(e);
+		}
 	}
 
+	/**
+	 * Recreates a broken grave marker/hologram.
+	 */
 	public void createBrokenGrave() {
 		gravesConfig.setDestroyed(false);
 		gravesConfig.setDestroyedTime(0);
-		createSkull();
+		createGrave();
 		createHologram();
 	}
 
+	/**
+	 * Drops items on the ground based on drop percentage.
+	 *
+	 * @param p Player
+	 */
 	public void dropItemsOnGround(Player p) {
 		Location loc = getGravesConfig().getLocation();
 		ArrayList<ItemStack> items = new ArrayList<ItemStack>(getGravesConfig().getItems().values());
 		int chance = plugin.getConfigFile().getPercentageDrops();
 		final ArrayList<ItemStack> itemsToDrop = new ArrayList<ItemStack>();
 		for (ItemStack item : items) {
-			if (!item.getType().equals(Material.AIR)) {
+			if (item != null && !item.getType().equals(Material.AIR)) {
 				if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
 					itemsToDrop.add(item);
 				}
@@ -556,7 +783,7 @@ public class Grave {
 			@Override
 			public void run() {
 				for (ItemStack item : itemsToDrop) {
-					if (!item.getType().equals(Material.AIR)) {
+					if (item != null && !item.getType().equals(Material.AIR)) {
 						loc.getWorld().dropItem(loc, item);
 					}
 				}
@@ -564,6 +791,11 @@ public class Grave {
 		}, loc);
 	}
 
+	/**
+	 * Opens a GUI showing stored items from the grave.
+	 *
+	 * @param p Player
+	 */
 	public void openGUIWithItems(Player p) {
 		BInventory inv = new BInventory("Grave Items");
 		for (Entry<Integer, ItemStack> entry : getGravesConfig().getItems().entrySet()) {
@@ -573,7 +805,7 @@ public class Grave {
 
 					@Override
 					public void onClick(ClickEvent clickEvent) {
-
+						// view only
 					}
 				});
 				break;
@@ -582,7 +814,7 @@ public class Grave {
 
 					@Override
 					public void onClick(ClickEvent clickEvent) {
-
+						// view only
 					}
 				});
 				break;
@@ -591,7 +823,7 @@ public class Grave {
 
 					@Override
 					public void onClick(ClickEvent clickEvent) {
-
+						// view only
 					}
 				});
 				break;
@@ -600,7 +832,7 @@ public class Grave {
 
 					@Override
 					public void onClick(ClickEvent clickEvent) {
-
+						// view only
 					}
 				});
 				break;
@@ -609,7 +841,7 @@ public class Grave {
 
 					@Override
 					public void onClick(ClickEvent clickEvent) {
-
+						// view only
 					}
 				});
 				break;
@@ -627,29 +859,33 @@ public class Grave {
 
 					@Override
 					public void onClick(ClickEvent clickEvent) {
-
+						// view only
 					}
 				});
 				break;
-
 			}
 		}
-		inv.addButton(53,
-				new BInventoryButton(new ItemBuilder("OAK_SIGN").setName(getGravesConfig().getPlayerName())
+
+		inv.addButton(53, new BInventoryButton(
+				new ItemBuilder("OAK_SIGN").setName(getGravesConfig().getPlayerName())
 						.addLoreLine("&cDeath: " + getGravesConfig().getDeathMessage())
 						.addLoreLine("&cTime: " + getGravesConfig().getTime())
 						.addLoreLine("&cEXP: " + getGravesConfig().getExp())) {
 
-					@Override
-					public void onClick(ClickEvent clickEvent) {
+			@Override
+			public void onClick(ClickEvent clickEvent) {
+				// info only
+			}
+		});
 
-					}
-
-				});
 		inv.openInventory(p);
-
 	}
 
+	/**
+	 * Claims this grave and returns items/exp to the player.
+	 *
+	 * @param player Player
+	 */
 	public void claim(final Player player) {
 		final AdvancedCoreUser user = plugin.getUserManager().getUser(player);
 		user.giveExp(getGravesConfig().getExp());
@@ -752,7 +988,6 @@ public class Grave {
 							user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
 						}
 
-						// 5) Cleanup on main
 						removeHologramsAround();
 						removeGrave();
 					}
@@ -761,6 +996,9 @@ public class Grave {
 		});
 	}
 
+	/**
+	 * Removes all grave compasses from online players that point to this grave.
+	 */
 	public void removeCompass() {
 		NamespacedKey key = new NamespacedKey(plugin, "gravecompass");
 		for (Player player : Bukkit.getOnlinePlayers()) {
@@ -770,9 +1008,8 @@ public class Grave {
 						CompassMeta meta = (CompassMeta) item.getItemMeta();
 						if (meta.getPersistentDataContainer().has(key, PersistentDataType.LONG)) {
 							Long v = meta.getPersistentDataContainer().get(key, PersistentDataType.LONG);
-							if (v != null
-									&& (v.longValue() == getGravesConfig().getTime() || (meta.getLodestone() != null
-											&& meta.getLodestone().equals(getGravesConfig().getLocation())))) {
+							if (v != null && (v.longValue() == getGravesConfig().getTime()
+									|| (meta.getLodestone() != null && meta.getLodestone().equals(getGravesConfig().getLocation())))) {
 								player.getInventory().remove(item);
 							}
 						}
@@ -782,6 +1019,9 @@ public class Grave {
 		}
 	}
 
+	/**
+	 * Ensures item display reference is resolved or recreated if needed.
+	 */
 	public void checkBlockDisplay() {
 		boolean hasDisplayEntities = true;
 		try {
@@ -795,18 +1035,15 @@ public class Grave {
 			return;
 		}
 
-		if (!plugin.getConfigFile().isUseDisplayEntities()) {
+		if (getStoredDisplayTypeOrDefault() != GraveDisplayType.DISPLAY_ENTITY) {
 			itemDisplay = null;
 			return;
 		}
 
-		// Only attempt to resolve/recreate display entities when the block is a grave
-		// barrier
 		if (!gravesConfig.getLocation().getBlock().getType().equals(Material.BARRIER)) {
 			return;
 		}
 
-		// 1) Try direct lookup by stored UUID (fast path)
 		if (gravesConfig.getDisplayUUID() != null) {
 			Entity e = Bukkit.getEntity(gravesConfig.getDisplayUUID());
 			if (e instanceof ItemDisplay && !e.isDead()) {
@@ -814,7 +1051,6 @@ public class Grave {
 			}
 		}
 
-		// 2) Fallback to handler scan
 		if (itemDisplay == null) {
 			itemDisplay = plugin.getGraveDisplayEntityHandler().getItemDisplay(this);
 			if (itemDisplay != null && itemDisplay.isDead()) {
@@ -822,7 +1058,6 @@ public class Grave {
 			}
 		}
 
-		// 3) Recreate display if missing (prevents startup invalidation)
 		if (itemDisplay == null) {
 			try {
 				ItemDisplay created = plugin.getGraveDisplayEntityHandler().createDisplay(this);
@@ -836,5 +1071,4 @@ public class Grave {
 			}
 		}
 	}
-
 }

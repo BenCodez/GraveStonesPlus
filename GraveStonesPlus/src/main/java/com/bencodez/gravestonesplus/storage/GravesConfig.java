@@ -12,9 +12,14 @@ import org.bukkit.configuration.serialization.ConfigurationSerializable;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.util.NumberConversions;
 
+import com.bencodez.gravestonesplus.graves.GraveDisplayType;
+
 import lombok.Getter;
 import lombok.Setter;
 
+/**
+ * Stores a single grave entry for persistence.
+ */
 public class GravesConfig implements ConfigurationSerializable {
 
 	@Getter
@@ -25,10 +30,13 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@Getter
 	private Location location;
+
 	@Getter
 	private UUID uuid;
+
 	@Getter
 	private String playerName;
+
 	@Getter
 	private String deathMessage;
 
@@ -51,9 +59,33 @@ public class GravesConfig implements ConfigurationSerializable {
 	@Setter
 	private UUID interactUUID;
 
+	/**
+	 * Display type used when this grave was created. Stored as a string for config
+	 * serialization stability.
+	 */
+	@Getter
+	@Setter
+	private String graveDisplayType;
+
+	/**
+	 * Full constructor.
+	 *
+	 * @param uuid             UUID
+	 * @param playerName       Player name
+	 * @param loc              Location
+	 * @param items            Items
+	 * @param exp              Experience
+	 * @param deathMessage     Death message
+	 * @param time             Time
+	 * @param destroyed        Destroyed flag
+	 * @param destroyedTime    Destroyed time
+	 * @param displayUUID      Display entity UUID
+	 * @param interactUUID     Interact entity UUID
+	 * @param graveDisplayType Display type name
+	 */
 	public GravesConfig(UUID uuid, String playerName, Location loc, HashMap<Integer, ItemStack> items, int exp,
-			String deathMessage, long time, boolean destroyed, long destroyedTime, UUID displayUUID,
-			UUID interactUUID) {
+			String deathMessage, long time, boolean destroyed, long destroyedTime, UUID displayUUID, UUID interactUUID,
+			String graveDisplayType) {
 		this.uuid = uuid;
 		this.location = loc;
 		this.items = items != null ? items : new HashMap<Integer, ItemStack>();
@@ -65,11 +97,12 @@ public class GravesConfig implements ConfigurationSerializable {
 		this.destroyedTime = destroyedTime;
 		this.displayUUID = displayUUID;
 		this.interactUUID = interactUUID;
+		this.graveDisplayType = normalizeDisplayType(graveDisplayType, displayUUID);
 	}
 
 	@Override
 	public Map<String, Object> serialize() {
-		Map<String, Object> serialized = new HashMap<>();
+		Map<String, Object> serialized = new HashMap<String, Object>();
 
 		serialized.put("DeathMessage", deathMessage);
 		serialized.put("Time", time);
@@ -90,6 +123,9 @@ public class GravesConfig implements ConfigurationSerializable {
 		serialized.put("EXP", exp);
 		serialized.put("Destroyed", destroyed);
 		serialized.put("DestroyedTime", destroyedTime);
+
+		// New: store the display type used for this grave
+		serialized.put("GraveDisplayType", graveDisplayType);
 
 		// New primary format
 		try {
@@ -128,6 +164,13 @@ public class GravesConfig implements ConfigurationSerializable {
 				.valueOf((deserialize.get("Destroyed") != null ? deserialize.get("Destroyed").toString() : "false"));
 		long destroyedTime = NumberConversions.toLong(deserialize.get("DestroyedTime"));
 
+		// New: display type (fallback inference for older saves)
+		String displayTypeStr = null;
+		Object dtObj = deserialize.get("GraveDisplayType");
+		if (dtObj != null) {
+			displayTypeStr = dtObj.toString();
+		}
+
 		HashMap<Integer, ItemStack> items = new HashMap<Integer, ItemStack>();
 
 		// Preferred: encoded first
@@ -163,6 +206,36 @@ public class GravesConfig implements ConfigurationSerializable {
 		}
 
 		return new GravesConfig(uuid, playerName, loc, items, exp, deathMessage, time, destroyed, destroyedTime,
-				displayUUID, interactUUID);
+				displayUUID, interactUUID, normalizeDisplayType(displayTypeStr, displayUUID));
+	}
+
+	/**
+	 * Normalizes and validates a display type string. If missing or invalid,
+	 * attempts to infer from stored UUIDs for backwards compatibility.
+	 *
+	 * @param value       Raw stored value
+	 * @param displayUUID Display entity UUID
+	 * @return Valid enum name
+	 */
+	private static String normalizeDisplayType(String value, UUID displayUUID) {
+		// Backwards compatibility inference
+		if (value == null || value.trim().isEmpty()) {
+			if (displayUUID != null) {
+				return GraveDisplayType.DISPLAY_ENTITY.name();
+			}
+			return GraveDisplayType.PLAYER_HEAD.name();
+		}
+
+		String normalized = value.trim().toUpperCase();
+
+		try {
+			return GraveDisplayType.valueOf(normalized).name();
+		} catch (Exception e) {
+			// Unknown value in storage, fallback
+			if (displayUUID != null) {
+				return GraveDisplayType.DISPLAY_ENTITY.name();
+			}
+			return GraveDisplayType.PLAYER_HEAD.name();
+		}
 	}
 }

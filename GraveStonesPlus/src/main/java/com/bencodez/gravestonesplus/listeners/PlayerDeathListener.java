@@ -8,7 +8,6 @@ import java.util.function.BiConsumer;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
-import org.bukkit.block.Skull;
 import org.bukkit.enchantments.Enchantment;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -217,26 +216,16 @@ public class PlayerDeathListener implements Listener {
 			public void run() {
 				Grave grave = new Grave(plugin,
 						new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlockFinal, itemsWithSlot,
-								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null));
+								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null,
+								plugin.getConfigFile().getGraveDisplayTypeEnum().name()));
 				grave.loadChunk(false);
 
-				if (!plugin.isUsingDisplayEntities()) {
-					Block block = emptyBlockFinal.getBlock();
-					block.setType(Material.PLAYER_HEAD);
-					if (block.getState() instanceof Skull) {
-						Skull skull = (Skull) block.getState();
-						skull.setOwningPlayer(event.getEntity());
-						skull.update();
-					}
-				}
+				grave.createGrave();
 
 				grave.createHologram();
 				grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
 				plugin.addGrave(grave);
 				grave.loadBlockMeta(emptyBlockFinal.getBlock());
-				if (plugin.isUsingDisplayEntities()) {
-					grave.createSkull();
-				}
 
 				HashMap<String, String> placeholders = new HashMap<String, String>();
 				placeholders.put("x", "" + emptyBlockFinal.getBlockX());

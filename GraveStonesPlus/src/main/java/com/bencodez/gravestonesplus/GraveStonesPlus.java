@@ -70,10 +70,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private Updater updater;
 
 	@Getter
-	@Setter
-	private boolean usingDisplayEntities = false;
-
-	@Getter
 	private GraveDisplayEntityHandle graveDisplayEntityHandler;
 
 	@Getter
@@ -266,10 +262,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		Bukkit.getPluginManager().registerEvents(new PlayerDeathListener(this), this);
 		Bukkit.getPluginManager().registerEvents(new PlayerInteract(this), this);
 		Bukkit.getPluginManager().registerEvents(new PlayerBreakBlock(this), this);
-		if (plugin.getConfigFile().isUseDisplayEntities()) {
-			usingDisplayEntities = true;
-			plugin.debug("Using display entities");
-		}
+
+		plugin.debug("Graves type: " + configFile.getGraveDisplayTypeEnum().name());
 
 		getCommand("gravestonesplus").setExecutor(new CommandGraveStonesPlus(this));
 		getCommand("gravestonesplus").setTabCompleter(new GraveStonesPlusTabCompleter(this));

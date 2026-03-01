@@ -9,23 +9,33 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockDropItemEvent;
+import org.bukkit.event.block.BlockExplodeEvent;
 import org.bukkit.event.block.BlockFromToEvent;
 import org.bukkit.event.block.BlockPhysicsEvent;
 import org.bukkit.event.block.BlockPistonExtendEvent;
 import org.bukkit.event.block.BlockPistonRetractEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.player.PlayerBucketEmptyEvent;
-import org.bukkit.event.block.BlockExplodeEvent;
 
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.graves.GraveDisplayType;
 import com.bencodez.simpleapi.messages.MessageAPI;
 
+/**
+ * Prevents griefing/physics/piston/explosion interactions with grave blocks.
+ * Also routes break interactions to grave claim logic.
+ */
 public class PlayerBreakBlock implements Listener {
 
 	private final GraveStonesPlus plugin;
 
+	/**
+	 * Constructor.
+	 *
+	 * @param plugin Plugin instance
+	 */
 	public PlayerBreakBlock(GraveStonesPlus plugin) {
 		this.plugin = plugin;
 	}
@@ -42,22 +52,48 @@ public class PlayerBreakBlock implements Listener {
 		return MiscUtils.getInstance().getBlockMeta(b, "Grave") != null || b.hasMetadata("Grave");
 	}
 
+	private Grave getGrave(Block b) {
+		if (b == null) {
+			return null;
+		}
+		Object obj = MiscUtils.getInstance().getBlockMeta(b, "Grave");
+		if (obj instanceof Grave) {
+			return (Grave) obj;
+		}
+		return null;
+	}
+
 	private boolean isPistonBase(Block b) {
-		if (b == null)
+		if (b == null) {
 			return false;
+		}
 		Material t = b.getType();
 		return t == Material.PISTON || t == Material.STICKY_PISTON;
 	}
 
+	private boolean isAnyGraveMarker(Material type) {
+		return type == Material.PLAYER_HEAD || type == Material.BARRIER || type == Material.CHEST;
+	}
+
+	private boolean isProtectedGraveMarker(Block b) {
+		return b != null && isAnyGraveMarker(b.getType()) && isProtected(b);
+	}
+
 	/**
-	 * Bedrock-breaker style contraptions can break blocks that are NOT in
-	 * event.getBlocks(). So we check the piston line + small bubble near its head.
+	 * Bedrock-breaker style contraptions can break blocks that are NOT in event.getBlocks().
+	 * So we check the piston line + small bubble near its head.
+	 *
+	 * @param pistonBase Piston base block
+	 * @param extendLengthGuess Length guess
+	 * @return True if a protected grave marker would be affected
 	 */
 	private boolean pistonWouldAffectProtected(Block pistonBase, int extendLengthGuess) {
-		if (!isPistonBase(pistonBase))
+		if (!isPistonBase(pistonBase)) {
 			return false;
-		if (!(pistonBase.getBlockData() instanceof Directional))
+		}
+		if (!(pistonBase.getBlockData() instanceof Directional)) {
 			return false;
+		}
 
 		Directional data = (Directional) pistonBase.getBlockData();
 		int max = Math.min(12, Math.max(1, extendLengthGuess));
@@ -65,8 +101,7 @@ public class PlayerBreakBlock implements Listener {
 		// Check line in front of piston
 		for (int i = 1; i <= max + 1; i++) {
 			Block front = pistonBase.getRelative(data.getFacing(), i);
-			if (isProtected(front)
-					&& (front.getType() == Material.PLAYER_HEAD || front.getType() == Material.BARRIER)) {
+			if (isProtectedGraveMarker(front)) {
 				return true;
 			}
 		}
@@ -77,8 +112,7 @@ public class PlayerBreakBlock implements Listener {
 			for (int dy = -1; dy <= 1; dy++) {
 				for (int dz = -1; dz <= 1; dz++) {
 					Block near = headPos.getRelative(dx, dy, dz);
-					if (isProtected(near)
-							&& (near.getType() == Material.PLAYER_HEAD || near.getType() == Material.BARRIER)) {
+					if (isProtectedGraveMarker(near)) {
 						return true;
 					}
 				}
@@ -89,11 +123,16 @@ public class PlayerBreakBlock implements Listener {
 	}
 
 	private void restoreIfRemovedNextTick(Block b, Material expected) {
-		if (b == null)
+		if (b == null) {
 			return;
-		Bukkit.getScheduler().runTask(plugin, () -> {
-			if (b.getType() == Material.AIR) {
-				b.setType(expected, false);
+		}
+		Bukkit.getScheduler().runTask(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				if (b.getType() == Material.AIR) {
+					b.setType(expected, false);
+				}
 			}
 		});
 	}
@@ -105,7 +144,7 @@ public class PlayerBreakBlock implements Listener {
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onEntityExplode(EntityExplodeEvent event) {
 		for (Block b : event.blockList().toArray(new Block[0])) {
-			if ((b.getType() == Material.PLAYER_HEAD || b.getType() == Material.BARRIER) && isProtected(b)) {
+			if (isProtectedGraveMarker(b)) {
 				event.blockList().remove(b);
 			}
 		}
@@ -114,7 +153,7 @@ public class PlayerBreakBlock implements Listener {
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onBlockExplode(BlockExplodeEvent event) {
 		for (Block b : event.blockList().toArray(new Block[0])) {
-			if ((b.getType() == Material.PLAYER_HEAD || b.getType() == Material.BARRIER) && isProtected(b)) {
+			if (isProtectedGraveMarker(b)) {
 				event.blockList().remove(b);
 			}
 		}
@@ -127,7 +166,7 @@ public class PlayerBreakBlock implements Listener {
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onItemDrop(BlockDropItemEvent event) {
 		Block b = event.getBlock();
-		if ((b.getType() == Material.PLAYER_HEAD || b.getType() == Material.BARRIER) && isProtected(b)) {
+		if (isProtectedGraveMarker(b)) {
 			event.setCancelled(true);
 		}
 	}
@@ -140,7 +179,7 @@ public class PlayerBreakBlock implements Listener {
 	public void onWaterMove(BlockFromToEvent event) {
 		if (event.getBlock().getType() == Material.WATER || event.getBlock().getType() == Material.LAVA) {
 			Block to = event.getToBlock();
-			if ((to.getType() == Material.PLAYER_HEAD || to.getType() == Material.BARRIER) && isProtected(to)) {
+			if (isProtectedGraveMarker(to)) {
 				event.setCancelled(true);
 			}
 		}
@@ -149,7 +188,7 @@ public class PlayerBreakBlock implements Listener {
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onWaterCreate(PlayerBucketEmptyEvent event) {
 		Block b = event.getBlock();
-		if ((b.getType() == Material.PLAYER_HEAD || b.getType() == Material.BARRIER) && isProtected(b)) {
+		if (isProtectedGraveMarker(b)) {
 			event.setCancelled(true);
 		}
 	}
@@ -165,71 +204,93 @@ public class PlayerBreakBlock implements Listener {
 		}
 
 		Block b = event.getBlock();
+		if (!isAnyGraveMarker(b.getType())) {
+			return;
+		}
 
-		// Barrier protection: if it's a protected grave barrier, never allow breaking
-		if (b.getType() == Material.BARRIER && isProtected(b)) {
+		Grave grave = getGrave(b);
+		if (grave == null) {
+			// Not a grave, allow normal behavior
+			return;
+		}
+
+		// Extra safety: only handle if this block is the correct marker for that grave
+		if (!grave.isValid()) {
+			// It's a grave meta but marker doesn't match expected; safest behavior is cancel break
 			event.setCancelled(true);
 			return;
 		}
 
-		// Existing skull logic, unchanged behavior, but now only runs for protected
-		// skulls
-		if (b.getType() == Material.PLAYER_HEAD) {
-			Object obj = MiscUtils.getInstance().getBlockMeta(b, "Grave");
-			if (obj == null) {
-				return;
-			}
-			Grave grave = (Grave) obj;
+		if (grave.getGravesConfig().isDestroyed()) {
+			plugin.debug("Grave already broken: " + grave.getGravesConfig().getLocation().toString());
+			event.setCancelled(true);
+			return;
+		}
 
-			if (grave.getGravesConfig().isDestroyed()) {
-				plugin.debug("Grave already broken: " + grave.getGravesConfig().getLocation().toString());
-				return;
+		/*
+		 * Marker-specific behavior:
+		 * - DISPLAY_ENTITY uses BARRIER: never allow vanilla break; claim via your own interactions (left click logic elsewhere)
+		 * - CHEST is fake: prevent drops/open grief; allow claim via break if owner/permission
+		 * - PLAYER_HEAD: existing behavior (claim on break)
+		 */
+		GraveDisplayType type = plugin.getConfigFile().getGraveDisplayTypeEnum();
+		try {
+			String stored = grave.getGravesConfig().getGraveDisplayType();
+			if (stored != null && !stored.trim().isEmpty()) {
+				type = GraveDisplayType.valueOf(stored.trim().toUpperCase());
 			}
+		} catch (Exception ignored) {
+			// keep config default
+		}
 
-			if (grave.isOwner(event.getPlayer())) {
+		// Barrier graves are never breakable (consistent with prior behavior)
+		if (type == GraveDisplayType.DISPLAY_ENTITY && b.getType() == Material.BARRIER) {
+			event.setCancelled(true);
+			return;
+		}
+
+		// From this point on, handle claim logic for breakable grave markers
+		if (grave.isOwner(event.getPlayer())) {
+			event.setDropItems(false);
+			grave.claim(event.getPlayer());
+			return;
+		}
+
+		if (event.isCancelled()) {
+			return;
+		}
+
+		if (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")) {
+			if (plugin.getConfigFile().isBreakOtherGravesWithPermission()) {
 				event.setDropItems(false);
 				grave.claim(event.getPlayer());
 				return;
 			}
-
-			if (event.isCancelled()) {
-				return;
-			}
-
-			if (event.getPlayer().hasPermission("GraveStonesPlus.BreakOtherGraves")) {
-				if (plugin.getConfigFile().isBreakOtherGravesWithPermission()) {
-					event.setDropItems(false);
-					grave.claim(event.getPlayer());
-					return;
-				} else {
-					plugin.debug("Config option disabled to break other graves");
-				}
-			} else {
-				plugin.debug("No permission to break other graves");
-			}
-
-			event.getPlayer().sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatNotYourGrave()));
-			event.setCancelled(true);
+			plugin.debug("Config option disabled to break other graves");
+		} else {
+			plugin.debug("No permission to break other graves");
 		}
+
+		event.getPlayer().sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatNotYourGrave()));
+		event.setCancelled(true);
 	}
 
 	// --------------------
 	// Pistons (extend + retract)
 	// --------------------
 
+	@SuppressWarnings("deprecation")
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onPistonExtend(BlockPistonExtendEvent event) {
-		// If any moved block is protected, cancel
+		// If any moved block is a protected grave marker, cancel
 		for (Block block : event.getBlocks()) {
-			if ((block.getType() == Material.PLAYER_HEAD || block.getType() == Material.BARRIER)
-					&& isProtected(block)) {
+			if (isProtectedGraveMarker(block)) {
 				event.setCancelled(true);
 				return;
 			}
 		}
 
-		// Bedrock breaker defense: cancel if piston would affect protected blocks even
-		// if not in moved list
+		// Bedrock breaker defense: cancel if piston would affect protected blocks even if not in moved list
 		if (pistonWouldAffectProtected(event.getBlock(), event.getLength())) {
 			event.setCancelled(true);
 		}
@@ -238,8 +299,7 @@ public class PlayerBreakBlock implements Listener {
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onPistonRetract(BlockPistonRetractEvent event) {
 		for (Block block : event.getBlocks()) {
-			if ((block.getType() == Material.PLAYER_HEAD || block.getType() == Material.BARRIER)
-					&& isProtected(block)) {
+			if (isProtectedGraveMarker(block)) {
 				event.setCancelled(true);
 				return;
 			}
@@ -259,15 +319,18 @@ public class PlayerBreakBlock implements Listener {
 	public void onPhysics(BlockPhysicsEvent event) {
 		Block b = event.getBlock();
 
-		if (b.getType() == Material.BARRIER && isProtected(b)) {
+		if (isProtectedGraveMarker(b)) {
 			event.setCancelled(true);
-			restoreIfRemovedNextTick(b, Material.BARRIER);
-			return;
-		}
 
-		if (b.getType() == Material.PLAYER_HEAD && isProtected(b)) {
-			event.setCancelled(true);
-			restoreIfRemovedNextTick(b, Material.PLAYER_HEAD);
+			Material t = b.getType();
+			// If it got removed, restore the correct marker type
+			if (t == Material.BARRIER) {
+				restoreIfRemovedNextTick(b, Material.BARRIER);
+			} else if (t == Material.PLAYER_HEAD) {
+				restoreIfRemovedNextTick(b, Material.PLAYER_HEAD);
+			} else if (t == Material.CHEST) {
+				restoreIfRemovedNextTick(b, Material.CHEST);
+			}
 		}
 	}
 }

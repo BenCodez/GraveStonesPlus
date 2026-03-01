@@ -70,6 +70,8 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		sb.append(qi("z")).append(" INT NOT NULL, ");
 		sb.append(qi("display_uuid")).append(" VARCHAR(36), ");
 		sb.append(qi("interact_uuid")).append(" VARCHAR(36), ");
+		// NEW: store which display type was used (PLAYER_HEAD / DISPLAY_ENTITY / CHEST)
+		sb.append(qi("grave_display_type")).append(" VARCHAR(32), ");
 		sb.append(qi("items_encoded")).append(" MEDIUMTEXT NOT NULL, ");
 		sb.append("PRIMARY KEY (").append(qi("id")).append("), ");
 		sb.append("INDEX ").append(qi("idx_player_uuid")).append(" (").append(qi("player_uuid")).append("), ");
@@ -119,8 +121,8 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		}
 
 		String sql = "INSERT INTO " + qi(tableName)
-				+ " (broken, player_uuid, player_name, death_message, time, exp, destroyed, destroyed_time, world_uuid, x, y, z, display_uuid, interact_uuid, items_encoded)"
-				+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+				+ " (broken, player_uuid, player_name, death_message, time, exp, destroyed, destroyed_time, world_uuid, x, y, z, display_uuid, interact_uuid, grave_display_type, items_encoded)"
+				+ " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 				+ " ON DUPLICATE KEY UPDATE "
 				+ qi("broken") + "=VALUES(" + qi("broken") + "), "
 				+ qi("player_name") + "=VALUES(" + qi("player_name") + "), "
@@ -130,6 +132,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 				+ qi("destroyed_time") + "=VALUES(" + qi("destroyed_time") + "), "
 				+ qi("display_uuid") + "=VALUES(" + qi("display_uuid") + "), "
 				+ qi("interact_uuid") + "=VALUES(" + qi("interact_uuid") + "), "
+				+ qi("grave_display_type") + "=VALUES(" + qi("grave_display_type") + "), "
 				+ qi("items_encoded") + "=VALUES(" + qi("items_encoded") + ");";
 
 		try (Connection conn = mysql.getConnectionManager().getConnection();
@@ -143,63 +146,63 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		}
 	}
 
-/**
- * Update an existing grave row (no insert). Intended for state transitions such as removal.
- * If the row does not exist, this method does nothing.
- *
- * @param grave grave config
- * @param broken whether grave is broken
- */
-public void updateExistingGrave(GravesConfig grave, boolean broken) {
-	if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getLocation().getWorld() == null) {
-		return;
+	/**
+	 * Update an existing grave row (no insert). Intended for state transitions such as removal.
+	 * If the row does not exist, this method does nothing.
+	 *
+	 * @param grave grave config
+	 * @param broken whether grave is broken
+	 */
+	public void updateExistingGrave(GravesConfig grave, boolean broken) {
+		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getLocation().getWorld() == null) {
+			return;
+		}
+
+		String sql = "UPDATE " + qi(tableName) + " SET "
+				+ qi("broken") + "=?, "
+				+ qi("player_name") + "=?, "
+				+ qi("death_message") + "=?, "
+				+ qi("exp") + "=?, "
+				+ qi("destroyed") + "=?, "
+				+ qi("destroyed_time") + "=?, "
+				+ qi("display_uuid") + "=?, "
+				+ qi("interact_uuid") + "=?, "
+				+ qi("grave_display_type") + "=?, "
+				+ qi("items_encoded") + "=? WHERE "
+				+ qi("player_uuid") + "=? AND "
+				+ qi("world_uuid") + "=? AND "
+				+ qi("x") + "=? AND "
+				+ qi("y") + "=? AND "
+				+ qi("z") + "=? AND "
+				+ qi("time") + "=?;";
+
+		try (Connection conn = mysql.getConnectionManager().getConnection();
+				PreparedStatement ps = conn.prepareStatement(sql)) {
+
+			ps.setInt(1, broken ? 1 : 0);
+			ps.setString(2, safeString(grave.getPlayerName()));
+			ps.setString(3, safeString(grave.getDeathMessage()));
+			ps.setInt(4, grave.getExp());
+			ps.setInt(5, grave.isDestroyed() ? 1 : 0);
+			ps.setLong(6, grave.getDestroyedTime());
+			ps.setString(7, grave.getDisplayUUID() != null ? grave.getDisplayUUID().toString() : null);
+			ps.setString(8, grave.getInteractUUID() != null ? grave.getInteractUUID().toString() : null);
+			ps.setString(9, safeString(grave.getGraveDisplayType()));
+			ps.setString(10, encodeItemsSafe(grave.getItems()));
+
+			ps.setString(11, grave.getUuid().toString());
+			ps.setString(12, grave.getLocation().getWorld().getUID().toString());
+			ps.setInt(13, grave.getLocation().getBlockX());
+			ps.setInt(14, grave.getLocation().getBlockY());
+			ps.setInt(15, grave.getLocation().getBlockZ());
+			ps.setLong(16, grave.getTime());
+
+			ps.executeUpdate();
+
+		} catch (SQLException e) {
+			debug(e);
+		}
 	}
-
-	String sql = "UPDATE " + qi(tableName) + " SET "
-			+ qi("broken") + "=?, "
-			+ qi("player_name") + "=?, "
-			+ qi("death_message") + "=?, "
-			+ qi("exp") + "=?, "
-			+ qi("destroyed") + "=?, "
-			+ qi("destroyed_time") + "=?, "
-			+ qi("display_uuid") + "=?, "
-			+ qi("interact_uuid") + "=?, "
-			+ qi("items_encoded") + "=? WHERE "
-			+ qi("player_uuid") + "=? AND "
-			+ qi("world_uuid") + "=? AND "
-			+ qi("x") + "=? AND "
-			+ qi("y") + "=? AND "
-			+ qi("z") + "=? AND "
-			+ qi("time") + "=?;";
-
-	try (Connection conn = mysql.getConnectionManager().getConnection();
-			PreparedStatement ps = conn.prepareStatement(sql)) {
-
-		ps.setInt(1, broken ? 1 : 0);
-		ps.setString(2, safeString(grave.getPlayerName()));
-		ps.setString(3, safeString(grave.getDeathMessage()));
-		ps.setInt(4, grave.getExp());
-		ps.setInt(5, grave.isDestroyed() ? 1 : 0);
-		ps.setLong(6, grave.getDestroyedTime());
-		ps.setString(7, grave.getDisplayUUID() != null ? grave.getDisplayUUID().toString() : null);
-		ps.setString(8, grave.getInteractUUID() != null ? grave.getInteractUUID().toString() : null);
-		ps.setString(9, encodeItemsSafe(grave.getItems()));
-
-		ps.setString(10, grave.getUuid().toString());
-		ps.setString(11, grave.getLocation().getWorld().getUID().toString());
-		ps.setInt(12, grave.getLocation().getBlockX());
-		ps.setInt(13, grave.getLocation().getBlockY());
-		ps.setInt(14, grave.getLocation().getBlockZ());
-		ps.setLong(15, grave.getTime());
-
-		ps.executeUpdate();
-
-	} catch (SQLException e) {
-		debug(e);
-	}
-}
-
-
 
 	/**
 	 * Update only the broken flag for a grave (incremental write).
@@ -315,6 +318,9 @@ public void updateExistingGrave(GravesConfig grave, boolean broken) {
 					UUID display = safeUuid(rs.getString("display_uuid"));
 					UUID interact = safeUuid(rs.getString("interact_uuid"));
 
+					// NEW: may be null for older rows
+					String graveDisplayType = rs.getString("grave_display_type");
+
 					out.add(new GravesConfig(playerUuid,
 							playerName != null ? playerName : "",
 							loc,
@@ -325,7 +331,8 @@ public void updateExistingGrave(GravesConfig grave, boolean broken) {
 							destroyed,
 							destroyedTime,
 							display,
-							interact));
+							interact,
+							graveDisplayType));
 				}
 			}
 
@@ -351,7 +358,8 @@ public void updateExistingGrave(GravesConfig grave, boolean broken) {
 		ps.setInt(12, g.getLocation().getBlockZ());
 		ps.setString(13, g.getDisplayUUID() != null ? g.getDisplayUUID().toString() : null);
 		ps.setString(14, g.getInteractUUID() != null ? g.getInteractUUID().toString() : null);
-		ps.setString(15, encodeItemsSafe(g.getItems()));
+		ps.setString(15, safeString(g.getGraveDisplayType()));
+		ps.setString(16, encodeItemsSafe(g.getItems()));
 	}
 
 	private static String safeString(String s) {

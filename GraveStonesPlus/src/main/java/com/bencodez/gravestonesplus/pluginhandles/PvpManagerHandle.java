@@ -5,8 +5,7 @@ import org.bukkit.entity.Player;
 
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 
-import me.NoChance.PvPManager.PvPManager;
-import me.NoChance.PvPManager.PvPlayer;
+import me.chancesd.pvpmanager.PvPManager;
 
 public class PvpManagerHandle {
 	private GraveStonesPlus plugin;
@@ -23,7 +22,7 @@ public class PvpManagerHandle {
 
 	public boolean canHaveGrave(Player p) {
 		if (pvpmanager != null) {
-			return !PvPlayer.get(p).isInCombat();
+			return !pvpmanager.getPlayerManager().get(p).isInCombat();
 		}
 		return true;
 	}

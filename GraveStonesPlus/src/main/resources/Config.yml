@@ -56,9 +56,9 @@ GlowingEffectDistance: 30
 # -1 is disabled
 GraveTimeLimit: -1
 
-# Number of hours to store borken graves
+# Amount of time graves are stored after they break before they are removed
 # This will allow restoring of graves that break before items can be obtained
-BrokenGraveTimeLimit: 96
+BrokenGraveTimeLimit: 7d
 
 # Distance in which /gravestonesplus claimgrave will claim graves
 GraveClaimDistance: 10

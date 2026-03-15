@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
 import org.bukkit.NamespacedKey;
@@ -35,6 +36,7 @@ import com.bencodez.gravestonesplus.storage.GraveStorageManager;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.file.YMLConfig;
 import com.bencodez.simpleapi.metrics.BStatsMetrics;
+import com.bencodez.simpleapi.time.ParsedDuration;
 import com.bencodez.simpleapi.updater.Updater;
 
 import lombok.Getter;
@@ -216,8 +218,11 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 								debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
 								brokenGraves.add(grave);
 							} else {
-								if (System.currentTimeMillis()
-										- gr.getDestroyedTime() > configFile.getBokenGraveTimeLimit() * 60 * 1000) {
+								ParsedDuration duration = ParsedDuration.parse(configFile.getBrokenGraveTimeLimit(),
+										TimeUnit.HOURS);
+								long limitMillis = duration.getMillis();
+
+								if (System.currentTimeMillis() - gr.getDestroyedTime() > limitMillis) {
 									debug("Broken Grave at " + grave.getGravesConfig().getLocation()
 											+ " has reached it's time limit and will be removed");
 								} else {

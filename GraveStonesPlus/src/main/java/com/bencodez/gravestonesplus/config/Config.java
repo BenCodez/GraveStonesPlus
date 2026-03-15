@@ -101,8 +101,8 @@ public class Config extends YMLFile {
 	private int graveTimeLimit = -1;
 
 	@Getter
-	@ConfigDataInt(path = "BrokenGraveTimeLimit")
-	private int bokenGraveTimeLimit = 96;
+	@ConfigDataString(path = "BrokenGraveTimeLimit")
+	private String brokenGraveTimeLimit = "7d";
 
 	@Getter
 	@ConfigDataInt(path = "GraveClaimDistance")

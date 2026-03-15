@@ -4,9 +4,9 @@ import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Map.Entry;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
 import org.bukkit.Location;
@@ -40,6 +40,7 @@ import com.bencodez.gravestonesplus.events.GraveRemoveEvent;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.messages.MessageAPI;
+import com.bencodez.simpleapi.time.ParsedDuration;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -64,8 +65,10 @@ public class Grave {
 	@Getter
 	private Hologram glowingHologram;
 
-	@Getter
-	private Timer timer;
+	/**
+	 * Scheduled expiration task for this grave.
+	 */
+	private ScheduledFuture<?> expirationTask;
 
 	@Getter
 	@Setter
@@ -84,7 +87,7 @@ public class Grave {
 	/**
 	 * Constructor.
 	 *
-	 * @param plugin Plugin instance
+	 * @param plugin       Plugin instance
 	 * @param gravesConfig Stored grave config
 	 */
 	public Grave(GraveStonesPlus plugin, GravesConfig gravesConfig) {
@@ -490,33 +493,107 @@ public class Grave {
 		removeGrave(GraveRemoveReason.MANUAL_REMOVE);
 	}
 
-	private void schedule(final int timeLimit) {
-		if (timer != null) {
-			timer.cancel();
+	/**
+	 * Schedule the grave expiration task using the shared scheduler.
+	 *
+	 * @param duration the configured grave lifetime
+	 */
+	private void schedule(ParsedDuration duration) {
+		if (duration == null) {
+			return;
 		}
-		timer = new Timer();
-		timer.schedule(new TimerTask() {
+
+		if (expirationTask != null && !expirationTask.isDone()) {
+			expirationTask.cancel(false);
+		}
+
+		final long durationMillis = duration.getMillis();
+		long deathTime = gravesConfig.getTime();
+		long expireTime = deathTime + durationMillis;
+		long delay = expireTime - System.currentTimeMillis();
+
+		if (delay <= 0) {
+			removeGrave(GraveRemoveReason.EXPIRED);
+			return;
+		}
+
+		expirationTask = plugin.getTimer().schedule(new Runnable() {
 
 			@Override
 			public void run() {
-				long deathTime = gravesConfig.getTime();
-				long timedPassed = deathTime + (timeLimit * 60 * 1000L);
-				if (timedPassed < System.currentTimeMillis()) {
+				long currentExpireTime = gravesConfig.getTime() + durationMillis;
+				if (currentExpireTime < System.currentTimeMillis()) {
 					removeGrave(GraveRemoveReason.EXPIRED);
 				}
 			}
-		}, timeLimit * 60 * 1000L + 500L);
+		}, delay + 500L, TimeUnit.MILLISECONDS);
 	}
 
+	/**
+	 * Legacy support for minute-based grave time limits.
+	 *
+	 * @param timeLimit the time limit in minutes
+	 */
 	public void checkTimeLimit(int timeLimit) {
-		if (timeLimit > 0) {
-			long deathTime = gravesConfig.getTime();
-			long timedPassed = deathTime + (timeLimit * 60 * 1000L);
-			if (timedPassed < System.currentTimeMillis()) {
-				removeGrave(GraveRemoveReason.EXPIRED);
-			} else {
-				schedule(timeLimit);
+		if (timeLimit <= 0) {
+			return;
+		}
+
+		checkTimeLimit(ParsedDuration.parse(timeLimit + "", TimeUnit.MINUTES));
+	}
+
+	/**
+	 * Checks the configured grave time limit and removes or schedules the grave.
+	 *
+	 * @param timeLimitRaw the configured time limit value, supporting either legacy
+	 *                     minute values such as {@code 30} or duration values such
+	 *                     as {@code 30m}, {@code 2h}, or {@code 7d}
+	 */
+	public void checkTimeLimit(String timeLimitRaw) {
+		if (timeLimitRaw == null || timeLimitRaw.trim().isEmpty()) {
+			return;
+		}
+
+		String trimmed = timeLimitRaw.trim();
+
+		try {
+			if (trimmed.matches("\\d+")) {
+				checkTimeLimit(Integer.parseInt(trimmed));
+				return;
 			}
+
+			ParsedDuration duration = ParsedDuration.parse(trimmed, TimeUnit.MINUTES);
+			checkTimeLimit(duration);
+		} catch (NumberFormatException e) {
+			plugin.debug("Invalid numeric grave time limit: " + timeLimitRaw);
+		} catch (Exception e) {
+			plugin.debug("Invalid grave time limit duration: " + timeLimitRaw);
+		}
+	}
+
+	/**
+	 * Checks the configured grave time limit using a parsed duration and removes or
+	 * schedules the grave.
+	 *
+	 * @param timeLimit the parsed duration
+	 */
+	public void checkTimeLimit(ParsedDuration timeLimit) {
+		if (timeLimit == null) {
+			return;
+		}
+
+		long durationMillis = timeLimit.getMillis();
+		if (durationMillis <= 0) {
+			return;
+		}
+
+		long deathTime = gravesConfig.getTime();
+		long expireTime = deathTime + durationMillis;
+
+		if (expireTime < System.currentTimeMillis()) {
+			removeGrave(GraveRemoveReason.EXPIRED);
+		} else {
+			schedule(timeLimit);
 		}
 	}
 
@@ -701,9 +778,8 @@ public class Grave {
 	}
 
 	public void removeTimer() {
-		if (timer != null) {
-			timer.cancel();
-			timer = null;
+		if (expirationTask != null && !expirationTask.isDone()) {
+			expirationTask.cancel(false);
 		}
 	}
 

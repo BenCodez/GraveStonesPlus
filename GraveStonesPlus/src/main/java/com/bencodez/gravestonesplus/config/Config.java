@@ -97,8 +97,8 @@ public class Config extends YMLFile {
 	private int glowingEffectDistance = 30;
 
 	@Getter
-	@ConfigDataInt(path = "GraveTimeLimit")
-	private int graveTimeLimit = -1;
+	@ConfigDataString(path = "GraveTimeLimit")
+	private String graveTimeLimit = "";
 
 	@Getter
 	@ConfigDataString(path = "BrokenGraveTimeLimit")

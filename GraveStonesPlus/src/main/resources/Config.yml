@@ -25,7 +25,7 @@ Database:
   # - MARIADB
   # - POSTGRESQL
   DbType: MYSQL
-  
+
 # What block/entity to use to represent graves in the world.
 # Options:
 # - PLAYER_HEAD     (uses the player's skull)
@@ -49,21 +49,27 @@ DisabledWorlds: []
 
 # Enable a glowing effect near grave
 GlowingEffectNearGrave: true
+
 # Distance for glowing effect
 GlowingEffectDistance: 30
 
-# Timelimit in minutes before grave is removed
-# -1 is disabled
-GraveTimeLimit: -1
+# Time limit before grave is removed
+# Supports durations such as:
+# 10m, 1h, 12h, 1d, 7d
+# Set to '' to disable
+GraveTimeLimit: ''
 
-# Amount of time graves are stored after they break before they are removed
-# This will allow restoring of graves that break before items can be obtained
+# Amount of time broken graves are stored before they are removed
+# This allows restoring graves that break before items can be obtained
+# Supports durations such as:
+# 10m, 1h, 12h, 1d, 7d
+# Set to '' to disable
 BrokenGraveTimeLimit: 7d
 
 # Distance in which /gravestonesplus claimgrave will claim graves
 GraveClaimDistance: 10
 
-# Limit number of graves to can be created by a single person
+# Limit number of graves that can be created by a single person
 GraveLimit: 10
 
 # Drop items from grave if a grave gets removed due to GraveLimit above
@@ -76,8 +82,8 @@ DisableArmorStands: false
 # If enabled it will give a compass on respawn pointing to last grave
 GiveCompassOnRespawn: false
 
-# Chance for items to drops
-# This perctange is caculated on every item
+# Chance for items to drop
+# This percentage is calculated on every item
 PercentageDrops: 100
 
 # Keeps items with lore set here on player death
@@ -102,9 +108,9 @@ Format:
   ItemsNotInCorrectSlot: "Some items didn't return to the correct slot"
   NotYourGrave: 'Not your grave!'
   ClickMessage: "%player%'s grave. Died at %time%. Reason: %reason%"
+
   # Hologram message
   Grave:
     Top: '%player% died here!'
     Middle: 'Died at %time%'
     Bottom: 'Reason: %reason%'
-  

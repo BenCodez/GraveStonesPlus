@@ -2,6 +2,7 @@ package com.bencodez.gravestonesplus.config;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.concurrent.TimeUnit;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.gravestonesplus.graves.GraveDisplayType;
@@ -11,6 +12,7 @@ import com.bencodez.simpleapi.file.annotation.ConfigDataBoolean;
 import com.bencodez.simpleapi.file.annotation.ConfigDataInt;
 import com.bencodez.simpleapi.file.annotation.ConfigDataListString;
 import com.bencodez.simpleapi.file.annotation.ConfigDataString;
+import com.bencodez.simpleapi.time.ParsedDuration;
 
 import lombok.Getter;
 
@@ -32,12 +34,38 @@ public class Config extends YMLFile {
 	public void loadValues() {
 		migrateLegacyConfigKeys();
 		new AnnotationHandler().load(getData(), this);
+		breakOtherGravesTimeParsed = ParsedDuration.parse(breakOtherGravesTime, TimeUnit.SECONDS);
 	}
 
 	@Override
 	public void onFileCreation() {
 		getPlugin().saveResource("Config.yml", true);
 	}
+
+	/**
+	 * Enables breaking other players' graves.
+	 */
+	@Getter
+	@ConfigDataBoolean(path = "BreakOtherGraves.Enabled")
+	private boolean breakOtherGravesEnabled = false;
+
+	/**
+	 * Time required to break another player's grave. Supports: 3s, 500ms, 1m, etc.
+	 */
+	@Getter
+	@ConfigDataString(path = "BreakOtherGraves.BreakTime")
+	private String breakOtherGravesTime = "3s";
+	
+	@Getter
+	@ConfigDataBoolean(path = "BreakOtherGraves.SendMessage")
+	private boolean breakOtherGravesSendMessage = true;
+	
+	@Getter
+	@ConfigDataBoolean(path = "BreakOtherGraves.ActionBarMessage")
+	private boolean breakOtherGravesActionBarMessage = true;
+
+	@Getter
+	private ParsedDuration breakOtherGravesTimeParsed;
 
 	/**
 	 * Converts legacy config keys to the new config structure. This allows older

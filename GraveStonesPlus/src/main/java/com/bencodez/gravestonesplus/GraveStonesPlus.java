@@ -18,6 +18,7 @@ import org.bukkit.permissions.PermissionDefault;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
+import com.bencodez.gravestonesplus.breaking.OtherPlayerBreakManager;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
@@ -25,9 +26,9 @@ import com.bencodez.gravestonesplus.config.Config;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GraveDisplayEntityHandle;
-import com.bencodez.gravestonesplus.listeners.PlayerBreakBlock;
+import com.bencodez.gravestonesplus.listeners.GraveBlockProtectionListener;
+import com.bencodez.gravestonesplus.listeners.GraveClaimListener;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
-import com.bencodez.gravestonesplus.listeners.PlayerInteract;
 import com.bencodez.gravestonesplus.nbt.NBTConfigManager;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
 import com.bencodez.gravestonesplus.pluginhandles.SlimefunHandle;
@@ -81,6 +82,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Getter
 	private boolean nbtAPIHooked = false;
+
+	@Getter
+	private OtherPlayerBreakManager otherPlayerBreakManager;
 
 	public void addGrave(Grave grave) {
 		if (grave == null || grave.getGravesConfig() == null) {
@@ -280,9 +284,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		commandLoader = new CommandLoader(this);
 		commandLoader.loadCommands();
 
+		otherPlayerBreakManager = new OtherPlayerBreakManager(this);
+		otherPlayerBreakManager.start();
+
 		Bukkit.getPluginManager().registerEvents(new PlayerDeathListener(this), this);
-		Bukkit.getPluginManager().registerEvents(new PlayerInteract(this), this);
-		Bukkit.getPluginManager().registerEvents(new PlayerBreakBlock(this), this);
+		Bukkit.getPluginManager().registerEvents(new GraveClaimListener(this), this);
+		Bukkit.getPluginManager().registerEvents(new GraveBlockProtectionListener(this), this);
 
 		plugin.debug("Graves type: " + configFile.getGraveDisplayTypeEnum().name());
 
@@ -333,6 +340,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
 		if (Bukkit.getPluginManager().isPluginEnabled("Slimefun")) {
 			slimefun = new SlimefunHandle(this);
+		}
+
+		if (otherPlayerBreakManager != null) {
+			otherPlayerBreakManager.stop();
 		}
 
 		if (Bukkit.getPluginManager().isPluginEnabled("NBTAPI")) {

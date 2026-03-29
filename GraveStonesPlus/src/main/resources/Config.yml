@@ -44,6 +44,12 @@ BreakOtherGravesWithPermission: false
 # Requires a restart
 GiveBreakOtherGravesPermission: false
 
+BreakOtherGraves:
+  Enabled: false
+  BreakTime: 20s
+  SendMessage: true
+  ActionBarMessage: true
+
 # List of worlds with graves disabled
 DisabledWorlds: []
 

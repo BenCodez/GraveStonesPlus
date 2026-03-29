@@ -54,7 +54,11 @@ public class Config extends YMLFile {
 	 */
 	@Getter
 	@ConfigDataString(path = "BreakOtherGraves.BreakTime")
-	private String breakOtherGravesTime = "3s";
+	private String breakOtherGravesTime = "10s";
+	
+	@Getter
+	@ConfigDataString(path = "BreakOtherGraves.HitTimeout")
+	private String breakOtherHitTimeout = "5s";
 	
 	@Getter
 	@ConfigDataBoolean(path = "BreakOtherGraves.SendMessage")

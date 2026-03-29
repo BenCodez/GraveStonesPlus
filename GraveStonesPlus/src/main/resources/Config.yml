@@ -44,9 +44,11 @@ BreakOtherGravesWithPermission: false
 # Requires a restart
 GiveBreakOtherGravesPermission: false
 
+# Break other graves after a certain amount of hitting the grave
 BreakOtherGraves:
   Enabled: false
   BreakTime: 20s
+  HitTimeout: 5s
   SendMessage: true
   ActionBarMessage: true
 

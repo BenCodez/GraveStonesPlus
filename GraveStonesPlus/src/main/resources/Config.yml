@@ -44,10 +44,12 @@ BreakOtherGravesWithPermission: false
 # Requires a restart
 GiveBreakOtherGravesPermission: false
 
-# Break other graves after a certain amount of hitting the grave
+# Break other graves (not owned by the player) after a certain amount of hitting the grave
+# Can be set in the format: 10s, 1m, 1h, etc.
 BreakOtherGraves:
   Enabled: false
   BreakTime: 20s
+  # Reset breaking progress after not hitting the grave for this amount of time
   HitTimeout: 5s
   SendMessage: true
   ActionBarMessage: true

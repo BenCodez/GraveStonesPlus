@@ -19,6 +19,7 @@ public class PlayerDeathNBTHandle {
 	 * @param rules The list of rules to match against.
 	 * @return True if the item matches any rule; otherwise, false.
 	 */
+	@SuppressWarnings("deprecation")
 	public boolean doesItemMatchAnyRule(GraveStonesPlus plugin, ItemStack item, List<NBTRule> rules) {
 		if (item == null || item.getType().isAir() || rules == null || rules.isEmpty()) {
 			return false;

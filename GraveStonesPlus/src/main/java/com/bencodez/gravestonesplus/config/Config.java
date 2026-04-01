@@ -2,7 +2,6 @@ package com.bencodez.gravestonesplus.config;
 
 import java.io.File;
 import java.util.ArrayList;
-import java.util.concurrent.TimeUnit;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.gravestonesplus.graves.GraveDisplayType;
@@ -11,6 +10,7 @@ import com.bencodez.simpleapi.file.annotation.AnnotationHandler;
 import com.bencodez.simpleapi.file.annotation.ConfigDataBoolean;
 import com.bencodez.simpleapi.file.annotation.ConfigDataInt;
 import com.bencodez.simpleapi.file.annotation.ConfigDataListString;
+import com.bencodez.simpleapi.file.annotation.ConfigDataParsedDuration;
 import com.bencodez.simpleapi.file.annotation.ConfigDataString;
 import com.bencodez.simpleapi.time.ParsedDuration;
 
@@ -34,7 +34,6 @@ public class Config extends YMLFile {
 	public void loadValues() {
 		migrateLegacyConfigKeys();
 		new AnnotationHandler().load(getData(), this);
-		breakOtherGravesTimeParsed = ParsedDuration.parse(breakOtherGravesTime, TimeUnit.SECONDS);
 	}
 
 	@Override
@@ -49,27 +48,33 @@ public class Config extends YMLFile {
 	@ConfigDataBoolean(path = "BreakOtherGraves.Enabled")
 	private boolean breakOtherGravesEnabled = false;
 
-	/**
-	 * Time required to break another player's grave. Supports: 3s, 500ms, 1m, etc.
-	 */
 	@Getter
-	@ConfigDataString(path = "BreakOtherGraves.BreakTime")
-	private String breakOtherGravesTime = "10s";
-	
+	@ConfigDataBoolean(path = "BreakOtherGraves.RequirePermission", secondPath = "GiveBreakOtherGravesPermission")
+	private boolean breakOtherGravesRequirePermission = false;
+
 	@Getter
-	@ConfigDataString(path = "BreakOtherGraves.HitTimeout")
-	private String breakOtherHitTimeout = "5s";
-	
+	@ConfigDataBoolean(path = "BreakOtherGraves.RequireBreakTime")
+	private boolean breakOtherGravesRequireBreakTime = false;
+
+	@Getter
+	@ConfigDataParsedDuration(path = "BreakOtherGraves.BreakTime")
+	private ParsedDuration breakOtherGravesTime = ParsedDuration.ofMillis(20000);
+
+	@Getter
+	@ConfigDataParsedDuration(path = "BreakOtherGraves.HitTimeout")
+	private ParsedDuration breakOtherGravesHitTimeout = ParsedDuration.ofMillis(5000);
+
+	@Getter
+	@ConfigDataParsedDuration(path = "BreakOtherGraves.TimeBeforeBreakable")
+	private ParsedDuration breakOtherGravesTimeBeforeBreakable = ParsedDuration.ofMillis(0);
+
 	@Getter
 	@ConfigDataBoolean(path = "BreakOtherGraves.SendMessage")
 	private boolean breakOtherGravesSendMessage = true;
-	
+
 	@Getter
 	@ConfigDataBoolean(path = "BreakOtherGraves.ActionBarMessage")
 	private boolean breakOtherGravesActionBarMessage = true;
-
-	@Getter
-	private ParsedDuration breakOtherGravesTimeParsed;
 
 	/**
 	 * Converts legacy config keys to the new config structure. This allows older
@@ -95,10 +100,6 @@ public class Config extends YMLFile {
 			saveData();
 		}
 	}
-
-	@Getter
-	@ConfigDataBoolean(path = "BreakOtherGravesWithPermission")
-	private boolean breakOtherGravesWithPermission = false;
 
 	@Getter
 	@ConfigDataBoolean(path = "GiveCompassOnRespawn")
@@ -193,27 +194,35 @@ public class Config extends YMLFile {
 
 	@Getter
 	@ConfigDataString(path = "Format.Death")
-	private String formatDeath = "Your grave is at %x%, %y%, %z%";
+	private String formatDeath = "&aYour grave is at %x%, %y%, %z%";
 
 	@Getter
 	@ConfigDataString(path = "Format.GraveBroke")
-	private String formatGraveBroke = "You broke your grave!";
+	private String formatGraveBroke = "&aYou broke your grave!";
 
 	@Getter
 	@ConfigDataString(path = "Format.ItemsNotInCorrectSlot")
-	private String formatItemsNotInGrave = "Some items didn't return to the correct slot";
+	private String formatItemsNotInGrave = "&aSome items didn't return to the correct slot";
 
 	@Getter
 	@ConfigDataString(path = "Format.GraveLimitBreak")
-	private String formatGraveLimitBreak = "Breaking oldest grave due to limit reached";
+	private String formatGraveLimitBreak = "&cBreaking oldest grave due to limit reached";
 
 	@Getter
 	@ConfigDataString(path = "Format.NotYourGrave")
-	private String formatNotYourGrave = "Not your grave!";
+	private String formatNotYourGrave = "&cNot your grave!";
 
 	@Getter
 	@ConfigDataString(path = "Format.ClickMessage")
-	private String formatClickMessage = "%player%'s grave. Died at %time%. Reason: %reason%";
+	private String formatClickMessage = "&a%player%'s grave. Died at %time%. Reason: %reason%";
+
+	@Getter
+	@ConfigDataString(path = "Format.UnableToClaimDelay")
+	private String formatUnableToClaimDelay = "&cNot able to claim yet!";
+
+	@Getter
+	@ConfigDataString(path = "Format.NotEnoughPermission")
+	private String formatNotEnoughPermission = "&cYou don't have permission to do that!";
 
 	@Getter
 	@ConfigDataBoolean(path = "Format.Help.RequirePermission")

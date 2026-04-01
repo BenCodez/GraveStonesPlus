@@ -4,7 +4,6 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
@@ -313,7 +312,7 @@ public class OtherPlayerBreakManager {
 	 * @return required break time
 	 */
 	private ParsedDuration getRequiredBreakTime() {
-		return plugin.getConfigFile().getBreakOtherGravesTimeParsed();
+		return plugin.getConfigFile().getBreakOtherGravesTime();
 	}
 
 	/**
@@ -322,7 +321,7 @@ public class OtherPlayerBreakManager {
 	 * @return hit timeout
 	 */
 	private ParsedDuration getHitTimeout() {
-		return ParsedDuration.parse(plugin.getConfigFile().getBreakOtherHitTimeout(), TimeUnit.SECONDS);
+		return plugin.getConfigFile().getBreakOtherGravesHitTimeout();
 	}
 
 	/**

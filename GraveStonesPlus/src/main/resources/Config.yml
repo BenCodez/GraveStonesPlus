@@ -35,23 +35,30 @@ GraveDisplayType: PLAYER_HEAD
 
 DebugLevel: NONE
 
-# if enabled, you can break other graves with permission:
-# GraveStonesPlus.BreakOtherGraves
-BreakOtherGravesWithPermission: false
-
 # If true GraveStonesPlus.BreakOtherGraves will be given to all players by default
 # Requires BreakOtherGravesWithPermission enabled to work
 # Requires a restart
 GiveBreakOtherGravesPermission: false
 
-# Break other graves (not owned by the player) after a certain amount of hitting the grave
-# Can be set in the format: 10s, 1m, 1h, etc.
+
+# Control breaking other graves
 BreakOtherGraves:
+  # Allow breaking other graves
   Enabled: false
+  # if enabled, you can break other graves with permission:
+  # GraveStonesPlus.BreakOtherGraves
+  RequirePermission: true
+  # Break other graves (not owned by the player) after a certain amount of hitting the grave
+  # Can be set in the format: 10s, 1m, 1h, etc.
+  # If disabled graves can be broken immediately
+  RequireBreakTime: false
+  # Time before other graves become breakable for non-owners
+  TimeOutBeforeBreakable: 2h
   BreakTime: 20s
   # Reset breaking progress after not hitting the grave for this amount of time
   HitTimeout: 5s
   SendMessage: true
+  # Send breaking grave progess
   ActionBarMessage: true
 
 # List of worlds with graves disabled
@@ -112,12 +119,15 @@ CreateGraveForEmptyInventories: false
 CreateBackups: false
 
 Format:
-  Death: 'Your grave is at %x%, %y%, %z%'
-  GraveBroke: 'You broke your grave!'
-  GraveLimitBreak: 'Breaking oldest grave due to limit reached'
-  ItemsNotInCorrectSlot: "Some items didn't return to the correct slot"
-  NotYourGrave: 'Not your grave!'
-  ClickMessage: "%player%'s grave. Died at %time%. Reason: %reason%"
+  Death: '&aYour grave is at %x%, %y%, %z%'
+  GraveBroke: '&aYou broke your grave!'
+  GraveLimitBreak: '&cBreaking oldest grave due to limit reached'
+  ItemsNotInCorrectSlot: "&aSome items didn't return to the correct slot"
+  NotYourGrave: '&cNot your grave!'
+  ClickMessage: "&a%player%'s grave. Died at %time%. Reason: %reason%"
+  # Can't claim other graves based on TimeBeforeBreakable
+  UnableToClaimDelay: "&cNot able to claim yet!"
+  NonEnoughPermission: "&cYou don't enough permissions!"
 
   # Hologram message
   Grave:

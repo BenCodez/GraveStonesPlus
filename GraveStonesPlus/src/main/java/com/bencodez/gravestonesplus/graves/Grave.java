@@ -790,6 +790,17 @@ public class Grave {
 		return player.hasPermission("GraveStonesPlus.BreakOtherGraves");
 	}
 
+	public boolean canNonOwnerClaim() {
+		long claimDelay = plugin.getConfigFile().getBreakOtherGravesTimeBeforeBreakable().getMillis();
+
+		if (claimDelay <= 0) {
+			return true;
+		}
+		long graveTime = getGravesConfig().getTime();
+
+		return System.currentTimeMillis() >= graveTime + claimDelay;
+	}
+
 	public void checkGlowing() {
 		if (!plugin.getConfigFile().isGlowingEffectNearGrave()) {
 			if (glowingHologram != null) {

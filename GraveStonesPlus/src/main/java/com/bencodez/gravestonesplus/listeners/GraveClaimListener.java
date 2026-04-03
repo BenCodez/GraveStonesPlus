@@ -103,7 +103,10 @@ public class GraveClaimListener implements Listener {
 		}
 
 		if (!grave.canNonOwnerClaim()) {
-			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatUnableToClaimDelay()));
+
+			player.sendMessage(MessageAPI
+					.colorize(MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatUnableToClaimDelay(),
+							"%time%", grave.getTimeUntilNonOwnerClaimFormatted())));
 			return;
 		}
 

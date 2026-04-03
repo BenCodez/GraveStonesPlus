@@ -246,7 +246,9 @@ public class OtherPlayerBreakManager {
 		grave.claim(player);
 
 		if (plugin.getConfigFile().isBreakOtherGravesSendMessage()) {
-			player.sendMessage(MessageAPI.colorize("&aYou broke the grave."));
+			player.sendMessage(
+					MessageAPI.colorize(MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBrokeOther(),
+							"%player%", grave.getGravesConfig().getPlayerName())));
 		}
 	}
 
@@ -257,7 +259,7 @@ public class OtherPlayerBreakManager {
 	 */
 	private void sendStartMessage(Player player) {
 		if (plugin.getConfigFile().isBreakOtherGravesSendMessage()) {
-			player.sendMessage(MessageAPI.colorize("&eStarted breaking grave. Keep hitting it."));
+			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatStartedBreakingGrave()));
 		}
 	}
 
@@ -268,7 +270,7 @@ public class OtherPlayerBreakManager {
 	 */
 	private void sendCancelledMessage(Player player) {
 		if (plugin.getConfigFile().isBreakOtherGravesSendMessage()) {
-			player.sendMessage(MessageAPI.colorize("&cStopped breaking grave."));
+			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatStoppedBreakingGrave()));
 		}
 	}
 

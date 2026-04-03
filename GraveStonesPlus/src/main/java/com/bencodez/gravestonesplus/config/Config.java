@@ -201,6 +201,18 @@ public class Config extends YMLFile {
 	private String formatGraveBroke = "&aYou broke your grave!";
 
 	@Getter
+	@ConfigDataString(path = "Format.GraveBrokeOther")
+	private String formatGraveBrokeOther = "&aYou broke %player%'s grave!";
+
+	@Getter
+	@ConfigDataString(path = "Format.StartedBreakingGrave")
+	private String formatStartedBreakingGrave = "&aStarted breaking grave! Keep hitting to break it!";
+
+	@Getter
+	@ConfigDataString(path = "Format.StoppedBreakingGrave")
+	private String formatStoppedBreakingGrave = "&aStopped breaking grave!";
+
+	@Getter
 	@ConfigDataString(path = "Format.ItemsNotInCorrectSlot")
 	private String formatItemsNotInGrave = "&aSome items didn't return to the correct slot";
 
@@ -218,7 +230,7 @@ public class Config extends YMLFile {
 
 	@Getter
 	@ConfigDataString(path = "Format.UnableToClaimDelay")
-	private String formatUnableToClaimDelay = "&cNot able to claim yet!";
+	private String formatUnableToClaimDelay = "&cNot able to claim yet! %time% remaining!";
 
 	@Getter
 	@ConfigDataString(path = "Format.NotEnoughPermission")

@@ -121,13 +121,16 @@ CreateBackups: false
 Format:
   Death: '&aYour grave is at %x%, %y%, %z%'
   GraveBroke: '&aYou broke your grave!'
+  GraveBrokeOther: '&aYou broke %player%'s grave!'
   GraveLimitBreak: '&cBreaking oldest grave due to limit reached'
   ItemsNotInCorrectSlot: "&aSome items didn't return to the correct slot"
   NotYourGrave: '&cNot your grave!'
   ClickMessage: "&a%player%'s grave. Died at %time%. Reason: %reason%"
   # Can't claim other graves based on TimeBeforeBreakable
-  UnableToClaimDelay: "&cNot able to claim yet!"
+  UnableToClaimDelay: "&cNot able to claim yet! %time% left before you can claim this grave!"
   NonEnoughPermission: "&cYou don't enough permissions!"
+  StartedBreakingGrave: "&aStarted breaking grave! Keep hitting to break it!"
+  StoppedBreakingGrave: "&aStopped breaking grave!"
 
   # Hologram message
   Grave:

@@ -1,6 +1,11 @@
 package com.bencodez.gravestonesplus.listeners;
 
+import java.util.HashMap;
+import java.util.Map;
+import java.util.UUID;
+
 import org.bukkit.Bukkit;
+import org.bukkit.FluidCollisionMode;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.entity.Player;
@@ -9,8 +14,10 @@ import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
 import org.bukkit.event.block.Action;
 import org.bukkit.event.block.BlockBreakEvent;
+import org.bukkit.event.player.PlayerAnimationEvent;
 import org.bukkit.event.player.PlayerInteractEvent;
 import org.bukkit.event.player.PlayerQuitEvent;
+import org.bukkit.util.RayTraceResult;
 
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
@@ -24,27 +31,54 @@ import lombok.Setter;
 
 /**
  * Handles player claim and interaction logic for graves.
- *
- * This listener is responsible for: - Right click grave interaction - Left
- * click owner claim logic - Left click timed breaking for non-owners -
- * Preventing vanilla block breaking as a safety net
  */
 @Getter
 @Setter
 public class GraveClaimListener implements Listener {
 
-	/**
-	 * Plugin instance.
-	 */
 	private GraveStonesPlus plugin;
 
 	/**
-	 * Constructor.
-	 *
-	 * @param plugin Plugin instance
+	 * Tracks active held-left-click attempts.
 	 */
+	private final Map<UUID, Grave> mining = new HashMap<>();
+
+	/**
+	 * Last time a player swung at a grave.
+	 */
+	private final Map<UUID, Long> lastSwing = new HashMap<>();
+
 	public GraveClaimListener(GraveStonesPlus plugin) {
 		this.plugin = plugin;
+
+		Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+			long now = System.currentTimeMillis();
+
+			for (UUID uuid : new HashMap<>(mining).keySet()) {
+				Player player = Bukkit.getPlayer(uuid);
+				if (player == null) {
+					mining.remove(uuid);
+					lastSwing.remove(uuid);
+					plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
+					continue;
+				}
+
+				Grave grave = mining.get(uuid);
+				if (grave == null || !grave.isValid() || grave.getGravesConfig().isDestroyed()) {
+					mining.remove(uuid);
+					lastSwing.remove(uuid);
+					plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
+					continue;
+				}
+
+				Long last = lastSwing.get(uuid);
+				if (last == null || now - last > 400L) {
+					mining.remove(uuid);
+					lastSwing.remove(uuid);
+					plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
+				}
+			}
+		}, 5L, 5L);
 	}
 
 	public void handleCiaming(Grave grave, Player player) {
@@ -57,26 +91,22 @@ public class GraveClaimListener implements Listener {
 			return;
 		}
 
-		// can't claim other grave, not enabled
 		if (!plugin.getConfigFile().isBreakOtherGravesEnabled()) {
 			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatNotYourGrave()));
 			return;
 		}
 
-		// does not have permission to break other graves, and permission is required
 		if (!player.hasPermission("GraveStonesPlus.BreakOtherGraves")
 				&& plugin.getConfigFile().isBreakOtherGravesRequirePermission()) {
 			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatNotEnoughPermission()));
 			return;
 		}
 
-		// check claim delay
 		if (!grave.canNonOwnerClaim()) {
 			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatUnableToClaimDelay()));
 			return;
 		}
 
-		// has permission, but break time is required
 		if (!plugin.getConfigFile().isBreakOtherGravesRequireBreakTime()) {
 			grave.claim(player);
 			return;
@@ -86,10 +116,46 @@ public class GraveClaimListener implements Listener {
 	}
 
 	/**
-	 * Handles grave interaction from player clicks.
-	 *
-	 * @param event Player interact event
+	 * Handles left click swings. This is more reliable for barriers than
+	 * PlayerInteractEvent.
 	 */
+	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
+	public void onPlayerAnimation(PlayerAnimationEvent event) {
+		Player player = event.getPlayer();
+
+		RayTraceResult result = player.getWorld().rayTraceBlocks(player.getEyeLocation(),
+				player.getEyeLocation().getDirection(), 6.0, FluidCollisionMode.NEVER, true);
+
+		if (result == null || result.getHitBlock() == null) {
+			return;
+		}
+
+		Block block = result.getHitBlock();
+		if (!isAnyGraveMarker(block.getType())) {
+			return;
+		}
+
+		Grave grave = getGraveFromBlock(block);
+		if (grave == null) {
+			return;
+		}
+
+		if (!grave.isValid()) {
+			return;
+		}
+
+		GraveInteractEvent ge = new GraveInteractEvent(grave, player, GraveInteractionType.BREAK_ATTEMPT);
+		Bukkit.getPluginManager().callEvent(ge);
+		if (ge.isCancelled()) {
+			return;
+		}
+
+		mining.put(player.getUniqueId(), grave);
+		lastSwing.put(player.getUniqueId(), System.currentTimeMillis());
+
+		handleCiaming(grave, player);
+	}
+
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
 	public void onPlayerInteract(PlayerInteractEvent event) {
 		Block clicked = event.getClickedBlock();
@@ -119,18 +185,9 @@ public class GraveClaimListener implements Listener {
 
 		if (action == Action.LEFT_CLICK_BLOCK) {
 			event.setCancelled(true);
-			handleLeftClick(event, grave);
 		}
 	}
 
-	/**
-	 * Safety net to prevent vanilla block breaking for grave markers.
-	 *
-	 * This also acts as an optional fallback trigger for timed breaking in case the
-	 * interact event path does not run as expected.
-	 *
-	 * @param event Block break event
-	 */
 	@EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
 	public void onBlockBreak(BlockBreakEvent event) {
 		Block block = event.getBlock();
@@ -156,26 +213,17 @@ public class GraveClaimListener implements Listener {
 		}
 
 		event.setCancelled(true);
-
 		handleCiaming(grave, event.getPlayer());
 	}
 
-	/**
-	 * Clears any active timed break attempt when the player quits.
-	 *
-	 * @param event Player quit event
-	 */
 	@EventHandler
 	public void onPlayerQuit(PlayerQuitEvent event) {
-		plugin.getOtherPlayerBreakManager().cancelBreak(event.getPlayer().getUniqueId());
+		UUID uuid = event.getPlayer().getUniqueId();
+		mining.remove(uuid);
+		lastSwing.remove(uuid);
+		plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
 	}
 
-	/**
-	 * Handles right click behavior on a grave.
-	 *
-	 * @param event Player interact event
-	 * @param grave Grave
-	 */
 	private void handleRightClick(PlayerInteractEvent event, Grave grave) {
 		GraveInteractEvent ge = new GraveInteractEvent(grave, event.getPlayer(), GraveInteractionType.RIGHT_CLICK);
 		Bukkit.getPluginManager().callEvent(ge);
@@ -200,38 +248,6 @@ public class GraveClaimListener implements Listener {
 		grave.onClick(event.getPlayer());
 	}
 
-	/**
-	 * Handles left click behavior on a grave.
-	 *
-	 * @param event Player interact event
-	 * @param grave Grave
-	 */
-	private void handleLeftClick(PlayerInteractEvent event, Grave grave) {
-		GraveInteractEvent ge = new GraveInteractEvent(grave, event.getPlayer(), GraveInteractionType.LEFT_CLICK);
-		Bukkit.getPluginManager().callEvent(ge);
-		if (ge.isCancelled()) {
-			event.setCancelled(true);
-			return;
-		}
-
-		if (grave.getGravesConfig().isDestroyed()) {
-			return;
-		}
-
-		Block clicked = event.getClickedBlock();
-		if (clicked == null) {
-			return;
-		}
-
-		handleCiaming(grave, event.getPlayer());
-	}
-
-	/**
-	 * Gets a grave from a block's metadata.
-	 *
-	 * @param block Block
-	 * @return Grave or null
-	 */
 	private Grave getGraveFromBlock(Block block) {
 		Object obj = MiscUtils.getInstance().getBlockMeta(block, "Grave");
 		if (!(obj instanceof Grave)) {
@@ -241,12 +257,6 @@ public class GraveClaimListener implements Listener {
 		return (Grave) obj;
 	}
 
-	/**
-	 * Checks whether a material is any supported grave marker.
-	 *
-	 * @param type Material
-	 * @return true if supported grave marker
-	 */
 	private boolean isAnyGraveMarker(Material type) {
 		return type == Material.PLAYER_HEAD || type == Material.BARRIER || type == Material.CHEST;
 	}

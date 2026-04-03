@@ -5,14 +5,20 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.regex.Pattern;
 
+import org.bukkit.Bukkit;
 import org.bukkit.Location;
+import org.bukkit.Material;
+import org.bukkit.OfflinePlayer;
 import org.bukkit.block.Block;
 import org.bukkit.command.CommandSender;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Player;
+import org.bukkit.inventory.ItemStack;
 import org.bukkit.permissions.Permission;
 import org.bukkit.persistence.PersistentDataType;
 
@@ -21,6 +27,8 @@ import com.bencodez.advancedcore.api.inventory.BInventory;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.storage.GravesConfig;
+import com.bencodez.simpleapi.debug.DebugLevel;
 
 import net.md_5.bungee.api.chat.TextComponent;
 
@@ -347,5 +355,171 @@ public class CommandLoader {
 				}
 			}
 		});
+
+		if (plugin.getOptions().getDebug().isDebug(DebugLevel.DEV)) {
+			plugin.getCommands().add(new CommandHandler(plugin, new String[] { "GenGrave", "(Player)" },
+					"GraveStonesPlus.GenGrave", "Generate a grave for a player (dev)", false) {
+
+				@Override
+				public void execute(CommandSender sender, String[] args) {
+					if (!(sender instanceof Player playerSender)) {
+						sender.sendMessage("Only players can use this command");
+						return;
+					}
+
+					if (args.length < 2) {
+						sender.sendMessage("/gravestonesplus gengrave <player>");
+						return;
+					}
+
+					String playerName = args[1];
+					Player online = plugin.getServer().getPlayerExact(playerName);
+
+					UUID uuid;
+					String name;
+
+					if (online != null) {
+						uuid = online.getUniqueId();
+						name = online.getName();
+					} else {
+						OfflinePlayer offline = Bukkit.getOfflinePlayer(playerName);
+						uuid = offline.getUniqueId();
+						name = offline.getName() != null ? offline.getName() : playerName;
+					}
+
+					Location location = playerSender.getLocation();
+
+					HashMap<Integer, ItemStack> items = generateRandomItems();
+					int exp = ThreadLocalRandom.current().nextInt(5, 51);
+					String deathMessage = name + " died mysteriously (dev test)";
+
+					createTestGrave(uuid, name, location, items, exp, deathMessage, sender);
+				}
+			});
+		}
+	}
+
+	public void createTestGrave(UUID uuid, String name, Location deathLocation,
+			HashMap<Integer, ItemStack> itemsWithSlot, int droppedExp, String deathMessage, CommandSender sender) {
+		if (plugin.getConfigFile().getDisabledWorlds().contains(deathLocation.getWorld().getName())) {
+			sender.sendMessage("World is disabled for graves");
+			return;
+		}
+
+		Location emptyBlock;
+		if (deathLocation.getBlock().isEmpty() && deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()
+				&& deathLocation.getBlockY() < deathLocation.getWorld().getMaxHeight()) {
+			emptyBlock = deathLocation;
+		} else {
+			emptyBlock = getAirBlock(deathLocation); // or move helper elsewhere
+		}
+
+		if (emptyBlock == null) {
+			sender.sendMessage("Failed to find air block for grave");
+			return;
+		}
+
+		if (plugin.numberOfGraves(uuid) >= plugin.getConfigFile().getGraveLimit()) {
+			Grave oldest = plugin.getOldestGrave(uuid);
+			if (oldest != null) {
+				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
+					oldest.dropItemsOnGround(null); // if your method supports null, otherwise make a dev-safe overload
+				}
+				oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
+			}
+		}
+
+		final Location emptyBlockFinal = emptyBlock;
+
+		plugin.getBukkitScheduler().runTaskLater(plugin, () -> {
+			Grave grave = new Grave(plugin,
+					new GravesConfig(uuid, name, emptyBlockFinal, itemsWithSlot, droppedExp, deathMessage,
+							System.currentTimeMillis(), false, 0, null, null,
+							plugin.getConfigFile().getGraveDisplayTypeEnum().name()));
+
+			grave.loadChunk(false);
+			grave.createGrave();
+			grave.createHologram();
+			grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
+			plugin.addGrave(grave);
+			grave.loadBlockMeta(emptyBlockFinal.getBlock());
+
+			sender.sendMessage("Generated grave for " + name + " at " + emptyBlockFinal.getBlockX() + ", "
+					+ emptyBlockFinal.getBlockY() + ", " + emptyBlockFinal.getBlockZ());
+		}, 2L, emptyBlockFinal);
+	}
+
+	private HashMap<Integer, ItemStack> generateRandomItems() {
+		ThreadLocalRandom random = ThreadLocalRandom.current();
+		HashMap<Integer, ItemStack> items = new HashMap<>();
+
+		Material[] materials = new Material[] { Material.DIAMOND_SWORD, Material.IRON_SWORD, Material.BREAD,
+				Material.COOKED_BEEF, Material.TORCH, Material.COBBLESTONE, Material.OAK_LOG, Material.DIAMOND,
+				Material.IRON_INGOT, Material.GOLD_INGOT, Material.EMERALD, Material.ARROW, Material.BOW,
+				Material.SHIELD };
+
+		int stacks = random.nextInt(5, 13);
+
+		for (int i = 0; i < stacks; i++) {
+			int slot = random.nextInt(36);
+			Material mat = materials[random.nextInt(materials.length)];
+			int amount = mat.getMaxStackSize() == 1 ? 1 : random.nextInt(1, Math.min(32, mat.getMaxStackSize()) + 1);
+			items.put(slot, new ItemStack(mat, amount));
+		}
+
+		if (random.nextBoolean())
+			items.put(-1, new ItemStack(Material.DIAMOND_HELMET));
+		if (random.nextBoolean())
+			items.put(-2, new ItemStack(Material.IRON_CHESTPLATE));
+		if (random.nextBoolean())
+			items.put(-3, new ItemStack(Material.CHAINMAIL_LEGGINGS));
+		if (random.nextBoolean())
+			items.put(-4, new ItemStack(Material.GOLDEN_BOOTS));
+		if (random.nextBoolean())
+			items.put(-5, new ItemStack(Material.SHIELD));
+
+		return items;
+	}
+
+	public Location getAirBlock(Location loc) {
+		int startingY = loc.getBlockY();
+		boolean reverse = false;
+		if (startingY < loc.getWorld().getMinHeight()) {
+			startingY = loc.getWorld().getMinHeight();
+		}
+		if (startingY > loc.getWorld().getMaxHeight()) {
+			reverse = true;
+			startingY = loc.getWorld().getMaxHeight();
+		}
+		if (!reverse) {
+			for (int i = startingY; i < loc.getWorld().getMaxHeight(); i++) {
+				Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
+				if (b.isEmpty() || isReplaceable(b.getType())) {
+					return b.getLocation();
+				}
+			}
+		} else {
+			for (int i = startingY - 1; i > loc.getWorld().getMinHeight(); i--) {
+				Block b = loc.getWorld().getBlockAt((int) loc.getX(), i, (int) loc.getZ());
+				if (b.isEmpty() || isReplaceable(b.getType())) {
+					return b.getLocation();
+				}
+			}
+		}
+		return null;
+	}
+
+	public boolean isReplaceable(Material material) {
+		switch (material.toString()) {
+		case "TALL_GRASS":
+		case "GRASS":
+		case "SHORT_GRASS":
+		case "FERN":
+		case "LARGE_FERN":
+		case "SNOW":
+			return true;
+		default:
+			return false;
+		}
 	}
 }

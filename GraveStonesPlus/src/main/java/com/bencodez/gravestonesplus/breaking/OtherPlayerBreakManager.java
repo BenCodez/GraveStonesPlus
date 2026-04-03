@@ -290,7 +290,7 @@ public class OtherPlayerBreakManager {
 		double percent = required <= 0L ? 1.0D : Math.min(1.0D, (double) elapsed / (double) required);
 		int display = (int) Math.round(percent * 100.0D);
 
-		ActionBar actionBar = new ActionBar(MessageAPI.colorize("&eBreaking grave: &6" + display + "%"), 3);
+		ActionBar actionBar = new ActionBar(MessageAPI.colorize("&eBreaking grave: &6" + display + "%"), 40);
 		actionBar.send(player);
 	}
 

@@ -845,35 +845,51 @@ public class Grave {
 	}
 
 	public void checkGlowing() {
-		if (!plugin.getConfigFile().isGlowingEffectNearGrave()) {
-			if (glowingHologram != null) {
-				glowingHologram.kill();
-				glowingHologram = null;
-			}
+		if (!plugin.getConfigFile().isGlowingEffectNearGrave() || plugin.getConfigFile().isDisableArmorStands()) {
+			removeGlowingHologram();
 			return;
 		}
 
-		if (plugin.getConfigFile().isDisableArmorStands()) {
-			if (glowingHologram != null) {
-				glowingHologram.kill();
-				glowingHologram = null;
-			}
+		if (gravesConfig.getUuid() == null || gravesConfig.getLocation() == null
+				|| gravesConfig.getLocation().getWorld() == null) {
+			removeGlowingHologram();
 			return;
 		}
 
 		try {
-			Location base = gravesConfig.getLocation().getBlock().getLocation().clone().add(0.5, 0.1, 0.5);
-			Location glowLoc = base.clone().add(0, 0.75, 0);
-
-			if (glowingHologram != null) {
-				glowingHologram.kill();
-				glowingHologram = null;
+			Player player = Bukkit.getPlayer(gravesConfig.getUuid());
+			if (player == null || !player.isOnline()) {
+				removeGlowingHologram();
+				return;
 			}
 
-			glowingHologram = new Hologram(glowLoc, MessageAPI.colorize("&e"), true, false, plugin.getKey(), 1, "Grave",
-					this);
+			Location graveLoc = gravesConfig.getLocation();
+			if (!player.getWorld().getUID().equals(graveLoc.getWorld().getUID())) {
+				removeGlowingHologram();
+				return;
+			}
+
+			if (player.getLocation().distance(graveLoc) > plugin.getConfigFile().getGlowingEffectDistance()) {
+				removeGlowingHologram();
+				return;
+			}
+
+			Location glowLoc = graveLoc.getBlock().getLocation().clone().add(0.5, -2, 0.5);
+
+			if (glowingHologram == null) {
+				glowingHologram = new Hologram(glowLoc, "", false, true, plugin.getKey(), 1, "Grave", this);
+			}
+
+			glowingHologram.glow(true);
 		} catch (Exception e) {
 			plugin.debug(e);
+		}
+	}
+
+	private void removeGlowingHologram() {
+		if (glowingHologram != null) {
+			glowingHologram.kill();
+			glowingHologram = null;
 		}
 	}
 

@@ -28,7 +28,6 @@ import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
-import com.bencodez.simpleapi.debug.DebugLevel;
 
 import net.md_5.bungee.api.chat.TextComponent;
 
@@ -356,47 +355,47 @@ public class CommandLoader {
 			}
 		});
 
-		if (plugin.getOptions().getDebug().isDebug(DebugLevel.DEV)) {
-			plugin.getCommands().add(new CommandHandler(plugin, new String[] { "GenGrave", "(Player)" },
-					"GraveStonesPlus.GenGrave", "Generate a grave for a player (dev)", false) {
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "GenerateGrave", "(Player)" },
+				"GraveStonesPlus.GenerateGrave", "Generate a grave for a player (test command)", false) {
 
-				@Override
-				public void execute(CommandSender sender, String[] args) {
-					if (!(sender instanceof Player playerSender)) {
-						sender.sendMessage("Only players can use this command");
-						return;
-					}
-
-					if (args.length < 2) {
-						sender.sendMessage("/gravestonesplus gengrave <player>");
-						return;
-					}
-
-					String playerName = args[1];
-					Player online = plugin.getServer().getPlayerExact(playerName);
-
-					UUID uuid;
-					String name;
-
-					if (online != null) {
-						uuid = online.getUniqueId();
-						name = online.getName();
-					} else {
-						OfflinePlayer offline = Bukkit.getOfflinePlayer(playerName);
-						uuid = offline.getUniqueId();
-						name = offline.getName() != null ? offline.getName() : playerName;
-					}
-
-					Location location = playerSender.getLocation();
-
-					HashMap<Integer, ItemStack> items = generateRandomItems();
-					int exp = ThreadLocalRandom.current().nextInt(5, 51);
-					String deathMessage = name + " died mysteriously (dev test)";
-
-					createTestGrave(uuid, name, location, items, exp, deathMessage, sender);
+			@Override
+			public void execute(CommandSender sender, String[] args) {
+				if (!(sender instanceof Player playerSender)) {
+					sender.sendMessage("Only players can use this command");
+					return;
 				}
-			});
-		}
+
+				if (args.length < 2) {
+					sender.sendMessage("/gravestonesplus gengrave <player>");
+					return;
+				}
+
+				String playerName = args[1];
+				Player online = plugin.getServer().getPlayerExact(playerName);
+
+				UUID uuid;
+				String name;
+
+				if (online != null) {
+					uuid = online.getUniqueId();
+					name = online.getName();
+				} else {
+					@SuppressWarnings("deprecation")
+					OfflinePlayer offline = Bukkit.getOfflinePlayer(playerName);
+					uuid = offline.getUniqueId();
+					name = offline.getName() != null ? offline.getName() : playerName;
+				}
+
+				Location location = playerSender.getLocation();
+
+				HashMap<Integer, ItemStack> items = generateRandomItems();
+				int exp = ThreadLocalRandom.current().nextInt(5, 51);
+				String deathMessage = name + " died mysteriously (dev test)";
+
+				createTestGrave(uuid, name, location, items, exp, deathMessage, sender);
+			}
+		});
+
 	}
 
 	public void createTestGrave(UUID uuid, String name, Location deathLocation,

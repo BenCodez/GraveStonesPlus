@@ -291,7 +291,7 @@ public class PlayerBreakManager {
 
 			long required = getRequiredBreakTimeOwner().getMillis();
 			if ((now - active.getStartTime()) >= required) {
-				//plugin.debug("Owner break: completing from tick for " + player.getName());
+				// plugin.debug("Owner break: completing from tick for " + player.getName());
 
 				ownerIt.remove();
 				recordOwnerCompletion(player);
@@ -323,7 +323,8 @@ public class PlayerBreakManager {
 		if (last != null) {
 			long since = now - last.longValue();
 			if (since < OWNER_COMPLETION_RESTART_BLOCK_MS) {
-				//plugin.debug("Owner break: ignoring start due to recent completion (" + since + "ms)");
+				// plugin.debug("Owner break: ignoring start due to recent completion (" + since
+				// + "ms)");
 				return false;
 			}
 		}
@@ -339,7 +340,8 @@ public class PlayerBreakManager {
 			active.setLastHitTime(now);
 			ownerActiveBreaks.put(player.getUniqueId(), active);
 
-			//plugin.debug("Owner break: start for " + player.getName() + " grave=" + graveKey + " start=" + now);
+			// plugin.debug("Owner break: start for " + player.getName() + " grave=" +
+			// graveKey + " start=" + now);
 			sendStartMessageOwner(player);
 			sendProgress(player, active);
 			return false;
@@ -349,9 +351,10 @@ public class PlayerBreakManager {
 
 		long required = getRequiredBreakTimeOwner().getMillis();
 		long elapsed = now - active.getStartTime();
-		//plugin.debug("Owner break: elapsed=" + elapsed + " required=" + required + " for " + player.getName());
+		// plugin.debug("Owner break: elapsed=" + elapsed + " required=" + required + "
+		// for " + player.getName());
 		if (elapsed >= required) {
-			//plugin.debug("Owner break: completing for " + player.getName());
+			// plugin.debug("Owner break: completing for " + player.getName());
 
 			ownerActiveBreaks.remove(player.getUniqueId());
 			recordOwnerCompletion(player);
@@ -423,18 +426,15 @@ public class PlayerBreakManager {
 		final UUID playerUUID = player.getUniqueId();
 		ownerLastCompleted.put(playerUUID, System.currentTimeMillis());
 
-		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				Long last = ownerLastCompleted.get(playerUUID);
-				if (last != null) {
-					long age = System.currentTimeMillis() - last.longValue();
-					if (age >= OWNER_COMPLETION_RESTART_BLOCK_MS) {
-						ownerLastCompleted.remove(playerUUID);
-					}
+		plugin.getBukkitScheduler().runTaskLater(plugin, () -> {
+			Long last = ownerLastCompleted.get(playerUUID);
+			if (last != null) {
+				long age = System.currentTimeMillis() - last.longValue();
+				if (age >= OWNER_COMPLETION_RESTART_BLOCK_MS) {
+					ownerLastCompleted.remove(playerUUID);
 				}
 			}
+
 		}, 20L);
 	}
 

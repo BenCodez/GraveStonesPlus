@@ -175,13 +175,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		if (Bukkit.isPrimaryThread()) {
 			Bukkit.getPluginManager().callEvent(event);
 		} else {
-			
-			Bukkit.getScheduler().runTask(this, new Runnable() {
 
-				@Override
-				public void run() {
-					Bukkit.getPluginManager().callEvent(event);
-				}
+			plugin.getBukkitScheduler().runTask(plugin, () -> {
+				Bukkit.getPluginManager().callEvent(event);
 			});
 		}
 	}
@@ -309,13 +305,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 								if (grave.isValid()) {
 									grave.checkGlowing();
 								} else {
-									Bukkit.getScheduler().runTask(plugin, new Runnable() {
-										@Override
-										public void run() {
-											grave.removeGrave(GraveRemoveReason.INVALID);
-											grave.removeHologramsAround();
-										}
-									});
+									plugin.getBukkitScheduler().runTask(plugin, () -> {
+										;
+										grave.removeGrave(GraveRemoveReason.INVALID);
+										grave.removeHologramsAround();
+
+									}, grave.getGravesConfig().getLocation());
 								}
 							}
 						}

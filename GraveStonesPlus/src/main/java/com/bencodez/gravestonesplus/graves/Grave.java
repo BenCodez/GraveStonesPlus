@@ -118,12 +118,8 @@ public class Grave {
 			Bukkit.getPluginManager().callEvent(event);
 			return;
 		}
-		Bukkit.getScheduler().runTask(plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				Bukkit.getPluginManager().callEvent(event);
-			}
+		plugin.getBukkitScheduler().runTask(plugin, () -> {
+			Bukkit.getPluginManager().callEvent(event);
 		});
 	}
 
@@ -441,13 +437,9 @@ public class Grave {
 	public void removeGrave(final GraveRemoveReason reason) {
 		// Always handle remove on main thread because timers call from async thread
 		if (!Bukkit.isPrimaryThread()) {
-			Bukkit.getScheduler().runTask(plugin, new Runnable() {
-
-				@Override
-				public void run() {
-					removeGrave(reason);
-				}
-			});
+			plugin.getBukkitScheduler().runTask(plugin, () -> {
+				removeGrave(reason);
+			}, gravesConfig.getLocation());
 			return;
 		}
 

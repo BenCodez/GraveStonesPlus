@@ -1,6 +1,5 @@
 package com.bencodez.gravestonesplus.listeners;
 
-import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.data.Directional;
@@ -308,14 +307,10 @@ public class GraveBlockProtectionListener implements Listener {
 			return;
 		}
 
-		Bukkit.getScheduler().runTask(plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				if (block.getType() == Material.AIR) {
-					block.setType(expected, false);
-				}
+		plugin.getBukkitScheduler().runTask(plugin, () -> {
+			if (block.getType() == Material.AIR) {
+				block.setType(expected, false);
 			}
-		});
+		}, block.getLocation());
 	}
 }

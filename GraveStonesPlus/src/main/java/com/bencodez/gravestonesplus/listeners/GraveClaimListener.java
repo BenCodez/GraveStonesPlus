@@ -51,7 +51,7 @@ public class GraveClaimListener implements Listener {
 	public GraveClaimListener(GraveStonesPlus plugin) {
 		this.plugin = plugin;
 
-		Bukkit.getScheduler().runTaskTimer(plugin, () -> {
+		plugin.getBukkitScheduler().runTaskTimer(plugin, () -> {
 			long now = System.currentTimeMillis();
 
 			for (UUID uuid : new HashMap<>(mining).keySet()) {

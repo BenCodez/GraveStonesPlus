@@ -41,66 +41,12 @@ public class Config extends YMLFile {
 		getPlugin().saveResource("Config.yml", true);
 	}
 
-	@Getter
-	@ConfigDataBoolean(path = "BreakOwnGraves.RequireBreakTime")
-	private boolean breakOwnGraveRequireBreakTime = false;
-
-	@Getter
-	@ConfigDataParsedDuration(path = "BreakOwnGraves.BreakTime")
-	private ParsedDuration breakOwnGraveTime = ParsedDuration.ofMillis(20000);
-
-	@Getter
-	@ConfigDataParsedDuration(path = "BreakOwnGraves.HitTimeout")
-	private ParsedDuration breakOwnGraveHitTimeout = ParsedDuration.ofMillis(5000);
-
-	@Getter
-	@ConfigDataBoolean(path = "BreakOwnGraves.SendMessage")
-	private boolean breakOwnGraveSendMessage = true;
-
-	@Getter
-	@ConfigDataBoolean(path = "BreakOwnGraves.ActionBarMessage")
-	private boolean breakOwnGraveActionBarMessage = true;
-
 	/**
-	 * Enables breaking other players' graves.
-	 */
-	@Getter
-	@ConfigDataBoolean(path = "BreakOtherGraves.Enabled")
-	private boolean breakOtherGravesEnabled = false;
-
-	@Getter
-	@ConfigDataBoolean(path = "BreakOtherGraves.RequirePermission", secondPath = "BreakOtherGravesWithPermission")
-	private boolean breakOtherGravesRequirePermission = false;
-
-	@Getter
-	@ConfigDataBoolean(path = "BreakOtherGraves.RequireBreakTime")
-	private boolean breakOtherGravesRequireBreakTime = false;
-
-	@Getter
-	@ConfigDataParsedDuration(path = "BreakOtherGraves.BreakTime")
-	private ParsedDuration breakOtherGravesTime = ParsedDuration.ofMillis(20000);
-
-	@Getter
-	@ConfigDataParsedDuration(path = "BreakOtherGraves.HitTimeout")
-	private ParsedDuration breakOtherGravesHitTimeout = ParsedDuration.ofMillis(5000);
-
-	@Getter
-	@ConfigDataParsedDuration(path = "BreakOtherGraves.TimeBeforeBreakable")
-	private ParsedDuration breakOtherGravesTimeBeforeBreakable = ParsedDuration.ofMillis(0);
-
-	@Getter
-	@ConfigDataBoolean(path = "BreakOtherGraves.SendMessage")
-	private boolean breakOtherGravesSendMessage = true;
-
-	@Getter
-	@ConfigDataBoolean(path = "BreakOtherGraves.ActionBarMessage")
-	private boolean breakOtherGravesActionBarMessage = true;
-
-	/**
-	 * Converts legacy config keys to the new config structure. This allows older
-	 * Config.yml versions to continue working.
+	 * Converts legacy config keys to the new config structure when useful.
 	 */
 	private void migrateLegacyConfigKeys() {
+		boolean changed = false;
+
 		/*
 		 * Migration: UseDisplayEntities (boolean) -> GraveDisplayType (string)
 		 *
@@ -116,10 +62,82 @@ public class Config extends YMLFile {
 			} else {
 				getData().set("GraveDisplayType", GraveDisplayType.PLAYER_HEAD.name());
 			}
+			changed = true;
+		}
 
+		/*
+		 * Migration: GlowingEffectNearGrave -> GlowingEffect.Enabled
+		 * GlowingEffectDistance -> GlowingEffect.Distance
+		 */
+		if (!getData().isSet("GlowingEffect.Enabled") && getData().isSet("GlowingEffectNearGrave")) {
+			getData().set("GlowingEffect.Enabled", getData().getBoolean("GlowingEffectNearGrave"));
+			changed = true;
+		}
+
+		if (!getData().isSet("GlowingEffect.Distance") && getData().isSet("GlowingEffectDistance")) {
+			getData().set("GlowingEffect.Distance", getData().getInt("GlowingEffectDistance"));
+			changed = true;
+		}
+
+		if (changed) {
 			saveData();
 		}
 	}
+
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Own.RequireBreakTime", secondPath = "Breaking.Default.RequireBreakTime")
+	private boolean breakOwnGraveRequireBreakTime = false;
+
+	@Getter
+	@ConfigDataParsedDuration(path = "Breaking.Own.BreakTime", secondPath = "Breaking.Default.BreakTime")
+	private ParsedDuration breakOwnGraveTime = ParsedDuration.ofMillis(20000);
+
+	@Getter
+	@ConfigDataParsedDuration(path = "Breaking.Own.HitTimeout", secondPath = "Breaking.Default.HitTimeout")
+	private ParsedDuration breakOwnGraveHitTimeout = ParsedDuration.ofMillis(5000);
+
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Own.SendMessage", secondPath = "Breaking.Default.SendMessage")
+	private boolean breakOwnGraveSendMessage = true;
+
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Own.ActionBarMessage", secondPath = "Breaking.Default.ActionBarMessage")
+	private boolean breakOwnGraveActionBarMessage = true;
+
+	/**
+	 * Enables breaking other players' graves.
+	 */
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Other.Enabled", secondPath = "BreakOtherGraves.Enabled")
+	private boolean breakOtherGravesEnabled = false;
+
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Other.RequirePermission", secondPath = "BreakOtherGraves.RequirePermission")
+	private boolean breakOtherGravesRequirePermission = true;
+
+	@Getter
+	@ConfigDataParsedDuration(path = "Breaking.Other.TimeOutBeforeBreakable")
+	private ParsedDuration breakOtherGravesTimeBeforeBreakable = ParsedDuration.ofMillis(0);
+
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Other.RequireBreakTime", secondPath = "Breaking.Default.RequireBreakTime")
+	private boolean breakOtherGravesRequireBreakTime = false;
+
+	@Getter
+	@ConfigDataParsedDuration(path = "Breaking.Other.BreakTime", secondPath = "Breaking.Default.BreakTime")
+	private ParsedDuration breakOtherGravesTime = ParsedDuration.ofMillis(20000);
+
+	@Getter
+	@ConfigDataParsedDuration(path = "Breaking.Other.HitTimeout", secondPath = "Breaking.Default.HitTimeout")
+	private ParsedDuration breakOtherGravesHitTimeout = ParsedDuration.ofMillis(5000);
+
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Other.SendMessage", secondPath = "Breaking.Default.SendMessage")
+	private boolean breakOtherGravesSendMessage = true;
+
+	@Getter
+	@ConfigDataBoolean(path = "Breaking.Other.ActionBarMessage", secondPath = "Breaking.Default.ActionBarMessage")
+	private boolean breakOtherGravesActionBarMessage = true;
 
 	@Getter
 	@ConfigDataBoolean(path = "GiveCompassOnRespawn")
@@ -138,7 +156,7 @@ public class Config extends YMLFile {
 	private boolean dropItemsOnGraveRemoval = true;
 
 	@Getter
-	@ConfigDataBoolean(path = "GlowingEffectNearGrave")
+	@ConfigDataBoolean(path = "GlowingEffect.Enabled", secondPath = "GlowingEffectNearGrave")
 	private boolean glowingEffectNearGrave = true;
 
 	@Getter
@@ -146,7 +164,7 @@ public class Config extends YMLFile {
 	private boolean disableArmorStands = false;
 
 	@Getter
-	@ConfigDataInt(path = "GlowingEffectDistance")
+	@ConfigDataInt(path = "GlowingEffect.Distance", secondPath = "GlowingEffectDistance")
 	private int glowingEffectDistance = 30;
 
 	@Getter
@@ -169,16 +187,16 @@ public class Config extends YMLFile {
 	@ConfigDataInt(path = "GraveLimit")
 	private int graveLimit = 10;
 
-	@ConfigDataString(path = "KeepItemsWithLore")
 	@Getter
+	@ConfigDataString(path = "KeepItemsWithLore")
 	private String keepItemsWithLore = "";
 
 	/**
 	 * New display option for graves. Stored as a string in config for compatibility
 	 * with annotation loading.
 	 */
-	@ConfigDataString(path = "GraveDisplayType")
 	@Getter
+	@ConfigDataString(path = "GraveDisplayType")
 	private String graveDisplayType = GraveDisplayType.PLAYER_HEAD.name();
 
 	/**
@@ -186,8 +204,8 @@ public class Config extends YMLFile {
 	 * compatibility during migration.
 	 */
 	@Deprecated
-	@ConfigDataBoolean(path = "UseDisplayEntities")
 	@Getter
+	@ConfigDataBoolean(path = "UseDisplayEntities")
 	private boolean useDisplayEntities = false;
 
 	/**
@@ -204,13 +222,21 @@ public class Config extends YMLFile {
 		}
 	}
 
-	@ConfigDataBoolean(path = "CreateGraveForEmptyInventories")
 	@Getter
+	@ConfigDataBoolean(path = "CreateGraveForEmptyInventories")
 	private boolean createGraveForEmptyInventories = false;
 
-	@ConfigDataBoolean(path = "GiveBreakOtherGravesPermission")
 	@Getter
+	@ConfigDataBoolean(path = "GiveBreakOtherGravesPermission")
 	private boolean giveBreakOtherGravesPermission = false;
+
+	@Getter
+	@ConfigDataBoolean(path = "CreateBackups")
+	private boolean createBackups = false;
+
+	@Getter
+	@ConfigDataString(path = "DebugLevel")
+	private String debugLevel = "NONE";
 
 	@Getter
 	@ConfigDataString(path = "Format.Death")
@@ -250,10 +276,10 @@ public class Config extends YMLFile {
 
 	@Getter
 	@ConfigDataString(path = "Format.UnableToClaimDelay")
-	private String formatUnableToClaimDelay = "&cNot able to claim yet! %time% remaining!";
+	private String formatUnableToClaimDelay = "&cNot able to claim yet! %time% left before you can claim this grave!";
 
 	@Getter
-	@ConfigDataString(path = "Format.NotEnoughPermission")
+	@ConfigDataString(path = "Format.NotEnoughPermission", secondPath = "Format.NonEnoughPermission")
 	private String formatNotEnoughPermission = "&cYou don't have permission to do that!";
 
 	@Getter

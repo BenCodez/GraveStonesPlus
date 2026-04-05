@@ -1,9 +1,14 @@
+# =========================================================
+# Storage Settings
+# =========================================================
+
+# Storage type used for grave data.
 # Options:
 # - FLATFILE
 # - MYSQL
 DataStorage: FLATFILE
 
-# Used when DataStorage is MYSQL
+# Database settings used when DataStorage is MYSQL
 Database:
   Host: "localhost"
   Port: 3306
@@ -11,134 +16,174 @@ Database:
   Username: "root"
   Password: ""
 
-  # Max number of connections in the pool
+  # Maximum number of database connections kept in the pool
   MaxConnections: 5
 
-  # Optional explicit table name override (leave empty to let the plugin choose)
+  # Optional explicit table name override
+  # Leave empty to let the plugin choose the table name
   # Name: ""
 
-  # Table name prefix
+  # Prefix added to database table names
   Prefix: ""
 
+  # Database type to use
   # Options:
   # - MYSQL
   # - MARIADB
   # - POSTGRESQL
   DbType: MYSQL
 
-# What block/entity to use to represent graves in the world.
-# Options:
-# - PLAYER_HEAD     (uses the player's skull)
-# - DISPLAY_ENTITY  (uses a display entity + barrier interaction block)
-# - CHEST           (fake chest block only; items are still stored internally)
-GraveDisplayType: PLAYER_HEAD
 
+# =========================================================
+# General Settings
+# =========================================================
+
+# Debug logging level
 DebugLevel: NONE
 
-# If true GraveStonesPlus.BreakOtherGraves will be given to all players by default
-# Requires BreakOtherGravesWithPermission enabled to work
-# Requires a restart
+# Gives GraveStonesPlus.BreakOtherGraves to all players by default
+# Requires Breaking.Other.RequirePermission to be enabled
+# Requires a restart to fully apply
 GiveBreakOtherGravesPermission: false
 
-BreakOwnGraves:
-  RequireBreakTime: false
-  BreakTime: 20s
-  HitTimeout: 5s
-  SendMessage: true
-  ActionBarMessage: true
-
-# Control breaking other graves
-BreakOtherGraves:
-  # Allow breaking other graves
-  Enabled: false
-  # if enabled, you can break other graves with permission:
-  # GraveStonesPlus.BreakOtherGraves
-  RequirePermission: true
-  # Break other graves (not owned by the player) after a certain amount of hitting the grave
-  # Can be set in the format: 10s, 1m, 1h, etc.
-  # If disabled graves can be broken immediately
-  RequireBreakTime: false
-  # Time before other graves become breakable for non-owners
-  TimeOutBeforeBreakable: 2h
-  BreakTime: 20s
-  # Reset breaking progress after not hitting the grave for this amount of time
-  HitTimeout: 5s
-  SendMessage: true
-  # Send breaking grave progess
-  ActionBarMessage: true
-
-# List of worlds with graves disabled
+# Worlds where graves should not be created
 DisabledWorlds: []
 
-# Enable a glowing effect near grave
-GlowingEffectNearGrave: true
+# Create a grave even if the player had no items
+CreateGraveForEmptyInventories: false
 
-# Distance for glowing effect
-GlowingEffectDistance: 30
+# Create daily backup files (only most recent are kept)
+CreateBackups: false
 
-# Time limit before grave is removed
-# Supports durations such as:
-# 10m, 1h, 12h, 1d, 7d
+
+# =========================================================
+# Grave Display Settings
+# =========================================================
+
+# Controls how graves are shown in the world
+# Options:
+# - PLAYER_HEAD     Uses the player's skull
+# - DISPLAY_ENTITY  Uses a display entity with a barrier interaction block
+# - CHEST           Uses a fake chest block (items are still stored internally)
+GraveDisplayType: PLAYER_HEAD
+
+# Disable armor stands used by the plugin
+# Useful if armor stands cause performance issues
+DisableArmorStands: false
+
+GlowingEffect:
+  # Show a glow-style marker near graves
+  Enabled: true
+
+  # Maximum distance in blocks for the glowing effect
+  Distance: 30
+
+
+# =========================================================
+# Breaking Settings
+# =========================================================
+
+Breaking:
+  Default:
+    # Require repeated hits instead of instant break/claim
+    RequireBreakTime: false
+
+    # Total time required to break a grave
+    BreakTime: 20s
+
+    # Time allowed between hits before progress resets
+    HitTimeout: 5s
+
+    # Send chat messages while breaking
+    SendMessage: true
+
+    # Send action bar progress/messages while breaking
+    ActionBarMessage: true
+
+  Own:
+    # Optional overrides for breaking your own grave
+    # Any setting not defined here will use Breaking.Default
+
+  Other:
+    # Allow players to break other players' graves
+    Enabled: false
+
+    # Require the GraveStonesPlus.BreakOtherGraves permission
+    RequirePermission: true
+
+    # Time that must pass before another player's grave can be broken
+    TimeOutBeforeBreakable: 2h
+
+    # Optional overrides for breaking other players' graves
+    # Any setting not defined here will use Breaking.Default
+
+
+# =========================================================
+# Claiming Settings
+# =========================================================
+
+# Maximum distance in blocks used by /gravestonesplus claimgrave
+GraveClaimDistance: 10
+
+# Give a compass on respawn pointing to the last grave
+GiveCompassOnRespawn: false
+
+
+# =========================================================
+# Grave Limits & Cleanup
+# =========================================================
+
+# Maximum number of graves a player can have at one time
+GraveLimit: 10
+
+# Drop items from the removed grave when the limit is exceeded
+DropItemsOnGraveRemoval: true
+
+# Time before a grave is automatically removed
+# Supports: 10m, 1h, 12h, 1d, 7d
 # Set to '' to disable
 GraveTimeLimit: ''
 
-# Amount of time broken graves are stored before they are removed
-# This allows restoring graves that break before items can be obtained
-# Supports durations such as:
-# 10m, 1h, 12h, 1d, 7d
+# Time broken graves are kept before being removed
+# Allows restoring graves if broken early
+# Supports: 10m, 1h, 12h, 1d, 7d
 # Set to '' to disable
 BrokenGraveTimeLimit: 7d
 
-# Distance in which /gravestonesplus claimgrave will claim graves
-GraveClaimDistance: 10
 
-# Limit number of graves that can be created by a single person
-GraveLimit: 10
+# =========================================================
+# Drops & Experience
+# =========================================================
 
-# Drop items from grave if a grave gets removed due to GraveLimit above
-DropItemsOnGraveRemoval: true
-
-# If true, armor stands are disabled
-# Use this if performance takes a hit with armor stands
-DisableArmorStands: false
-
-# If enabled it will give a compass on respawn pointing to last grave
-GiveCompassOnRespawn: false
-
-# Chance for items to drop
-# This percentage is calculated on every item
+# Chance for each item to be dropped (applies per item)
 PercentageDrops: 100
 
-# Keeps items with lore set here on player death
-# %player% works here
+# Keep all player experience instead of vanilla drop behavior
+KeepAllExp: false
+
+# Keep items that contain matching lore when the player dies
+# %player% can be used here
 # Set to '' to disable
 KeepItemsWithLore: ''
 
-# Keep all player exp, default is minecraft drop rate
-KeepAllExp: false
 
-# If true, a grave will be created if a player has an empty inventory
-# If false, no grave will be created
-CreateGraveForEmptyInventories: false
-
-# Whether or not to create daily backups. (Only the most recent ones get kept)
-CreateBackups: false
+# =========================================================
+# Messages / Format
+# =========================================================
 
 Format:
   Death: '&aYour grave is at %x%, %y%, %z%'
   GraveBroke: '&aYou broke your grave!'
-  GraveBrokeOther: '&aYou broke %player%'s grave!'
+  GraveBrokeOther: '&aYou broke %player%''s grave!'
   GraveLimitBreak: '&cBreaking oldest grave due to limit reached'
   ItemsNotInCorrectSlot: "&aSome items didn't return to the correct slot"
   NotYourGrave: '&cNot your grave!'
-  ClickMessage: "&a%player%'s grave. Died at %time%. Reason: %reason%"
-  # Can't claim other graves based on TimeBeforeBreakable
+  ClickMessage: "&a%player%''s grave. Died at %time%. Reason: %reason%"
   UnableToClaimDelay: "&cNot able to claim yet! %time% left before you can claim this grave!"
-  NonEnoughPermission: "&cYou don't enough permissions!"
+  NotEnoughPermission: "&cYou don't have permission to do that!"
   StartedBreakingGrave: "&aStarted breaking grave! Keep hitting to break it!"
   StoppedBreakingGrave: "&aStopped breaking grave!"
 
-  # Hologram message
   Grave:
     Top: '%player% died here!'
     Middle: 'Died at %time%'

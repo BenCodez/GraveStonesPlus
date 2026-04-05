@@ -342,10 +342,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			slimefun = new SlimefunHandle(this);
 		}
 
-		if (playerBreakManager != null) {
-			playerBreakManager.stop();
-		}
-
 		if (Bukkit.getPluginManager().isPluginEnabled("NBTAPI")) {
 			nbtAPIHooked = true;
 		} else {
@@ -388,6 +384,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Override
 	public void onUnLoad() {
+		if (playerBreakManager != null) {
+			playerBreakManager.stop();
+		}
+
 		// For flatfile, persist lists once at shutdown.
 		if (storageManager != null && !storageManager.isMySQL()) {
 			storageManager.saveBrokenGravesFromObjects(brokenGraves);

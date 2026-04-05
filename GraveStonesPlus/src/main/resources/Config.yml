@@ -40,6 +40,12 @@ DebugLevel: NONE
 # Requires a restart
 GiveBreakOtherGravesPermission: false
 
+BreakOwnGraves:
+  RequireBreakTime: false
+  BreakTime: 20s
+  HitTimeout: 5s
+  SendMessage: true
+  ActionBarMessage: true
 
 # Control breaking other graves
 BreakOtherGraves:

@@ -18,7 +18,7 @@ import org.bukkit.permissions.PermissionDefault;
 
 import com.bencodez.advancedcore.AdvancedCorePlugin;
 import com.bencodez.advancedcore.api.command.CommandHandler;
-import com.bencodez.gravestonesplus.breaking.OtherPlayerBreakManager;
+import com.bencodez.gravestonesplus.breaking.PlayerBreakManager;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
 import com.bencodez.gravestonesplus.commands.executor.CommandGraveStonesPlus;
 import com.bencodez.gravestonesplus.commands.tabcomplete.GraveStonesPlusTabCompleter;
@@ -84,7 +84,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private boolean nbtAPIHooked = false;
 
 	@Getter
-	private OtherPlayerBreakManager otherPlayerBreakManager;
+	private PlayerBreakManager playerBreakManager;
 
 	public void addGrave(Grave grave) {
 		if (grave == null || grave.getGravesConfig() == null) {
@@ -284,8 +284,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		commandLoader = new CommandLoader(this);
 		commandLoader.loadCommands();
 
-		otherPlayerBreakManager = new OtherPlayerBreakManager(this);
-		otherPlayerBreakManager.start();
+		playerBreakManager = new PlayerBreakManager(this);
+		playerBreakManager.start();
 
 		Bukkit.getPluginManager().registerEvents(new PlayerDeathListener(this), this);
 		Bukkit.getPluginManager().registerEvents(new GraveClaimListener(this), this);
@@ -342,8 +342,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			slimefun = new SlimefunHandle(this);
 		}
 
-		if (otherPlayerBreakManager != null) {
-			otherPlayerBreakManager.stop();
+		if (playerBreakManager != null) {
+			playerBreakManager.stop();
 		}
 
 		if (Bukkit.getPluginManager().isPluginEnabled("NBTAPI")) {

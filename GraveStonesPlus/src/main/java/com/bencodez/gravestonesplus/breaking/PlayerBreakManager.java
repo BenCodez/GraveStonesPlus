@@ -9,11 +9,11 @@ import org.bukkit.Bukkit;
 import org.bukkit.entity.Player;
 import org.bukkit.scheduler.BukkitTask;
 
-import com.bencodez.advancedcore.api.misc.effects.ActionBar;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.messages.MessageAPI;
+import com.bencodez.simpleapi.messages.actionbar.ActionBar;
 import com.bencodez.simpleapi.time.ParsedDuration;
 
 import lombok.Getter;
@@ -24,7 +24,13 @@ import lombok.Setter;
  */
 @Getter
 @Setter
-public class OtherPlayerBreakManager {
+public class PlayerBreakManager {
+
+	/**
+	 * Cooldown after owner break completion to avoid immediate restart from
+	 * trailing damage packets.
+	 */
+	private static final long OWNER_COMPLETION_RESTART_BLOCK_MS = 1000L;
 
 	/**
 	 * Plugin instance.
@@ -37,6 +43,17 @@ public class OtherPlayerBreakManager {
 	private Map<UUID, ActiveGraveBreak> activeBreaks = new ConcurrentHashMap<UUID, ActiveGraveBreak>();
 
 	/**
+	 * Active break attempts for grave owners.
+	 */
+	private Map<UUID, ActiveGraveBreak> ownerActiveBreaks = new ConcurrentHashMap<UUID, ActiveGraveBreak>();
+
+	/**
+	 * Timestamp of last completed owner break per player to prevent immediate
+	 * restarts.
+	 */
+	private Map<UUID, Long> ownerLastCompleted = new ConcurrentHashMap<UUID, Long>();
+
+	/**
 	 * Repeating cleanup and progress task.
 	 */
 	private BukkitTask task;
@@ -46,7 +63,7 @@ public class OtherPlayerBreakManager {
 	 *
 	 * @param plugin Plugin instance
 	 */
-	public OtherPlayerBreakManager(GraveStonesPlus plugin) {
+	public PlayerBreakManager(GraveStonesPlus plugin) {
 		this.plugin = plugin;
 	}
 
@@ -73,6 +90,8 @@ public class OtherPlayerBreakManager {
 			task = null;
 		}
 		activeBreaks.clear();
+		ownerActiveBreaks.clear();
+		ownerLastCompleted.clear();
 	}
 
 	/**
@@ -88,6 +107,10 @@ public class OtherPlayerBreakManager {
 	 */
 	public boolean handleHit(Player player, Grave grave) {
 		if (player == null || grave == null || grave.getGravesConfig() == null) {
+			return false;
+		}
+
+		if (grave.getGravesConfig().isDestroyed() || !grave.isValid()) {
 			return false;
 		}
 
@@ -230,6 +253,207 @@ public class OtherPlayerBreakManager {
 				sendProgress(player, active);
 			}
 		}
+
+		ParsedDuration ownerTimeout = getHitTimeoutOwner();
+
+		Iterator<Map.Entry<UUID, ActiveGraveBreak>> ownerIt = ownerActiveBreaks.entrySet().iterator();
+		while (ownerIt.hasNext()) {
+			Map.Entry<UUID, ActiveGraveBreak> entry = ownerIt.next();
+			UUID playerUUID = entry.getKey();
+			ActiveGraveBreak active = entry.getValue();
+
+			Player player = Bukkit.getPlayer(playerUUID);
+			if (player == null || !player.isOnline()) {
+				ownerIt.remove();
+				continue;
+			}
+
+			Grave grave = getGraveByKey(active.getGraveId());
+			if (grave == null) {
+				ownerIt.remove();
+				continue;
+			}
+
+			if (!grave.isValid() || grave.getGravesConfig().isDestroyed()) {
+				ownerIt.remove();
+				continue;
+			}
+
+			if (isTimedOut(active, ownerTimeout, now)) {
+				sendCancelledMessageOwner(player);
+				ownerIt.remove();
+				continue;
+			}
+
+			if (plugin.getConfigFile().isBreakOwnGraveActionBarMessage()) {
+				sendProgress(player, active);
+			}
+
+			long required = getRequiredBreakTimeOwner().getMillis();
+			if ((now - active.getStartTime()) >= required) {
+				//plugin.debug("Owner break: completing from tick for " + player.getName());
+
+				ownerIt.remove();
+				recordOwnerCompletion(player);
+
+				completeOwnerBreak(player, grave);
+			}
+		}
+	}
+
+	/**
+	 * Handles a hit on an owner's grave. Uses BreakOwnGraves config values.
+	 *
+	 * @param player Player
+	 * @param grave  Grave
+	 * @return true if the grave was claimed by this hit
+	 */
+	public boolean handleOwnerHit(Player player, Grave grave) {
+		if (player == null || grave == null || grave.getGravesConfig() == null) {
+			return false;
+		}
+
+		if (grave.getGravesConfig().isDestroyed() || !grave.isValid()) {
+			return false;
+		}
+
+		long now = System.currentTimeMillis();
+
+		Long last = ownerLastCompleted.get(player.getUniqueId());
+		if (last != null) {
+			long since = now - last.longValue();
+			if (since < OWNER_COMPLETION_RESTART_BLOCK_MS) {
+				//plugin.debug("Owner break: ignoring start due to recent completion (" + since + "ms)");
+				return false;
+			}
+		}
+
+		String graveKey = buildGraveKey(grave);
+		ActiveGraveBreak active = ownerActiveBreaks.get(player.getUniqueId());
+
+		if (active == null || !graveKey.equals(active.getGraveId()) || isTimedOut(active, getHitTimeoutOwner(), now)) {
+			active = new ActiveGraveBreak();
+			active.setPlayerUUID(player.getUniqueId());
+			active.setGraveId(graveKey);
+			active.setStartTime(now);
+			active.setLastHitTime(now);
+			ownerActiveBreaks.put(player.getUniqueId(), active);
+
+			//plugin.debug("Owner break: start for " + player.getName() + " grave=" + graveKey + " start=" + now);
+			sendStartMessageOwner(player);
+			sendProgress(player, active);
+			return false;
+		}
+
+		active.setLastHitTime(now);
+
+		long required = getRequiredBreakTimeOwner().getMillis();
+		long elapsed = now - active.getStartTime();
+		//plugin.debug("Owner break: elapsed=" + elapsed + " required=" + required + " for " + player.getName());
+		if (elapsed >= required) {
+			//plugin.debug("Owner break: completing for " + player.getName());
+
+			ownerActiveBreaks.remove(player.getUniqueId());
+			recordOwnerCompletion(player);
+
+			completeOwnerBreak(player, grave);
+			return true;
+		}
+
+		sendProgress(player, active);
+		return false;
+	}
+
+	/**
+	 * Cancels an owner break attempt.
+	 *
+	 * @param playerUUID Player UUID
+	 */
+	public void cancelOwnerBreak(UUID playerUUID) {
+		ownerActiveBreaks.remove(playerUUID);
+	}
+
+	/**
+	 * Sends owner break start message.
+	 *
+	 * @param player Player
+	 */
+	private void sendStartMessageOwner(Player player) {
+		if (plugin.getConfigFile().isBreakOwnGraveSendMessage()) {
+			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatStartedBreakingGrave()));
+		}
+	}
+
+	/**
+	 * Sends owner break cancelled message.
+	 *
+	 * @param player Player
+	 */
+	private void sendCancelledMessageOwner(Player player) {
+		if (plugin.getConfigFile().isBreakOwnGraveSendMessage()) {
+			player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatStoppedBreakingGrave()));
+		}
+	}
+
+	/**
+	 * Completes an owner grave break by claiming the grave.
+	 *
+	 * @param player Player
+	 * @param grave  Grave
+	 */
+	private void completeOwnerBreak(Player player, Grave grave) {
+		if (grave == null || !grave.isValid() || grave.getGravesConfig().isDestroyed()) {
+			return;
+		}
+
+		ownerActiveBreaks.remove(player.getUniqueId());
+		recordOwnerCompletion(player);
+
+		// plugin.debug("Owner break: calling grave.claim for " + player.getName());
+		grave.claim(player);
+	}
+
+	/**
+	 * Records owner break completion and schedules cleanup of the completion
+	 * timestamp.
+	 *
+	 * @param player Player
+	 */
+	private void recordOwnerCompletion(final Player player) {
+		final UUID playerUUID = player.getUniqueId();
+		ownerLastCompleted.put(playerUUID, System.currentTimeMillis());
+
+		Bukkit.getScheduler().runTaskLater(plugin, new Runnable() {
+
+			@Override
+			public void run() {
+				Long last = ownerLastCompleted.get(playerUUID);
+				if (last != null) {
+					long age = System.currentTimeMillis() - last.longValue();
+					if (age >= OWNER_COMPLETION_RESTART_BLOCK_MS) {
+						ownerLastCompleted.remove(playerUUID);
+					}
+				}
+			}
+		}, 20L);
+	}
+
+	/**
+	 * Gets the required owner break time.
+	 *
+	 * @return required break time
+	 */
+	private ParsedDuration getRequiredBreakTimeOwner() {
+		return plugin.getConfigFile().getBreakOwnGraveTime();
+	}
+
+	/**
+	 * Gets the owner break hit timeout.
+	 *
+	 * @return hit timeout
+	 */
+	private ParsedDuration getHitTimeoutOwner() {
+		return plugin.getConfigFile().getBreakOwnGraveHitTimeout();
 	}
 
 	/**
@@ -281,18 +505,25 @@ public class OtherPlayerBreakManager {
 	 * @param active Active break
 	 */
 	private void sendProgress(Player player, ActiveGraveBreak active) {
-		if (!plugin.getConfigFile().isBreakOtherGravesActionBarMessage()) {
-			return;
+		boolean owner = ownerActiveBreaks.containsKey(player.getUniqueId());
+		if (owner) {
+			if (!plugin.getConfigFile().isBreakOwnGraveActionBarMessage()) {
+				return;
+			}
+		} else {
+			if (!plugin.getConfigFile().isBreakOtherGravesActionBarMessage()) {
+				return;
+			}
 		}
 
 		long now = System.currentTimeMillis();
-		long required = getRequiredBreakTime().getMillis();
+		long required = owner ? getRequiredBreakTimeOwner().getMillis() : getRequiredBreakTime().getMillis();
 		long elapsed = now - active.getStartTime();
 
 		double percent = required <= 0L ? 1.0D : Math.min(1.0D, (double) elapsed / (double) required);
 		int display = (int) Math.round(percent * 100.0D);
 
-		ActionBar actionBar = new ActionBar(MessageAPI.colorize("&eBreaking grave: &6" + display + "%"), 40);
+		ActionBar actionBar = new ActionBar(MessageAPI.colorize("&eBreaking grave: &6" + display + "%"), 60);
 		actionBar.send(player);
 	}
 
@@ -357,5 +588,33 @@ public class OtherPlayerBreakManager {
 		return cfg.getUuid().toString() + "|" + cfg.getLocation().getWorld().getUID().toString() + "|"
 				+ cfg.getLocation().getBlockX() + "," + cfg.getLocation().getBlockY() + ","
 				+ cfg.getLocation().getBlockZ() + "|" + cfg.getTime();
+	}
+
+	/**
+	 * Represents an active timed grave break attempt.
+	 */
+	@Getter
+	@Setter
+	public static class ActiveGraveBreak {
+
+		/**
+		 * Player UUID.
+		 */
+		private UUID playerUUID;
+
+		/**
+		 * Grave key.
+		 */
+		private String graveId;
+
+		/**
+		 * Start time in milliseconds.
+		 */
+		private long startTime;
+
+		/**
+		 * Last hit time in milliseconds.
+		 */
+		private long lastHitTime;
 	}
 }

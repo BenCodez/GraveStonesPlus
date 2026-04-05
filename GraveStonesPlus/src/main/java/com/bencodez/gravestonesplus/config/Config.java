@@ -41,6 +41,27 @@ public class Config extends YMLFile {
 		getPlugin().saveResource("Config.yml", true);
 	}
 
+	@Getter
+	@ConfigDataBoolean(path = "BreakOwnGraves.RequireBreakTime")
+	private boolean breakOwnGraveRequireBreakTime = false;
+
+	@Getter
+	@ConfigDataParsedDuration(path = "BreakOwnGraves.BreakTime")
+	private ParsedDuration breakOwnGraveTime = ParsedDuration.ofMillis(20000);
+
+	@Getter
+	@ConfigDataParsedDuration(path = "BreakOwnGraves.HitTimeout")
+	private ParsedDuration breakOwnGraveHitTimeout = ParsedDuration.ofMillis(5000);
+
+	@Getter
+	@ConfigDataBoolean(path = "BreakOwnGraves.SendMessage")
+	private boolean breakOwnGraveSendMessage = true;
+
+	@Getter
+	@ConfigDataBoolean(path = "BreakOwnGraves.ActionBarMessage")
+	private boolean breakOwnGraveActionBarMessage = true;
+
+
 	/**
 	 * Enables breaking other players' graves.
 	 */

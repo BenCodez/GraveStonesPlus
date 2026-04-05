@@ -59,7 +59,7 @@ public class GraveClaimListener implements Listener {
 				if (player == null) {
 					mining.remove(uuid);
 					lastSwing.remove(uuid);
-					plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
+					plugin.getPlayerBreakManager().cancelBreak(uuid);
 					continue;
 				}
 
@@ -67,7 +67,7 @@ public class GraveClaimListener implements Listener {
 				if (grave == null || !grave.isValid() || grave.getGravesConfig().isDestroyed()) {
 					mining.remove(uuid);
 					lastSwing.remove(uuid);
-					plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
+					plugin.getPlayerBreakManager().cancelBreak(uuid);
 					continue;
 				}
 
@@ -75,7 +75,7 @@ public class GraveClaimListener implements Listener {
 				if (last == null || now - last > 400L) {
 					mining.remove(uuid);
 					lastSwing.remove(uuid);
-					plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
+					plugin.getPlayerBreakManager().cancelBreak(uuid);
 				}
 			}
 		}, 5L, 5L);
@@ -87,7 +87,14 @@ public class GraveClaimListener implements Listener {
 		}
 
 		if (grave.isOwner(player)) {
-			grave.claim(player);
+			// If owner breaking does not require a break time, claim immediately
+			if (!plugin.getConfigFile().isBreakOwnGraveRequireBreakTime()) {
+				grave.claim(player);
+				return;
+			}
+
+			// Otherwise use the PlayerBreakManager to handle owner break attempts
+			plugin.getPlayerBreakManager().handleOwnerHit(player, grave);
 			return;
 		}
 
@@ -115,7 +122,7 @@ public class GraveClaimListener implements Listener {
 			return;
 		}
 
-		plugin.getOtherPlayerBreakManager().handleHit(player, grave);
+		plugin.getPlayerBreakManager().handleHit(player, grave);
 	}
 
 	/**
@@ -224,7 +231,8 @@ public class GraveClaimListener implements Listener {
 		UUID uuid = event.getPlayer().getUniqueId();
 		mining.remove(uuid);
 		lastSwing.remove(uuid);
-		plugin.getOtherPlayerBreakManager().cancelBreak(uuid);
+		plugin.getPlayerBreakManager().cancelBreak(uuid);
+		plugin.getPlayerBreakManager().cancelOwnerBreak(uuid);
 	}
 
 	private void handleRightClick(PlayerInteractEvent event, Grave grave) {

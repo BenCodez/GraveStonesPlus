@@ -61,7 +61,6 @@ public class Config extends YMLFile {
 	@ConfigDataBoolean(path = "BreakOwnGraves.ActionBarMessage")
 	private boolean breakOwnGraveActionBarMessage = true;
 
-
 	/**
 	 * Enables breaking other players' graves.
 	 */
@@ -70,7 +69,7 @@ public class Config extends YMLFile {
 	private boolean breakOtherGravesEnabled = false;
 
 	@Getter
-	@ConfigDataBoolean(path = "BreakOtherGraves.RequirePermission", secondPath = "GiveBreakOtherGravesPermission")
+	@ConfigDataBoolean(path = "BreakOtherGraves.RequirePermission", secondPath = "BreakOtherGravesWithPermission")
 	private boolean breakOtherGravesRequirePermission = false;
 
 	@Getter

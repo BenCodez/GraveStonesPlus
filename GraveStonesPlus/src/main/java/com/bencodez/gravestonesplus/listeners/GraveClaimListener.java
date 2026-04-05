@@ -81,7 +81,7 @@ public class GraveClaimListener implements Listener {
 		}, 5L, 5L);
 	}
 
-	public void handleCiaming(Grave grave, Player player) {
+	public void handleClaiming(Grave grave, Player player) {
 		if (grave.getGravesConfig().isDestroyed()) {
 			return;
 		}
@@ -163,7 +163,7 @@ public class GraveClaimListener implements Listener {
 		mining.put(player.getUniqueId(), grave);
 		lastSwing.put(player.getUniqueId(), System.currentTimeMillis());
 
-		handleCiaming(grave, player);
+		handleClaiming(grave, player);
 	}
 
 	@EventHandler(priority = EventPriority.LOW, ignoreCancelled = true)
@@ -223,7 +223,7 @@ public class GraveClaimListener implements Listener {
 		}
 
 		event.setCancelled(true);
-		handleCiaming(grave, event.getPlayer());
+		handleClaiming(grave, event.getPlayer());
 	}
 
 	@EventHandler

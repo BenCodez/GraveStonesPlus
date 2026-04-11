@@ -37,7 +37,6 @@ import com.bencodez.gravestonesplus.storage.GraveStorageManager;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.file.YMLConfig;
 import com.bencodez.simpleapi.metrics.BStatsMetrics;
-import com.bencodez.simpleapi.scheduler.BukkitScheduler;
 import com.bencodez.simpleapi.time.ParsedDuration;
 import com.bencodez.simpleapi.updater.Updater;
 

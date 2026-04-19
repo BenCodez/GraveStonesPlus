@@ -89,7 +89,7 @@ Breaking:
     RequireBreakTime: false
 
     # Total time required to break a grave
-    BreakTime: 20s
+    BreakTime: 10s
 
     # Time allowed between hits before progress resets
     HitTimeout: 5s

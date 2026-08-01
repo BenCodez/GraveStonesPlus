@@ -105,7 +105,7 @@ public class GraveClaimListener implements Listener {
 	/**
 	 * Handles claiming or breaking logic for a grave.
 	 * 
-	 * @param grave the grave
+	 * @param grave  the grave
 	 * @param player the player
 	 */
 	public void handleClaiming(Grave grave, Player player) {
@@ -141,7 +141,7 @@ public class GraveClaimListener implements Listener {
 		if (!grave.canNonOwnerClaim()) {
 			player.sendMessage(MessageAPI
 					.colorize(MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatUnableToClaimDelay(),
-							"%time%", grave.getTimeUntilNonOwnerClaimFormatted())));
+							"time", grave.getTimeUntilNonOwnerClaimFormatted())));
 			return;
 		}
 
@@ -329,7 +329,7 @@ public class GraveClaimListener implements Listener {
 	 * grave.
 	 * 
 	 * @param player the player
-	 * @param grave the grave
+	 * @param grave  the grave
 	 * @return true if the attempt should be ignored
 	 */
 	private boolean isDuplicateAttempt(Player player, Grave grave) {

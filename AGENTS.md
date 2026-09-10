@@ -47,6 +47,6 @@ Do not log database credentials, serialized inventories, player data, or unrestr
 
 ## Change and PR workflow
 
-Keep changes focused. Before any commit, push, PR update, review reply, or other remote change, run focused checks, the full Maven package build, fresh-artifact inspection, and `git diff --check`; then inspect the entire base-to-HEAD diff.
+Keep changes focused. Before any commit, push, PR update, review reply, or other remote change, run focused checks, the full Maven package build, fresh-artifact inspection, and `git diff --check`; then inspect the complete base-to-HEAD diff. Before committing local work, also inspect the staged changes and every relevant intended unstaged or untracked change as one effective final patch.
 
 For substantive work, obtain a fresh source-read-only review. The implementation agent verifies and fixes accepted findings, reruns validation, and obtains a new review of the updated snapshot. Do not reuse an old clean verdict after changes, and do not merge without explicit authorization.

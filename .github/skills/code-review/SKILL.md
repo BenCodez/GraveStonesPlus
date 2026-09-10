@@ -16,7 +16,7 @@ Review the exact proposed change, following applicable `AGENTS.md`. Prioritize i
 
 Do not edit, fix, commit, push, approve, merge, change PR state, or post comments independently. Preserve unrelated work; never stash, reset, clean, rebase, or switch branches. Run only safe bounded checks under existing permissions and never access a live server or production database.
 
-Resolve the actual PR base and SHA, merge base, review HEAD SHA, commit list, complete patch, changed paths, and worktree state. Review every change in the merge-base-to-HEAD range. Disclose local overlays, untracked/generated/binary material, missing history, multiple merge bases, conflicts, truncation, or unavailable files. Pin and recheck the reviewed snapshot.
+Resolve the actual PR base and SHA, merge base, review HEAD SHA, commit list, complete patch, changed paths, and worktree state. Review every change in the merge-base-to-HEAD range. Disclose local overlays, untracked/generated/binary material, missing history, multiple merge bases, conflicts, truncation, or unavailable files. When the task explicitly includes local work, review the applicable staged, unstaged, and intended untracked content as overlays on the pinned commit and assess the effective final code; disclosure alone is not coverage. Pin and recheck the reviewed snapshot.
 
 Use a fresh reviewer context for substantive work when supported. A focused follow-up to old findings does not replace the final fresh review.
 

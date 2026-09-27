@@ -39,6 +39,23 @@ A grave's identity and state transition must remain consistent across memory, wo
 9. Use stable UUID/world/location identity and preserve legacy serialized records and database schemas through explicit migrations.
 10. Optional integrations and marker implementations must remain guarded when dependencies, worlds, entities, or materials are unavailable.
 
+## Drop-in upgrade and compatibility contract
+
+Treat compatibility as a release invariant for every new feature, refactor, fix, persistence change, configuration change, and dependency change. Unless the task explicitly says otherwise, a GraveStonesPlus upgrade must remain a **drop-in JAR replacement**: administrators replace the JAR and existing graves, configuration, storage, commands, permissions, and integrations continue working without manual migration steps.
+
+That default contract means:
+
+- Existing YAML configuration and grave records must remain readable. New keys must be optional, use safe defaults, and preserve established behavior when absent.
+- Existing YAML/MySQL grave data, ownership, contents, experience, locations, expiration state, and identifiers must survive upgrades intact.
+- Any required schema or serialized-data migration must be automatic, idempotent, restart-safe, and preserve every recoverable grave exactly once.
+- Preserve commands, permissions, events, public/de-facto APIs, storage semantics, marker behavior, and optional integration behavior unless an explicit breaking change is authorized.
+- Do not require administrators to delete/recreate graves, regenerate configs, run one-off conversion commands/scripts, manually alter databases, or coordinate dependency upgrades merely to retain existing functionality.
+- AdvancedCore or optional integration changes must not become a hidden synchronized-upgrade requirement for otherwise compatible installations.
+- Packaging changes must preserve the normal downloadable artifact and startup path without requiring extra runtime libraries unless explicitly requested.
+- When a compatibility-preserving implementation is not practical, stop and surface the compatibility impact before implementing a breaking path unless the request explicitly permits it.
+
+For compatibility-sensitive work, include regression coverage using prior configuration/persisted-state shapes as well as tests for the new behavior.
+
 ## Persistence and concurrency
 
 Coordinate cache and backend updates. Snapshot mutable collections crossing threads; bound queues, retries, query results, serialized item sizes, and scheduled recovery work. Handle null/closed connections, executor rejection, cancellation, interruption, partial startup, rollback failure, and shutdown flushes explicitly.

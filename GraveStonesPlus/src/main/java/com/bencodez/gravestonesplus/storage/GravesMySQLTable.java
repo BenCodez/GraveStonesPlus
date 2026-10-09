@@ -116,7 +116,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param broken whether grave is broken
 	 */
 	public void upsertGrave(GravesConfig grave, boolean broken) {
-		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getLocation().getWorld() == null) {
+		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
 			return;
 		}
 
@@ -154,7 +154,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param broken whether grave is broken
 	 */
 	public void updateExistingGrave(GravesConfig grave, boolean broken) {
-		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getLocation().getWorld() == null) {
+		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
 			return;
 		}
 
@@ -191,7 +191,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 			ps.setString(10, encodeItemsSafe(grave.getItems()));
 
 			ps.setString(11, grave.getUuid().toString());
-			ps.setString(12, grave.getLocation().getWorld().getUID().toString());
+			ps.setString(12, grave.getWorldId().toString());
 			ps.setInt(13, grave.getLocation().getBlockX());
 			ps.setInt(14, grave.getLocation().getBlockY());
 			ps.setInt(15, grave.getLocation().getBlockZ());
@@ -211,7 +211,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param broken new broken flag
 	 */
 	public void setBroken(GravesConfig grave, boolean broken) {
-		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getLocation().getWorld() == null) {
+		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
 			return;
 		}
 
@@ -228,7 +228,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 
 			ps.setInt(1, broken ? 1 : 0);
 			ps.setString(2, grave.getUuid().toString());
-			ps.setString(3, grave.getLocation().getWorld().getUID().toString());
+			ps.setString(3, grave.getWorldId().toString());
 			ps.setInt(4, grave.getLocation().getBlockX());
 			ps.setInt(5, grave.getLocation().getBlockY());
 			ps.setInt(6, grave.getLocation().getBlockZ());
@@ -247,7 +247,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param grave grave config
 	 */
 	public void deleteGrave(GravesConfig grave) {
-		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getLocation().getWorld() == null) {
+		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
 			return;
 		}
 
@@ -263,7 +263,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 				PreparedStatement ps = conn.prepareStatement(sql)) {
 
 			ps.setString(1, grave.getUuid().toString());
-			ps.setString(2, grave.getLocation().getWorld().getUID().toString());
+			ps.setString(2, grave.getWorldId().toString());
 			ps.setInt(3, grave.getLocation().getBlockX());
 			ps.setInt(4, grave.getLocation().getBlockY());
 			ps.setInt(5, grave.getLocation().getBlockZ());
@@ -300,7 +300,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 
 					UUID worldUuid = safeUuid(rs.getString("world_uuid"));
 					World world = worldUuid != null ? Bukkit.getWorld(worldUuid) : null;
-					if (world == null) {
+					if (worldUuid == null) {
 						continue;
 					}
 
@@ -321,7 +321,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 					// NEW: may be null for older rows
 					String graveDisplayType = rs.getString("grave_display_type");
 
-					out.add(new GravesConfig(playerUuid,
+					GravesConfig record = new GravesConfig(playerUuid,
 							playerName != null ? playerName : "",
 							loc,
 							items,
@@ -332,7 +332,8 @@ public class GravesMySQLTable extends AbstractSqlTable {
 							destroyedTime,
 							display,
 							interact,
-							graveDisplayType));
+							graveDisplayType);
+                    record.setWorldId(worldUuid); out.add(record);
 				}
 			}
 
@@ -352,7 +353,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		ps.setInt(6, g.getExp());
 		ps.setInt(7, g.isDestroyed() ? 1 : 0);
 		ps.setLong(8, g.getDestroyedTime());
-		ps.setString(9, g.getLocation().getWorld().getUID().toString());
+		ps.setString(9, g.getWorldId().toString());
 		ps.setInt(10, g.getLocation().getBlockX());
 		ps.setInt(11, g.getLocation().getBlockY());
 		ps.setInt(12, g.getLocation().getBlockZ());

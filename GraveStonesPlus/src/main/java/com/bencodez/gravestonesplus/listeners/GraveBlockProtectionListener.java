@@ -18,6 +18,8 @@ import org.bukkit.event.player.PlayerBucketEmptyEvent;
 import com.bencodez.advancedcore.api.misc.MiscUtils;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.graves.GraveIdentity;
+import com.bencodez.gravestonesplus.graves.GraveMarkerCleanup;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -251,6 +253,9 @@ public class GraveBlockProtectionListener implements Listener {
 			return false;
 		}
 
+        var restoration = plugin.getGraveRestoration();
+        if (restoration != null && restoration.protectsPendingMarker(block)) return true;
+
 		Grave grave = getGrave(block);
 		return grave != null && grave.isValid() && isProtected(block);
 	}
@@ -307,8 +312,19 @@ public class GraveBlockProtectionListener implements Listener {
 			return;
 		}
 
+        Grave original = getGrave(block);
+        var restoration = plugin.getGraveRestoration();
+        String identity = original != null ? GraveIdentity.of(original.getGravesConfig())
+                : restoration == null ? null : restoration.pendingMarkerIdentity(block, expected);
+
 		plugin.getBukkitScheduler().runTask(plugin, () -> {
-			if (block.getType() == Material.AIR) {
+            if (!plugin.isEnabled() || identity == null || !block.getWorld().isChunkLoaded(block.getX() >> 4, block.getZ() >> 4)
+                    || GraveMarkerCleanup.hasConflictingIdentity(plugin, block, identity)) return;
+            Grave current = getGrave(block);
+            boolean live = current != null && !current.isRemove() && !current.getGravesConfig().isDestroyed()
+                    && identity.equals(GraveIdentity.of(current.getGravesConfig())) && current.isGrave(block);
+            boolean pending = restoration != null && identity.equals(restoration.pendingMarkerIdentity(block, expected));
+			if ((live || pending) && block.getType() == Material.AIR) {
 				block.setType(expected, false);
 			}
 		}, block.getLocation());

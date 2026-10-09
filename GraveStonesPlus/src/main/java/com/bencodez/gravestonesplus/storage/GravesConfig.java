@@ -31,6 +31,11 @@ public class GravesConfig implements ConfigurationSerializable {
 	@Getter
 	private Location location;
 
+    /** Original UUID remains serializable while the world is unavailable. */
+    @Getter
+    @Setter
+    private UUID worldId;
+
 	@Getter
 	private UUID uuid;
 
@@ -45,11 +50,11 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@Getter
 	@Setter
-	private boolean destroyed;
+	private volatile boolean destroyed;
 
 	@Getter
 	@Setter
-	private long destroyedTime;
+	private volatile long destroyedTime;
 
 	@Getter
 	@Setter
@@ -88,6 +93,7 @@ public class GravesConfig implements ConfigurationSerializable {
 			String graveDisplayType) {
 		this.uuid = uuid;
 		this.location = loc;
+        this.worldId = loc != null && loc.getWorld() != null ? loc.getWorld().getUID() : null;
 		this.items = items != null ? items : new HashMap<Integer, ItemStack>();
 		this.exp = exp;
 		this.playerName = playerName;
@@ -116,7 +122,7 @@ public class GravesConfig implements ConfigurationSerializable {
 		}
 
 		serialized.put("PlayerName", playerName);
-		serialized.put("World", location.getWorld().getUID().toString());
+		serialized.put("World", worldId.toString());
 		serialized.put("X", location.getBlockX());
 		serialized.put("Y", location.getBlockY());
 		serialized.put("Z", location.getBlockZ());
@@ -152,7 +158,8 @@ public class GravesConfig implements ConfigurationSerializable {
 		UUID uuid = UUID.fromString(deserialize.get("UUID").toString());
 		String playerName = deserialize.get("PlayerName").toString();
 
-		World world = Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString()));
+		UUID worldId = UUID.fromString(deserialize.get("World").toString());
+        World world = Bukkit.getWorld(worldId);
 		Location loc = new Location(world, NumberConversions.toInt(deserialize.get("X")),
 				NumberConversions.toInt(deserialize.get("Y")), NumberConversions.toInt(deserialize.get("Z")));
 
@@ -205,8 +212,9 @@ public class GravesConfig implements ConfigurationSerializable {
 			}
 		}
 
-		return new GravesConfig(uuid, playerName, loc, items, exp, deathMessage, time, destroyed, destroyedTime,
-				displayUUID, interactUUID, normalizeDisplayType(displayTypeStr, displayUUID));
+        GravesConfig record = new GravesConfig(uuid, playerName, loc, items, exp, deathMessage, time, destroyed, destroyedTime,
+                displayUUID, interactUUID, normalizeDisplayType(displayTypeStr, displayUUID));
+        record.setWorldId(worldId); return record;
 	}
 
 	/**

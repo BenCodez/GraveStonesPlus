@@ -3,6 +3,7 @@ package com.bencodez.gravestonesplus.listeners;
 import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import org.bukkit.Location;
@@ -83,9 +84,10 @@ public class PlayerDeathListener implements Listener {
 			if (oldest != null) {
 				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
 					oldest.dropItemsOnGround(entity);
-				}
-				oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
-				entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+				} else {
+                    oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
+                    entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+                }
 			}
 		}
 
@@ -127,73 +129,14 @@ public class PlayerDeathListener implements Listener {
 		HashMap<Integer, ItemStack> keepItems = new HashMap<Integer, ItemStack>(); // Items to be kept in the player's
 																					// inventory
 
-		BiConsumer<Integer, ItemStack> processItem = (idx, item) -> {
-			if (item != null && !item.getType().isAir()) { // Ensure item exists and is not air
-				// plugin.getLogger().info("Processing item: " + item.getType().name() + " at
-				// slot " + idx); // Debug log
-
-				// --- Priority 1: Ignore NBT Rules ---
-				if (plugin.getNbtConfigManager() != null
-						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getIgnoreNbtRules())) {
-					// plugin.getLogger().info(" Item " + item.getType().name() + " matched an
-					// 'ignore' NBT rule. Skipping further processing.");
-					return; // Return immediately, this item is not handled by GraveStonesPlus
-				}
-
-				// --- Priority 2: Slimefun Soulbound Items ---
-				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item)) {
-					// plugin.getLogger().info(" Item " + item.getType().name() + " is Slimefun
-					// Soulbound. Allowing Slimefun to handle.");
-					return; // Assume Slimefun will handle and keep these items itself, so we don't
-							// interfere
-				}
-
-				// --- Priority 3: Lore Matching Rules ---
-				// Here, playerPlaceholders will be used to replace placeholders in the
-				// keepItemsWithLore config
-				final String loreToMatch = com.bencodez.advancedcore.api.messages.PlaceholderUtils
-						.replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(), playerPlaceholders);
-				if (keepItemsWithMatchingLore(item, loreToMatch)) {
-					keepItems.put(idx, item);
-					// plugin.getLogger().info(" Item " + item.getType().name() + " kept due to
-					// matching lore: '" + loreToMatch + "'");
-					return;
-				}
-
-				// --- Priority 4: Keep NBT Rules ---
-				if (plugin.getNbtConfigManager() != null
-						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getKeepNbtRules())) {
-					keepItems.put(idx, item);
-					// plugin.getLogger().info(" Item " + item.getType().name() + " kept due to
-					// matching NBT 'keep' rule.");
-					return;
-				}
-
-				// --- Priority 5: Grave NBT Rules ---
-				if (plugin.getNbtConfigManager() != null
-						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getGraveNbtRules())) {
-					itemsWithSlot.put(idx, item);
-					// plugin.getLogger().info(" Item " + item.getType().name() + " put in grave due
-					// to matching NBT 'grave' rule.");
-					return;
-				}
-
-				// --- Priority 6: Curse of Vanishing ---
-				if (hasCurseOfVanishing(item)) {
-					// plugin.getLogger().info(" Item " + item.getType().name() + " has Curse of
-					// Vanishing and not kept by any rule, will be removed.");
-					return; // The item will not be added to any list, thus being removed
-				}
-
-				// --- Priority 7: Default behavior (if none of the above rules match) ---
-				itemsWithSlot.put(idx, item);
-				// plugin.getLogger().info(" Item " + item.getType().name() + " (default) put in
-				// grave.");
-
-			} else {
-				// plugin.getLogger().info(" Slot " + idx + " is empty or air, skipping.");
-			}
-		};
+        final ItemRuleEvaluator evaluator = ItemRuleEvaluator.forPlayer(plugin, entity);
+        BiConsumer<Integer, ItemStack> processItem = (idx, item) -> {
+            switch (evaluator.evaluate(item)) {
+                case KEEP_LORE, KEEP_NBT -> keepItems.put(idx, item);
+                case GRAVE_NBT, GRAVE_DEFAULT -> itemsWithSlot.put(idx, item);
+                default -> { }
+            }
+        };
 
 		// Iterate through player inventory slots and process items
 		for (int i = 0; i < 36; i++) { // Main inventory (0-35)
@@ -307,12 +250,19 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		if (plugin.getConfigFile().isGiveCompassOnRespawn()) {
-			plugin.getBukkitScheduler().runTaskLaterAsynchronously(plugin, () -> {
+			Runnable deliverCompass = () -> {
+                if (!plugin.isEnabled() || !player.isOnline() || !player.hasPermission("GraveStonesPlus.Compass")) return;
 				Grave grave = plugin.getLatestGrave(player);
-				if (grave != null) {
-					plugin.getBukkitScheduler().runTask(plugin, () -> grave.giveCompass(player));
+				if (grave != null && plugin.canTrack(grave, player)) {
+					grave.giveCompass(player);
 				}
-			}, 5L);
+            };
+            var folia = plugin.getBukkitScheduler().getFoliaLib();
+            // SimpleAPI's original delay is five seconds. Its Spigot/Paper entity-delay
+            // overloads recurse, so use the synchronous delay there. Folia needs the
+            // moving player's entity owner; a retired entity receives no compass.
+            if (folia.isFolia()) folia.getImpl().runAtEntityLater(player, deliverCompass, () -> {}, 100L);
+            else folia.getImpl().runLater(deliverCompass, 5L, TimeUnit.SECONDS);
 		}
 	}
 
@@ -373,31 +323,9 @@ public class PlayerDeathListener implements Listener {
 		return slot == null || slot.getType().isAir();
 	}
 
-	public boolean keepItemsWithMatchingLore(ItemStack item, String text) {
-		if (item == null || item.getType().isAir() || text == null || text.isEmpty()) {
-			return false;
-		}
-		if (item.hasItemMeta()) {
-			ItemMeta meta = item.getItemMeta();
-			if (meta.hasLore()) {
-				// Iterate through each line of the item's Lore and compare with the provided
-				// text
-				for (String loreLine : meta.getLore()) {
-					if (loreLine.equalsIgnoreCase(text)) { // Use equalsIgnoreCase for case-insensitive comparison
-						return true;
-					}
-				}
-			}
-		}
-		return false;
-	}
+    public boolean keepItemsWithMatchingLore(ItemStack item, String text) { return ItemRuleEvaluator.matchesLore(item, text); }
 
-	public boolean hasCurseOfVanishing(ItemStack item) {
-		if (item != null && item.hasItemMeta()) {
-			return item.getItemMeta().getEnchants().containsKey(Enchantment.VANISHING_CURSE);
-		}
-		return false;
-	}
+    public boolean hasCurseOfVanishing(ItemStack item) { return ItemRuleEvaluator.vanishes(item); }
 
 	public Location getAirBlock(Location loc) {
 		int startingY = loc.getBlockY();

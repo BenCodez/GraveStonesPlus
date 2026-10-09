@@ -180,6 +180,17 @@ public class Config extends YMLFile {
 	private int graveClaimDistance = 10;
 
 	@Getter
+	@ConfigDataInt(path = "Reminders.ProtectionMinutes")
+	private int protectionReminderMinutes = 0;
+
+	@Getter
+	@ConfigDataInt(path = "Reminders.ExpiryMinutes")
+	private int expiryReminderMinutes = 0;
+
+	public long getProtectionReminderMillis() { return Math.max(0L, protectionReminderMinutes) * 60_000L; }
+	public long getExpiryReminderMillis() { return Math.max(0L, expiryReminderMinutes) * 60_000L; }
+
+	@Getter
 	@ConfigDataInt(path = "PercentageDrops")
 	private int percentageDrops = 100;
 

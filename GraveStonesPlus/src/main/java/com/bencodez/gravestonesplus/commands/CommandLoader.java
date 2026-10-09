@@ -24,9 +24,15 @@ import org.bukkit.persistence.PersistentDataType;
 
 import com.bencodez.advancedcore.api.command.CommandHandler;
 import com.bencodez.advancedcore.api.inventory.BInventory;
+import com.bencodez.advancedcore.api.inventory.BInventoryButton;
+import com.bencodez.advancedcore.api.inventory.BInventory.ClickEvent;
+import com.bencodez.advancedcore.api.item.ItemBuilder;
+import com.bencodez.simpleapi.command.TabCompleteHandle;
+import com.bencodez.simpleapi.command.TabCompleteHandler;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.graves.TrustedGraveAccess;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 
 import net.md_5.bungee.api.chat.TextComponent;
@@ -61,6 +67,17 @@ public class CommandLoader {
 	}
 
 	public void loadCommands() {
+        // Registered placeholder names are also the bundled dispatcher's argument grammar.
+        TabCompleteHandler.getInstance().addTabCompleteOption(new TabCompleteHandle("(GraveHelper)") {
+            @Override public void reload() { updateReplacements(); }
+            @Override public void updateReplacements() {
+                ArrayList<String> names = new ArrayList<>();
+                for (Player player : Bukkit.getOnlinePlayers()) names.add(player.getName());
+                setReplace(names);
+            }
+        }.updateOnLoginLogout());
+        TabCompleteHandler.getInstance().addTabCompleteOption("(GraveAccessKind)", "track", "recover");
+        TabCompleteHandler.getInstance().addTabCompleteOption("(GraveDuration)", "30m", "2h", "7d");
 		plugin.getCommands().add(
 				new CommandHandler(plugin, new String[] { "Reload" }, "GraveStonesPlus.Reload", "Reload the plugin") {
 
@@ -131,13 +148,12 @@ public class CommandLoader {
 
 			@Override
 			public void execute(CommandSender sender, String[] args) {
-				List<Grave> graves = plugin.getGraves((Player) sender);
-				ArrayList<String> msg = new ArrayList<String>();
-				msg.add("Current graves:");
-				for (Grave gr : graves) {
-					msg.add(gr.getGraveMessage());
-				}
-				sendMessage(sender, msg);
+                if (!(sender instanceof Player player)) return;
+                ownerDispatch(player, "GraveStonesPlus.Graves").accept(() -> {
+                    BInventory inv = new BInventory("Accessible Graves");
+                    for (Grave gr : plugin.getAccessibleGraves(player)) inv.addButton(gr.getNavigationGUIItem(player));
+                    inv.openInventory(player);
+                });
 			}
 		});
 
@@ -308,7 +324,8 @@ public class CommandLoader {
 
 			@Override
 			public void execute(CommandSender sender, String[] args) {
-				Grave grave = plugin.getLatestGrave((Player) sender);
+				Grave grave = plugin.getGraveNavigation().target((Player) sender);
+                if (grave == null) grave = plugin.getLatestGrave((Player) sender);
 				if (grave != null) {
 					grave.giveCompass((Player) sender);
 				} else {
@@ -320,16 +337,19 @@ public class CommandLoader {
 		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "ClaimGrave" }, "GraveStonesPlus.ClaimGrave",
 				"Claim Grave nearby", false) {
 
-			@Override
-			public void execute(CommandSender sender, String[] args) {
-				Player p = (Player) sender;
-				List<Grave> graves = plugin.getGraves(p);
+            @Override
+            public void execute(CommandSender sender, String[] args) {
+                if (!(sender instanceof Player p)) return;
+                ownerDispatch(p, "GraveStonesPlus.ClaimGrave").accept(() -> {
+				List<Grave> graves = plugin.activeGraveSnapshot();
 				if (graves != null) {
 					for (Grave grave : graves) {
+                        if (!plugin.isLiveGrave(grave) || plugin.getGraveClaimLedger().isBlocked(
+                                com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()))) continue;
 						double distance = grave.getDistance(p);
 						if (distance < plugin.getConfigFile().getGraveClaimDistance() && distance >= 0) {
-							grave.removeSkull();
-							grave.claim(p);
+							if (!plugin.canRecover(grave, p) && !grave.legacyClaimAllowed(p)) continue;
+                            grave.claimNearby(p);
 							return;
 						}
 					}
@@ -337,7 +357,8 @@ public class CommandLoader {
 				} else {
 					sendMessage(sender, "&cYou don't have a grave");
 				}
-			}
+                });
+            }
 		});
 
 		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "ViewGrave" }, "GraveStonesPlus.ViewGrave",
@@ -396,6 +417,109 @@ public class CommandLoader {
 			}
 		});
 
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "Track" }, "GraveStonesPlus.Track", "Track the grave you are looking at", false) {
+			@Override public void execute(CommandSender sender, String[] args) {
+				if (!(sender instanceof Player player)) return;
+				plugin.getBukkitScheduler().runTask(plugin, () -> {
+					if (!plugin.isEnabled() || !player.isOnline() || !player.hasPermission("GraveStonesPlus.Track")) return;
+					Grave grave = targetGrave(player);
+					if (grave == null || !plugin.getGraveNavigation().select(player, grave)) { sendMessage(sender, "&cYou are not allowed to track that grave."); return; }
+					sendMessage(sender, "&aSelected grave: " + grave.getNavigationMessage(player));
+				}, player);
+			}
+		});
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "TrustList" }, "GraveStonesPlus.Trust", "List helper grants for the grave you are looking at", false) {
+			@Override public void execute(CommandSender sender, String[] args) {
+				if (!(sender instanceof Player owner)) return;
+                ownerDispatch(owner, "GraveStonesPlus.Trust").accept(() -> {
+                    Grave grave = ownerGrave(owner);
+                    if (grave == null || !grave.isOwner(owner) || !plugin.isLiveGrave(grave)) { sendMessage(sender, "&cLook at your grave first."); return; }
+                    for (TrustedGraveAccess grant : plugin.getTrustedGraveAccessStore().list(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()))) sendMessage(sender, "&7" + grant.getHelper().toString() + " &f" + grant.getKind() + " until " + new java.util.Date(grant.getExpiresAt()));
+                });
+			}
+		});
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "Trust", "(GraveHelper)", "(GraveAccessKind)", "(GraveDuration)" }, "GraveStonesPlus.Trust", "Grant bounded tracking or recovery access", false) {
+			@Override public void execute(CommandSender sender, String[] args) {
+				if (!(sender instanceof Player owner)) return;
+                var dispatch = ownerDispatch(owner, "GraveStonesPlus.Trust");
+                dispatch.accept(() -> {
+                    if (args.length != 4) { sendMessage(sender, "&cUsage: /gravestonesplus trust <player> <track|recover> <duration>"); return; }
+                    TrustedGraveAccess.Kind kind;
+                    try { kind = TrustedGraveAccess.Kind.valueOf(args[2].toUpperCase(java.util.Locale.ROOT)); }
+                    catch (IllegalArgumentException invalid) { sendMessage(sender, "&cType must be track or recover."); return; }
+                    try {
+                        long duration = com.bencodez.simpleapi.time.ParsedDuration.parse(args[3], java.util.concurrent.TimeUnit.MILLISECONDS).getMillis();
+                        if (duration <= 0 || duration > 90L * 24 * 60 * 60 * 1000) throw new IllegalArgumentException();
+                        java.util.UUID helper = knownHelper(args[1]);
+                        if (helper == null) { sendMessage(sender, "&cUse an online player name or a UUID."); return; }
+                        Grave grave = ownerGrave(owner); if (grave == null || !grave.isOwner(owner) || !plugin.isLiveGrave(grave)) { sendMessage(sender, "&cLook at your grave first."); return; }
+                        grave.grantHelper(owner, helper, kind, System.currentTimeMillis() + duration)
+                                .whenComplete((saved, failure) -> dispatch.accept(() -> sendMessage(sender,
+                                        failure == null && Boolean.TRUE.equals(saved) ? "&aGrant saved. Tracking and recovery remain separate." : "&cGrant was not durably saved.")));
+                    } catch (Exception e) { sendMessage(sender, "&cDuration must be valid and no longer than 90 days."); }
+                });
+			}
+		});
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "RevokeTrust", "(GraveHelper)", "(GraveAccessKind)" }, "GraveStonesPlus.Trust.Revoke", "Revoke helper access", false) {
+			@Override public void execute(CommandSender sender, String[] args) {
+				if (!(sender instanceof Player owner)) return;
+                var dispatch = ownerDispatch(owner, "GraveStonesPlus.Trust.Revoke");
+                dispatch.accept(() -> {
+                    if (args.length != 3) return;
+                    TrustedGraveAccess.Kind kind;
+                    try { kind = TrustedGraveAccess.Kind.valueOf(args[2].toUpperCase(java.util.Locale.ROOT)); }
+                    catch (IllegalArgumentException invalid) { sendMessage(sender, "&cType must be track or recover."); return; }
+                    java.util.UUID helper = knownHelper(args[1]);
+                    if (helper == null) { sendMessage(sender, "&cUse an online player name or a UUID."); return; }
+                    Grave grave = ownerGrave(owner); if (grave == null || !grave.isOwner(owner) || !plugin.isLiveGrave(grave)) return;
+                    grave.revokeHelper(owner, helper, kind)
+                            .whenComplete((removed, failure) -> dispatch.accept(() -> sendMessage(sender,
+                                    failure != null || !Boolean.TRUE.equals(removed) ? "&cGrant revocation could not be saved; access is denied locally." : "&aGrant revoked.")));
+                });
+			}
+		});
+		plugin.getCommands().add(new CommandHandler(plugin, new String[] { "InspectItem" }, "GraveStonesPlus.InspectItem", "Explain held-item rule context", false) {
+			@Override public void execute(CommandSender sender, String[] args) {
+				if (!(sender instanceof Player player)) return;
+                ownerDispatch(player, "GraveStonesPlus.InspectItem").accept(() -> {
+                    ItemStack item = player.getInventory().getItemInMainHand();
+                    if (item == null || item.getType().isAir()) { sendMessage(sender, "&eHold an item to inspect."); return; }
+                    sendMessage(sender, new ArrayList<>(com.bencodez.gravestonesplus.listeners.ItemRuleEvaluator.inspect(plugin, player, item)));
+                });
+			}
+		});
+
+	}
+
+    /** The bundled dispatcher is async. Reuse reload's existing authorization fence for owner work and replies. */
+    private java.util.function.Consumer<Runnable> ownerDispatch(Player player, String permission) {
+        var manager = plugin.getPlayerBreakManager();
+        long generation = manager == null ? 0 : manager.getAuthorizationGeneration().get();
+        return action -> plugin.getBukkitScheduler().runTask(plugin, () -> {
+            if (!plugin.isEnabled() || !player.isOnline() || !player.hasPermission(permission)
+                    || plugin.getPlayerBreakManager() != manager
+                    || manager != null && manager.getAuthorizationGeneration().get() != generation) return;
+            action.run();
+        }, player);
+    }
+
+    private UUID knownHelper(String value) {
+        try { return UUID.fromString(value); } catch (IllegalArgumentException ignored) { }
+        Player online = Bukkit.getPlayerExact(value);
+        if (online != null) return online.getUniqueId();
+        // Cached lookup avoids profile/network I/O on a gameplay callback.
+        return null;
+    }
+    private Grave ownerGrave(Player player) {
+        Grave selected = plugin.getGraveNavigation().target(player);
+        if (selected != null && selected.isOwner(player)) return selected;
+        return targetGrave(player);
+    }
+
+	private Grave targetGrave(Player player) {
+		Block block = player.getTargetBlock(null, 7);
+		for (Grave grave : plugin.activeGraveSnapshot()) if (plugin.isLiveGrave(grave) && grave.isGrave(block)) return grave;
+		return null;
 	}
 
 	public void createTestGrave(UUID uuid, String name, Location deathLocation,
@@ -422,9 +546,8 @@ public class CommandLoader {
 			Grave oldest = plugin.getOldestGrave(uuid);
 			if (oldest != null) {
 				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-					oldest.dropItemsOnGround(null); // if your method supports null, otherwise make a dev-safe overload
-				}
-				oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
+					oldest.dropItemsOnGround(null);
+				} else oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
 			}
 		}
 

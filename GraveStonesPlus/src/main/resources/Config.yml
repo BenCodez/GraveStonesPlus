@@ -128,6 +128,18 @@ GraveClaimDistance: 10
 # Give a compass on respawn pointing to the last grave
 GiveCompassOnRespawn: false
 
+# Login reminders are one current summary, deduplicated in grave-reminders.yml.
+# Protection and expiry are separate reminders; set either to 0 to disable.
+Reminders:
+  # Disabled by default. Set either value to 60 (or another number) to opt in.
+  ProtectionMinutes: 0
+  ExpiryMinutes: 0
+
+# Trusted grave helpers are granted per grave with:
+# /gravestonesplus trust <player> <track|recover> <duration>
+# /gravestonesplus revoketrust <player> <track|recover>
+# Grants are bounded to 90 days and stored in selected-access.yml. Tracking never grants recovery.
+
 
 # =========================================================
 # Grave Limits & Cleanup

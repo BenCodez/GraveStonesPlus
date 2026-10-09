@@ -3,6 +3,7 @@ package com.bencodez.gravestonesplus.graves;
 import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map.Entry;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
@@ -69,6 +70,7 @@ public class Grave {
 	 * Scheduled expiration task for this grave.
 	 */
 	private ScheduledFuture<?> expirationTask;
+    private long expirationGeneration;
 
 	@Getter
 	@Setter
@@ -77,10 +79,15 @@ public class Grave {
 	private final GraveStonesPlus plugin;
 
 	@Getter
-	private boolean remove = false;
+	private volatile boolean remove = false;
+    private volatile boolean claimInProgress;
+    @Getter private volatile boolean limitPayoutPending;
+    private java.lang.ref.WeakReference<Player> limitRecipient = new java.lang.ref.WeakReference<>(null);
+    private volatile long expiryDeadline;
+    private GraveMarkerCleanup.Ticket cleanupTicket;
 
 	@Getter
-	private ItemDisplay itemDisplay;
+	private volatile ItemDisplay itemDisplay;
 
 	private boolean chunkLoaded = false;
 
@@ -101,7 +108,9 @@ public class Grave {
 	 * @param block Block
 	 */
 	public void loadBlockMeta(Block block) {
-		MiscUtils.getInstance().setBlockMeta(block, "Grave", this);
+		block.removeMetadata("Grave", plugin);
+        block.setMetadata("Grave", new org.bukkit.metadata.FixedMetadataValue(plugin, this));
+        GraveMarkerCleanup.tag(plugin, block, GraveIdentity.of(gravesConfig));
 	}
 
 	/**
@@ -248,6 +257,7 @@ public class Grave {
 					if (itemDisplay != null) {
 						getGravesConfig().setDisplayUUID(itemDisplay.getUniqueId());
 						itemDisplay.getPersistentDataContainer().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+                        itemDisplay.getPersistentDataContainer().set(GraveMarkerCleanup.identityKey(plugin), PersistentDataType.STRING, GraveIdentity.of(gravesConfig));
 					}
 
 					block.setType(Material.BARRIER);
@@ -319,25 +329,49 @@ public class Grave {
 	/**
 	 * Removes nearby hologram entities associated with the grave.
 	 */
-	public void removeHologramsAround() {
-		try {
-			Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
-			for (Entity entity : hologramLocation.getWorld().getNearbyEntities(hologramLocation, 1, 3, 1)) {
-				if (entity.getType().equals(EntityType.ARMOR_STAND)
-						|| entity.getType().equals(EntityType.ITEM_DISPLAY)) {
-					if (entity.getPersistentDataContainer().has(plugin.getKey(), PersistentDataType.INTEGER)) {
-						Integer value = entity.getPersistentDataContainer().get(plugin.getKey(),
-								PersistentDataType.INTEGER);
-						if (value != null && value.intValue() == 1) {
-							entity.remove();
-						}
-					}
-				}
-			}
-		} catch (Exception e) {
-			plugin.debug(e);
-		}
-	}
+    public void removeHologramsAround() {
+        try {
+            removeHologram();
+            Location center = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
+            String identity = GraveIdentity.of(gravesConfig);
+            for (Entity entity : center.getWorld().getNearbyEntities(center, 1, 3, 1)) {
+                // Nearby entities can straddle region boundaries. Inspect and remove on their owner.
+                plugin.getBukkitScheduler().runTask(plugin, () -> reconcileSurvivingHologram(entity, center, identity), entity);
+            }
+        } catch (Exception failure) { plugin.debug(failure); }
+    }
+
+    private void reconcileSurvivingHologram(Entity entity, Location center, String identity) {
+        if (!plugin.isEnabled()) return;
+        if (entity.getType() != EntityType.ARMOR_STAND && entity.getType() != EntityType.ITEM_DISPLAY) return;
+        // Restoration may adopt this display after scheduling nearby cleanup. Recheck at
+        // execution, including a live successor's adoption of the same physical display.
+        if (entity.getType() == EntityType.ITEM_DISPLAY && ((!remove && !gravesConfig.isDestroyed() && entity == itemDisplay)
+                || plugin.activeGraveSnapshot().stream().anyMatch(grave -> !grave.isRemove()
+                        && !grave.getGravesConfig().isDestroyed() && entity == grave.getItemDisplay()))) return;
+        var data = entity.getPersistentDataContainer();
+        String tagged = data.get(GraveMarkerCleanup.identityKey(plugin), PersistentDataType.STRING);
+        if (identity.equals(tagged)) { entity.remove(); return; }
+        // Upgrade only the old plugin-tagged stands at the four exact native hologram positions.
+        // Never adopt a successor identity or an arbitrary nearby/untagged entity.
+        if (tagged != null || entity.getType() != EntityType.ARMOR_STAND
+                || !Integer.valueOf(1).equals(data.get(plugin.getKey(), PersistentDataType.INTEGER))) return;
+        Location actual = entity.getLocation();
+        if (actual == null || actual.getWorld() != center.getWorld()
+                || Math.abs(actual.getX() - center.getX()) > 0.000001
+                || Math.abs(actual.getZ() - center.getZ()) > 0.000001) return;
+        double y = actual.getY() - center.getY();
+        if (Math.abs(y - 1.5) > 0.000001 && Math.abs(y - 1.25) > 0.000001
+                && Math.abs(y - 1) > 0.000001 && Math.abs(y + 2) > 0.000001) return;
+        // The matching position is in this entity's chunk. Revalidate current marker ownership
+        // after scheduler admission so an old callback cannot adopt a replacement grave's stands.
+        if (remove || gravesConfig.isDestroyed() || !center.getWorld().isChunkLoaded(center.getBlockX() >> 4, center.getBlockZ() >> 4)) return;
+        boolean current = center.getBlock().getMetadata("Grave").stream()
+                .anyMatch(value -> value.getOwningPlugin() == plugin && value.value() == this);
+        if (!current) return;
+        data.set(GraveMarkerCleanup.identityKey(plugin), PersistentDataType.STRING, identity);
+        entity.remove();
+    }
 
 	/**
 	 * Creates the hologram lines above the grave.
@@ -354,50 +388,84 @@ public class Grave {
 		placeholders.put("reason", gravesConfig.getDeathMessage());
 
 		if (topHologram != null) {
-			topHologram.kill();
+			releaseHologram(topHologram);
 		}
-		topHologram = new Hologram(hologramLocation.add(0, 1.5, 0),
+		topHologram = newManagedHologram(hologramLocation.add(0, 1.5, 0),
 				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveTop(), placeholders), true,
-				false, plugin.getKey(), 1, "Grave", this);
+				false);
 
 		if (middleHologram != null) {
-			middleHologram.kill();
+			releaseHologram(middleHologram);
 		}
-		middleHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
+		middleHologram = newManagedHologram(hologramLocation.subtract(0, .25, 0),
 				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveMiddle(), placeholders), true,
-				false, plugin.getKey(), 1, "Grave", this);
+				false);
 
 		if (bottomHologram != null) {
-			bottomHologram.kill();
+			releaseHologram(bottomHologram);
 		}
-		bottomHologram = new Hologram(hologramLocation.subtract(0, .25, 0),
+		bottomHologram = newManagedHologram(hologramLocation.subtract(0, .25, 0),
 				PlaceholderUtils.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBottom(), placeholders), true,
-				false, plugin.getKey(), 1, "Grave", this);
+				false);
 
+        for (Hologram hologram : new Hologram[] { topHologram, middleHologram, bottomHologram }) if (hologram != null)
+            tagHologram(hologram, 0);
 		checkGlowing();
 	}
+
+    /** AdvancedCore may defer entity construction; tag only once the actual entity exists. */
+    void tagHologram(Hologram hologram, int attempt) {
+        if (hologram == null || !plugin.isEnabled()) return;
+        org.bukkit.entity.ArmorStand stand = hologram.getArmorStand();
+        boolean retired = remove || gravesConfig.isDestroyed() || hologram != topHologram && hologram != middleHologram
+                && hologram != bottomHologram && hologram != glowingHologram;
+        if (retired) releaseHologram(hologram);
+        if (stand != null) {
+            if (!retired) stand.getPersistentDataContainer().set(GraveMarkerCleanup.identityKey(plugin), PersistentDataType.STRING, GraveIdentity.of(gravesConfig));
+        } else if (attempt < 5) plugin.getBukkitScheduler().runTaskLater(plugin, () -> tagHologram(hologram, attempt + 1), 1L, gravesConfig.getLocation());
+    }
+    private void tagDisplay() {
+        if (itemDisplay != null) itemDisplay.getPersistentDataContainer().set(GraveMarkerCleanup.identityKey(plugin), PersistentDataType.STRING, GraveIdentity.of(gravesConfig));
+    }
 
 	/**
 	 * Removes the hologram for this grave.
 	 */
 	public void removeHologram() {
 		if (topHologram != null) {
-			topHologram.kill();
+			releaseHologram(topHologram);
 			topHologram = null;
 		}
 		if (middleHologram != null) {
-			middleHologram.kill();
+			releaseHologram(middleHologram);
 			middleHologram = null;
 		}
 		if (bottomHologram != null) {
-			bottomHologram.kill();
+			releaseHologram(bottomHologram);
 			bottomHologram = null;
 		}
 		if (glowingHologram != null) {
-			glowingHologram.kill();
+			releaseHologram(glowingHologram);
 			glowingHologram = null;
 		}
 	}
+
+    /** All grave wrappers share AC's mutable registry; world work remains on the grave owner. */
+    private Hologram newManagedHologram(Location location, String name, boolean marker, boolean glowing) {
+        synchronized (plugin.getHologramHandler()) {
+            return new Hologram(location, name, marker, glowing, plugin.getKey(), 1, "Grave", this);
+        }
+    }
+
+    /** AC kill() uses a global sync handoff; unregister separately from entity-owned removal. */
+    private void releaseHologram(Hologram hologram) {
+        synchronized (plugin.getHologramHandler()) { plugin.getHologramHandler().remove(hologram, false); }
+        org.bukkit.entity.ArmorStand stand = hologram.getArmorStand();
+        if (stand != null) {
+            try { plugin.getBukkitScheduler().runTask(plugin, stand::remove, stand); }
+            catch (RuntimeException rejected) { plugin.debug(rejected); } // Exact PDC cleanup remains journaled.
+        }
+    }
 
 	/**
 	 * Checks if the grave marker is valid based on its stored display type.
@@ -425,6 +493,19 @@ public class Grave {
 				+ loc.getBlockZ() + ") Time of death: " + new Date(gravesConfig.getTime());
 	}
 
+	public String getNavigationMessage(Player player) {
+		Location target = gravesConfig.getLocation();
+		if (target == null || target.getWorld() == null) return "world unavailable";
+        target = target.clone();
+        Location source = player.getLocation();
+        if (source != null) source = source.clone();
+        if (source == null || source.getWorld() == null || !source.getWorld().getUID().equals(target.getWorld().getUID()))
+            return "world " + target.getWorld().getName() + " (different world)";
+		double dx = target.getX() - source.getX(), dz = target.getZ() - source.getZ();
+		String vertical = target.getY() > source.getY() ? "above" : target.getY() < source.getY() ? "below" : "level";
+		return target.getWorld().getName() + ", " + Math.round(Math.sqrt(dx * dx + dz * dz)) + " blocks, " + vertical;
+	}
+
 	public boolean isOwner(String player) {
 		return gravesConfig.getPlayerName().equalsIgnoreCase(player);
 	}
@@ -434,48 +515,87 @@ public class Grave {
 	 *
 	 * @param reason Removal reason
 	 */
-	public void removeGrave(final GraveRemoveReason reason) {
-		// Always handle remove on main thread because timers call from async thread
-		if (!Bukkit.isPrimaryThread()) {
-			plugin.getBukkitScheduler().runTask(plugin, () -> {
-				removeGrave(reason);
-			}, gravesConfig.getLocation());
-			return;
-		}
+    public void removeGrave(final GraveRemoveReason reason) {
+        plugin.getBukkitScheduler().runTask(plugin, () -> removeOwned(reason), gravesConfig.getLocation());
+    }
+    private void removeOwned(GraveRemoveReason reason) {
+        if (removeState(reason, () -> true)) cleanupMarker();
+    }
+    /** Player actions recheck permission and online state on the entity owner. */
+    public void removeByPlayer(Player player, GraveRemoveReason reason) {
+        if (player == null) return;
+        plugin.getBukkitScheduler().runTask(plugin, () -> {
+            if (removeState(reason, () -> player.isOnline() && plugin.isLiveGrave(this)
+                    && (isOwner(player) || canAdminister(player)))) {
+                plugin.getBukkitScheduler().runTask(plugin, this::cleanupMarker, gravesConfig.getLocation());
+                player.sendMessage(MessageAPI.colorize("&cGrave removed"));
+            }
+        }, player);
+    }
+    private synchronized boolean removeState(GraveRemoveReason reason, java.util.function.BooleanSupplier authorized) {
+        if (remove || claimInProgress || !expirationEligible(reason) || !authorized.getAsBoolean()) return false;
+        GraveMarkerCleanup cleanup = plugin.getMarkerCleanup();
+        GraveMarkerCleanup.Ticket ticket = cleanup == null ? null : cleanup.prepare(gravesConfig);
+        if (cleanup != null && ticket == null) {
+            if (reason == GraveRemoveReason.EXPIRED) retryExpiration(expiryDeadline);
+            return false;
+        }
+        long expiringDeadline = expiryDeadline;
+        GraveRemoveEvent event = new GraveRemoveEvent(this, reason == null ? GraveRemoveReason.MANUAL_REMOVE : reason);
+        try { Bukkit.getPluginManager().callEvent(event); }
+        catch (RuntimeException failure) { if (ticket != null) ticket.close(); throw failure; }
+        if (event.isCancelled()) {
+            if (ticket != null) ticket.close();
+            if (reason == GraveRemoveReason.EXPIRED && expiryDeadline == expiringDeadline
+                    && expiringDeadline <= System.currentTimeMillis()) expiryDeadline = 0;
+            return false;
+        }
+        if (claimInProgress || remove || !expirationEligible(reason) || !authorized.getAsBoolean()) { if (ticket != null) ticket.close(); return false; }
+        cleanupTicket = ticket;
+        remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(System.currentTimeMillis());
+        plugin.getGraveNavigation().invalidate(GraveIdentity.of(gravesConfig));
+        plugin.getTrustedGraveAccessStore().revokeForGraveAsync(GraveIdentity.of(gravesConfig));
+        if (limitPayoutPending) {
+            limitPayoutPending = false; limitRecipient.clear();
+            plugin.getGraveClaimLedger().cancelQueuedLimit(GraveIdentity.of(gravesConfig));
+        }
+        removeTimer(); plugin.removeGrave(this); return true;
+    }
+    /** Admission pressure is transient; retry one current deadline without retaining a queue of tasks. */
+    private synchronized void retryExpiration(long deadline) {
+        if (!plugin.isEnabled() || remove || gravesConfig.isDestroyed() || deadline <= 0 || expiryDeadline != deadline) return;
+        removeTimer();
+        long generation = expirationGeneration;
+        expirationTask = plugin.getTimer().schedule(() -> {
+            plugin.getBukkitScheduler().runTask(plugin, () -> {
+                synchronized (Grave.this) {
+                    if (!plugin.isEnabled() || generation != expirationGeneration || deadline != expiryDeadline
+                            || remove || gravesConfig.isDestroyed()) return;
+                    removeOwned(GraveRemoveReason.EXPIRED);
+                }
+            }, gravesConfig.getLocation());
+        }, 5L, TimeUnit.SECONDS);
+    }
+    private boolean expirationEligible(GraveRemoveReason reason) {
+        return reason != GraveRemoveReason.EXPIRED || (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis());
+    }
+    public java.util.concurrent.CompletableFuture<Boolean> grantHelper(Player owner, java.util.UUID helper,
+            TrustedGraveAccess.Kind kind, long expiresAt) {
+        synchronized (plugin.getTrustedGraveAccessStore()) {
+            if (owner == null || !owner.isOnline() || !isOwner(owner) || !owner.hasPermission("GraveStonesPlus.Trust")
+                    || !plugin.isLiveGrave(this)) return java.util.concurrent.CompletableFuture.completedFuture(false);
+            return plugin.getTrustedGraveAccessStore().grantAsync(GraveIdentity.of(gravesConfig), helper, kind, expiresAt);
+        }
+    }
 
-		GraveRemoveEvent removeEvent = new GraveRemoveEvent(this,
-				reason == null ? GraveRemoveReason.MANUAL_REMOVE : reason);
-		callEventSync(removeEvent);
-		if (removeEvent.isCancelled()) {
-			return;
-		}
-
-		remove = true;
-
-		gravesConfig.setDestroyed(true);
-		gravesConfig.setDestroyedTime(System.currentTimeMillis());
-
-		plugin.getBukkitScheduler().runTask(GraveStonesPlus.plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				// Only remove the ItemDisplay if this grave is a display-entity grave
-				if (getStoredDisplayTypeOrDefault() == GraveDisplayType.DISPLAY_ENTITY) {
-					if (itemDisplay != null) {
-						itemDisplay.remove();
-						itemDisplay = null;
-					}
-				}
-
-				gravesConfig.getLocation().getBlock().removeMetadata("Grave", plugin);
-				gravesConfig.getLocation().getBlock().setType(Material.AIR);
-			}
-		}, gravesConfig.getLocation());
-
-		removeHologram();
-		removeTimer();
-		plugin.removeGrave(this);
-	}
+    public java.util.concurrent.CompletableFuture<Boolean> revokeHelper(Player owner, java.util.UUID helper,
+            TrustedGraveAccess.Kind kind) {
+        synchronized (plugin.getTrustedGraveAccessStore()) {
+            if (owner == null || !owner.isOnline() || !isOwner(owner) || !owner.hasPermission("GraveStonesPlus.Trust.Revoke")
+                    || !plugin.isLiveGrave(this)) return java.util.concurrent.CompletableFuture.completedFuture(false);
+            return plugin.getTrustedGraveAccessStore().revokeAsync(GraveIdentity.of(gravesConfig), helper, kind);
+        }
+    }
 
 	/**
 	 * Removes the grave using {@link GraveRemoveReason#MANUAL_REMOVE}.
@@ -501,7 +621,9 @@ public class Grave {
 
 		final long durationMillis = duration.getMillis();
 		long deathTime = gravesConfig.getTime();
-		long expireTime = deathTime + durationMillis;
+		long expireTime = GraveDeadlines.deadline(deathTime, durationMillis);
+        expiryDeadline = expireTime;
+        if (expireTime <= 0) return;
 		long delay = expireTime - System.currentTimeMillis();
 
 		if (delay <= 0) {
@@ -513,8 +635,8 @@ public class Grave {
 
 			@Override
 			public void run() {
-				long currentExpireTime = gravesConfig.getTime() + durationMillis;
-				if (currentExpireTime < System.currentTimeMillis()) {
+				long currentExpireTime = expiryDeadline;
+				if (currentExpireTime > 0 && currentExpireTime <= System.currentTimeMillis()) {
 					removeGrave(GraveRemoveReason.EXPIRED);
 				}
 			}
@@ -528,6 +650,7 @@ public class Grave {
 	 */
 	public void checkTimeLimit(int timeLimit) {
 		if (timeLimit <= 0) {
+            removeTimer(); expiryDeadline = 0;
 			return;
 		}
 
@@ -542,7 +665,8 @@ public class Grave {
 	 *                     as {@code 30m}, {@code 2h}, or {@code 7d}
 	 */
 	public void checkTimeLimit(String timeLimitRaw) {
-		if (timeLimitRaw == null || timeLimitRaw.trim().isEmpty()) {
+		removeTimer(); expiryDeadline = 0;
+        if (timeLimitRaw == null || timeLimitRaw.trim().isEmpty()) {
 			return;
 		}
 
@@ -571,25 +695,33 @@ public class Grave {
 	 */
 	public void checkTimeLimit(ParsedDuration timeLimit) {
 		if (timeLimit == null) {
+            removeTimer(); expiryDeadline = 0;
 			return;
 		}
 
 		long durationMillis = timeLimit.getMillis();
 		if (durationMillis <= 0) {
+            removeTimer(); expiryDeadline = 0;
 			return;
 		}
 
 		long deathTime = gravesConfig.getTime();
-		long expireTime = deathTime + durationMillis;
+		long expireTime = GraveDeadlines.deadline(deathTime, durationMillis);
+        expiryDeadline = expireTime;
 
-		if (expireTime < System.currentTimeMillis()) {
+		if (expireTime > 0 && expireTime <= System.currentTimeMillis()) {
 			removeGrave(GraveRemoveReason.EXPIRED);
 		} else {
 			schedule(timeLimit);
 		}
 	}
 
-	public BInventoryButton getGUIItem() {
+    public long getExpiryDeadline() { return expiryDeadline; }
+
+    /** Render on the viewer's entity owner; navigation lore snapshots their current position. */
+    public BInventoryButton getNavigationGUIItem(Player viewer) { return guiItem(true, viewer); }
+    public BInventoryButton getGUIItem() { return guiItem(false, null); }
+    private BInventoryButton guiItem(boolean navigation, Player menuViewer) {
 		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(
 				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
@@ -597,29 +729,54 @@ public class Grave {
 						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
 								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
 						.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
-						.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to remove")
-						.addLoreLine("&cShift left click to view items")) {
+						.addLoreLine(navigation ? "&bClick to select compass; right click to recover nearby" : "&bClick to Teleport").addLoreLine("&4Shift right click to remove")
+						.addLoreLine("&cShift left click to view items")
+                        .addLoreLine(navigation ? "&7" + getNavigationMessage(menuViewer) : "")) {
 
-			@Override
-			public void onClick(ClickEvent clickEvent) {
-				Grave grave = (Grave) getData("grave");
-				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
-					grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE);
-					clickEvent.getWhoClicked().sendMessage(MessageAPI.colorize("&cGrave removed"));
-				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
-					openGUIWithItems(clickEvent.getPlayer());
-				} else {
-					Location loc = grave.getGravesConfig().getLocation();
-					Player p = clickEvent.getWhoClicked();
-					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-						@Override
-						public void run() {
-							p.teleport(loc.clone().add(0, 1, 0));
-						}
-					}, loc);
-				}
-			}
+            @Override
+            public void onClick(ClickEvent clickEvent) {
+                Grave grave = (Grave) getData("grave");
+                Player viewer = clickEvent.getPlayer();
+                ClickType click = clickEvent.getClick();
+                // BInventory clicks are asynchronous by default. Only immutable
+                // click intent crosses this hop; authorization and player reads wait.
+                plugin.getBukkitScheduler().runTask(plugin, () -> {
+                    if (!plugin.isEnabled() || !viewer.isOnline()) return;
+                    if (!plugin.isLiveGrave(grave) || (!plugin.canTrack(grave, viewer) && !canAdminister(viewer))) {
+                        viewer.sendMessage(MessageAPI.colorize("&cThat grave is no longer accessible.")); return;
+                    }
+                    if (click == ClickType.SHIFT_RIGHT) {
+                        if (!grave.isOwner(viewer) && !canAdminister(viewer)) {
+                            viewer.sendMessage(MessageAPI.colorize("&cOnly the grave owner can remove this grave.")); return;
+                        }
+                        grave.removeByPlayer(viewer, GraveRemoveReason.MANUAL_REMOVE);
+                    } else if (click == ClickType.SHIFT_LEFT) {
+                        if (!grave.canViewContents(viewer)) {
+                            viewer.sendMessage(MessageAPI.colorize("&cYou can track this grave but cannot recover its contents.")); return;
+                        }
+                        grave.openGUIWithItems(viewer);
+                    } else if (navigation) {
+                        if (click == ClickType.RIGHT) {
+                            if (!viewer.hasPermission("GraveStonesPlus.ClaimGrave")) {
+                                viewer.sendMessage(MessageAPI.colorize("&cYou don't have permission to claim graves.")); return;
+                            }
+                            double distance = grave.getDistance(viewer);
+                            if (distance >= 0 && distance < plugin.getConfigFile().getGraveClaimDistance()) grave.claimNearby(viewer);
+                            else viewer.sendMessage("\u00a7cMove near the grave to recover it.");
+                        } else {
+                            if (!viewer.hasPermission("GraveStonesPlus.Compass")) {
+                                viewer.sendMessage(MessageAPI.colorize("&cYou don't have permission to use compasses.")); return;
+                            }
+                            grave.giveCompass(viewer);
+                        }
+                    } else if (grave.isOwner(viewer) || canAdminister(viewer)) {
+                        Location destination = grave.getGravesConfig().getLocation().clone().add(0, 1, 0);
+                        if (plugin.getBukkitScheduler().getFoliaLib().isFolia())
+                            plugin.getBukkitScheduler().getFoliaLib().getImpl().teleportAsync(viewer, destination);
+                        else viewer.teleport(destination);
+                    }
+                }, viewer);
+            }
 		};
 		b.addData("grave", this);
 		return b;
@@ -640,30 +797,19 @@ public class Grave {
 			@Override
 			public void onClick(ClickEvent clickEvent) {
 				Grave grave = (Grave) getData("grave");
-				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
-					loadChunk(true);
-					grave.createGrave();
-					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-						@Override
-						public void run() {
-							grave.createHologram();
-						}
-					}, grave.getGravesConfig().getLocation());
-					plugin.recreateBrokenGrave(grave);
-					clickEvent.getWhoClicked().sendMessage(MessageAPI.colorize("&cGrave readded"));
+				if (!canAdministerHistorical(clickEvent.getPlayer())) return;
+                if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
+                    Player actor = clickEvent.getPlayer();
+                    plugin.recreateBrokenGrave(grave, actor).whenComplete((restored, failure) ->
+                        plugin.getBukkitScheduler().runTask(plugin, () -> {
+                            if (actor.isOnline()) actor.sendMessage(Boolean.TRUE.equals(restored) && failure == null
+                                    ? MessageAPI.colorize("&cGrave readded")
+                                    : "\u00a7cThis grave could not be recreated; recovery records or unavailable storage may block it.");
+                        }, actor));
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
 					openGUIWithItems(clickEvent.getPlayer());
 				} else {
-					Location loc = grave.getGravesConfig().getLocation();
-					Player p = clickEvent.getWhoClicked();
-					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-						@Override
-						public void run() {
-							p.teleport(loc.clone().add(0, 1, 0));
-						}
-					}, loc);
+                    grave.teleportHistorical(clickEvent.getWhoClicked());
 				}
 
 			}
@@ -679,26 +825,24 @@ public class Grave {
 				+ new Date(gravesConfig.getTime());
 	}
 
-	public double getDistance(Player p) {
-		if (p.getWorld().getUID().equals(gravesConfig.getLocation().getWorld().getUID())) {
-			return gravesConfig.getLocation().distance(p.getLocation());
-		}
-		return -1;
-	}
+    /** Caller owns the player; one location snapshot keeps world and distance consistent. */
+    public double getDistance(Player p) {
+        Location target = gravesConfig.getLocation();
+        if (p == null || target == null || target.getWorld() == null) return -1;
+        target = target.clone();
+        Location source = p.getLocation();
+        if (source == null || source.getWorld() == null) return -1;
+        source = source.clone();
+        if (!source.getWorld().getUID().equals(target.getWorld().getUID())) return -1;
+        return target.distance(source);
+    }
 
-	public boolean isGrave(Block clicked) {
-		Block currentBlock = gravesConfig.getLocation().getBlock();
-		if (currentBlock.getLocation().getWorld().getUID().equals(clicked.getWorld().getUID())) {
-			if (currentBlock.getX() == clicked.getX()) {
-				if (currentBlock.getY() == clicked.getY()) {
-					if (currentBlock.getZ() == clicked.getZ()) {
-						return true;
-					}
-				}
-			}
-		}
-		return false;
-	}
+    public boolean isGrave(Block clicked) {
+        Location loc = gravesConfig.getLocation();
+        return clicked != null && loc != null && loc.getWorld() != null
+                && loc.getWorld().getUID().equals(clicked.getWorld().getUID())
+                && loc.getBlockX() == clicked.getX() && loc.getBlockY() == clicked.getY() && loc.getBlockZ() == clicked.getZ();
+    }
 
 	/**
 	 * For display entities, try to find the ItemDisplay and recreate it if missing.
@@ -741,35 +885,43 @@ public class Grave {
 				if (itemDisplay != null) {
 					gravesConfig.setDisplayUUID(itemDisplay.getUniqueId());
 					itemDisplay.getPersistentDataContainer().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
+                        itemDisplay.getPersistentDataContainer().set(GraveMarkerCleanup.identityKey(plugin), PersistentDataType.STRING, GraveIdentity.of(gravesConfig));
 				}
 			} catch (Exception e) {
 				plugin.debug(e);
 			}
 		}
+        tagDisplay();
 	}
 
-	public void giveCompass(Player p) {
-		ItemStack compass = new ItemStack(Material.COMPASS);
-		CompassMeta meta = (CompassMeta) compass.getItemMeta();
-		meta.setLodestone(getGravesConfig().getLocation());
-		meta.setLodestoneTracked(false);
-		NamespacedKey key = new NamespacedKey(plugin, "gravecompass");
-		meta.getPersistentDataContainer().set(key, PersistentDataType.LONG, getGravesConfig().getTime());
-		meta.setDisplayName(p.getName() + " last grave: ");
+    public void giveCompass(Player player) {
+        plugin.getBukkitScheduler().runTask(plugin, () -> {
+            if (!plugin.isEnabled() || !player.isOnline() || !player.hasPermission("GraveStonesPlus.Compass")
+                    || !plugin.getGraveNavigation().select(player, this)) return;
+            ItemStack compass = new ItemStack(Material.COMPASS);
+            CompassMeta meta = (CompassMeta) compass.getItemMeta();
+            meta.setLodestone(gravesConfig.getLocation()); meta.setLodestoneTracked(false);
+            meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "gravecompass"), PersistentDataType.LONG, gravesConfig.getTime());
+            meta.getPersistentDataContainer().set(new NamespacedKey(plugin, "graveidentity"), PersistentDataType.STRING, GraveIdentity.of(gravesConfig));
+            meta.setDisplayName(gravesConfig.getPlayerName() + " grave"); meta.setLore(java.util.List.of(getNavigationMessage(player)));
+            compass.setItemMeta(meta);
+            // AC giveItem queues another unguarded delivery, including retained overflow.
+            // Issue this optional navigation item at the authorization boundary instead.
+            var overflow = player.getInventory().addItem(compass);
+            if (!overflow.isEmpty()) {
+                if (plugin.getOptions().isDropOnFullInv()) {
+                    for (ItemStack item : overflow.values()) player.getWorld().dropItem(player.getLocation(), item);
+                } else {
+                    player.sendMessage("\u00a7cMake room in your inventory, then request the grave compass again.");
+                    return;
+                }
+            }
+            player.sendMessage("\u00a7aSelected grave: " + getNavigationMessage(player));
+        }, player);
+    }
 
-		compass.setItemMeta(meta);
-
-		final ItemStack itemToGive = compass;
-		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				plugin.getFullInventoryHandler().giveItem(p, itemToGive);
-			}
-		}, p.getLocation());
-	}
-
-	public void removeTimer() {
+	public synchronized void removeTimer() {
+        expirationGeneration++;
 		if (expirationTask != null && !expirationTask.isDone()) {
 			expirationTask.cancel(false);
 		}
@@ -779,7 +931,7 @@ public class Grave {
 		if (isOwner(player)) {
 			return true;
 		}
-		return player.hasPermission("GraveStonesPlus.BreakOtherGraves");
+		return plugin.canRecover(this, player) || player.hasPermission("GraveStonesPlus.BreakOtherGraves");
 	}
 
 	public boolean canNonOwnerClaim() {
@@ -869,7 +1021,8 @@ public class Grave {
 			Location glowLoc = graveLoc.getBlock().getLocation().clone().add(0.5, -2, 0.5);
 
 			if (glowingHologram == null) {
-				glowingHologram = new Hologram(glowLoc, "", false, true, plugin.getKey(), 1, "Grave", this);
+				glowingHologram = newManagedHologram(glowLoc, "", false, true);
+                tagHologram(glowingHologram, 0);
 			}
 
 			glowingHologram.glow(true);
@@ -880,44 +1033,179 @@ public class Grave {
 
 	private void removeGlowingHologram() {
 		if (glowingHologram != null) {
-			glowingHologram.kill();
+			releaseHologram(glowingHologram);
 			glowingHologram = null;
 		}
 	}
 
-	public void createBrokenGrave() {
-		gravesConfig.setDestroyed(false);
-		gravesConfig.setDestroyedTime(0);
-		createGrave();
-		createHologram();
-	}
+	public void markRecreated() { removeTimer(); expiryDeadline = 0; remove = false; }
+    public void createBrokenGrave() { recreateAsync(null, true); }
+    /** Check durable history before any marker, destroyed-state or active-list mutation. */
+    public java.util.concurrent.CompletableFuture<Boolean> recreateAsync(Player actor, boolean createMarker) {
+        final String identity = GraveIdentity.of(gravesConfig);
+        synchronized (this) {
+            if (!recreationStateAllowed(identity)) return java.util.concurrent.CompletableFuture.completedFuture(false);
+        }
+        var result = new java.util.concurrent.CompletableFuture<Boolean>();
+        plugin.getGraveClaimLedger().canRecreate(identity).thenCompose(allowed -> {
+            // Removal can become historical even when its first revocation failed or
+            // could not enter the worker. Reconcile those persisted grants before
+            // exposing this identity as live again, including after restart.
+            synchronized (this) {
+                if (!Boolean.TRUE.equals(allowed) || !recreationStateAllowed(identity))
+                    return java.util.concurrent.CompletableFuture.completedFuture(false);
+                return plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
+            }
+        }).whenComplete((allowed, failure) -> {
+            if (failure != null || !Boolean.TRUE.equals(allowed)) { result.complete(false); return; }
+            try {
+                plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(gravesConfig.getLocation(), task -> {
+                    synchronized (this) {
+                        if (!recreationStateAllowed(identity)) { result.complete(false); return; }
+                    }
+                    Runnable commit = () -> {
+                        synchronized (this) {
+                            if (!recreationStateAllowed(identity) || actor != null && (!actor.isOnline() || !canAdministerHistorical(actor))) { result.complete(false); return; }
+                            markRecreated(); gravesConfig.setDestroyed(false); gravesConfig.setDestroyedTime(0);
+                            if (createMarker) {
+                                createGrave();
+                                plugin.getBukkitScheduler().runTask(plugin, () -> { if (!remove && plugin.isEnabled()) createHologram(); }, gravesConfig.getLocation());
+                            }
+                            result.complete(true);
+                        }
+                    };
+                    if (actor == null) commit.run();
+                    else try { plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtEntityWithFallback(actor, ignored -> commit.run(), () -> result.complete(false))
+                            .whenComplete((scheduled, error) -> { if (error != null || scheduled != com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS) result.complete(false); });
+                    } catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
+                }).whenComplete((unused, error) -> { if (error != null) result.completeExceptionally(error); });
+            } catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
+        });
+        return result;
+    }
 
-	public void dropItemsOnGround(Player p) {
-		Location loc = getGravesConfig().getLocation();
-		ArrayList<ItemStack> items = new ArrayList<ItemStack>(getGravesConfig().getItems().values());
-		int chance = plugin.getConfigFile().getPercentageDrops();
-		final ArrayList<ItemStack> itemsToDrop = new ArrayList<ItemStack>();
-		for (ItemStack item : items) {
-			if (item != null && !item.getType().equals(Material.AIR)) {
-				if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
-					itemsToDrop.add(item);
-				}
-			}
-		}
-		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
+    private boolean recreationStateAllowed(String identity) {
+        return identity != null && plugin.isEnabled() && gravesConfig.isDestroyed() && !claimInProgress
+                && identity.equals(GraveIdentity.of(gravesConfig)) && !plugin.getGraveClaimLedger().isBlocked(identity);
+    }
+    public void teleportHistorical(Player actor) {
+        if (actor == null) return;
+        Location target = gravesConfig.getLocation().clone().add(0, 1, 0);
+        plugin.getBukkitScheduler().runTask(plugin, () -> {
+            if (actor.isOnline() && plugin.isEnabled() && canAdministerHistorical(actor)) plugin.getBukkitScheduler().getFoliaLib().getImpl().teleportAsync(actor, target);
+        }, actor);
+    }
 
-			@Override
-			public void run() {
-				for (ItemStack item : itemsToDrop) {
-					if (item != null && !item.getType().equals(Material.AIR)) {
-						loc.getWorld().dropItem(loc, item);
-					}
-				}
-			}
-		}, loc);
-	}
+    /** Limit-removal payout shares the claim ledger, so queued drops cannot race recovery. */
+    public void dropItemsOnGround(Player recipient) {
+        String identity = GraveIdentity.of(gravesConfig);
+        synchronized (this) {
+            if (remove || claimInProgress || limitPayoutPending || !plugin.isLiveGrave(this) || plugin.getGraveClaimLedger().isBlocked(identity)) return;
+            claimInProgress = true;
+            limitRecipient = new java.lang.ref.WeakReference<>(recipient);
+        }
+        final String evidence;
+        try { evidence = GraveClaimLedger.evidence(com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig)); }
+        catch (RuntimeException invalid) { releaseClaim(); return; }
+        plugin.getGraveClaimLedger().queueLimit(identity, gravesConfig.getUuid(), evidence).whenComplete((saved, failure) -> {
+            if (failure == null && Boolean.TRUE.equals(saved)) {
+                limitPayoutPending = true;
+                plugin.getGraveRestoration().retainLimit(this);
+            }
+            releaseClaim();
+            if (limitPayoutPending) plugin.getGraveRestoration().retry();
+        });
+    }
+    void markLimitPayoutPending() { limitPayoutPending = true; }
+    /** Invoked by restoration only on a loaded chunk's owning scheduler. */
+    void resumeLimitPayout() {
+        String identity = GraveIdentity.of(gravesConfig);
+        synchronized (this) {
+            if (remove || claimInProgress || !limitPayoutPending || !plugin.isEnabled()) return;
+            if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) {
+                removeOwned(GraveRemoveReason.EXPIRED); return;
+            }
+            if (!plugin.isLiveGrave(this)) return;
+            if (!prepareCleanup()) return;
+            claimInProgress = true;
+        }
+        final com.bencodez.gravestonesplus.storage.GravesConfig captured;
+        try { captured = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig); }
+        catch (RuntimeException invalid) { releaseClaim(); return; }
+        plugin.getGraveClaimLedger().reserveQueuedLimit(identity, gravesConfig.getUuid()).whenComplete((saved, failure) -> {
+            if (failure != null || !Boolean.TRUE.equals(saved)) { releaseClaim(); return; }
+            java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
+            Runnable retired = () -> { if (started.compareAndSet(false, true)) deferLimitPayout(identity); };
+            try {
+                plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(captured.getLocation(), task -> {
+                    if (!started.compareAndSet(false, true)) return;
+                    Location loc = captured.getLocation();
+                    // The disk reservation can outlive the grave's remaining lifetime.
+                    // No world payout has occurred, so return ownership to the queued
+                    // record before releaseClaim dispatches normal cancellable expiry.
+                    if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) { deferLimitPayout(identity); return; }
+                    if (!plugin.isEnabled() || !plugin.isLiveGrave(this) || loc.getWorld() == null
+                            || !loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) { deferLimitPayout(identity); return; }
+                    GraveRemoveEvent event = new GraveRemoveEvent(this, GraveRemoveReason.LIMIT_REACHED);
+                    Bukkit.getPluginManager().callEvent(event);
+                    if (event.isCancelled()) {
+                        limitPayoutPending = false; cancelClaim(identity); return;
+                    }
+                    // Listeners may run until the deadline or change the time limit.
+                    if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) { deferLimitPayout(identity); return; }
+                    if (!plugin.isLiveGrave(this)) {
+                        limitPayoutPending = false; cancelClaim(identity); return;
+                    }
+                    if (!plugin.isEnabled() || !loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) {
+                        deferLimitPayout(identity); return;
+                    }
+                    try {
+                        for (ItemStack item : GravePayout.select(captured.getItems(), plugin.getConfigFile().getPercentageDrops(),
+                                () -> ThreadLocalRandom.current().nextInt(100)).values()) loc.getWorld().dropItem(loc, item);
+                        if (captured.getExp() > 0) loc.getWorld().spawn(loc, org.bukkit.entity.ExperienceOrb.class).setExperience(captured.getExp());
+                        plugin.getGraveClaimLedger().paid(identity, gravesConfig.getUuid()).whenComplete((paid, paidFailure) -> {
+                            if (paidFailure != null || !Boolean.TRUE.equals(paid)) plugin.getLogger().severe("Grave ground payout completed but its completion record could not be saved; reservation prevents replay.");
+                        });
+                        remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(System.currentTimeMillis());
+                        plugin.removeGrave(this); plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
+                        plugin.getGraveNavigation().invalidate(identity); removeTimer(); cleanupMarker();
+                        Player recipient = limitRecipient.get(); limitRecipient.clear();
+                        if (recipient != null) plugin.getBukkitScheduler().runTask(plugin, () -> {
+                            if (plugin.isEnabled() && recipient.isOnline()) recipient.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+                        }, recipient);
+                    } catch (RuntimeException interrupted) {
+                        plugin.getLogger().severe("Grave ground payout interrupted after reservation; replay is blocked and exact contents/XP remain in recovery evidence.");
+                    } finally { releaseClaim(); }
+                }).whenComplete((result, schedulingFailure) -> { if (schedulingFailure != null) retired.run(); });
+            } catch (RuntimeException schedulingFailure) { retired.run(); }
+        });
+    }
+    private void deferLimitPayout(String identity) {
+        plugin.getGraveClaimLedger().deferLimitReservation(identity, gravesConfig.getUuid())
+                .whenComplete((saved, failure) -> releaseClaim());
+    }
 
-	public void openGUIWithItems(Player p) {
+	public boolean canAdminister(Player player) {
+        return player.hasPermission("GraveStonesPlus.Admin") || player.hasPermission("GraveStonesPlus.AllGraves")
+                || player.hasPermission("GraveStonesPlus.AllGraves.Player");
+    }
+    private boolean canAdministerHistorical(Player player) {
+        return player != null && (player.hasPermission("GraveStonesPlus.Admin")
+                || player.hasPermission("GraveStonesPlus.AllBrokenGraves")
+                || player.hasPermission("GraveStonesPlus.AllBrokenGraves.Player"));
+    }
+    public boolean canViewContents(Player player) {
+        return player != null && (isOwner(player) || plugin.canRecover(this, player)
+                || canAdminister(player) || gravesConfig.isDestroyed() && canAdministerHistorical(player)
+                || player.hasPermission("GraveStonesPlus.ViewGrave"));
+    }
+    public void openGUIWithItems(Player player) {
+        if (player == null) return;
+        plugin.getBukkitScheduler().runTask(plugin, () -> {
+            if (player.isOnline() && canViewContents(player)) openItemsOwned(player);
+        }, player);
+    }
+    private void openItemsOwned(Player p) {
 		BInventory inv = new BInventory("Grave Items");
 		for (Entry<Integer, ItemStack> entry : getGravesConfig().getItems().entrySet()) {
 			switch (entry.getKey().intValue()) {
@@ -1000,145 +1288,190 @@ public class Grave {
 		inv.openInventory(p);
 	}
 
-	public void claim(final Player player) {
-		// Fire claim event (sync). Claim is initiated from sync events/listeners.
-		GraveClaimEvent claimEvent = new GraveClaimEvent(this, player, isOwner(player));
-		callEventSync(claimEvent);
-		if (claimEvent.isCancelled()) {
-			return;
-		}
+    public void claim(final Player player) {
+        if (player == null) return;
+        plugin.getBukkitScheduler().runTask(plugin, () -> beginClaim(player, null, false), player);
+    }
+    /** Menu/command recovery retains its permission and nearby requirement through payout. */
+    public void claimNearby(final Player player) {
+        if (player != null) plugin.getBukkitScheduler().runTask(plugin, () -> beginClaim(player, null, true), player);
+    }
+    private boolean nearbyClaimAllowed(Player player) {
+        if (!player.hasPermission("GraveStonesPlus.ClaimGrave")) return false;
+        double distance = getDistance(player);
+        return distance >= 0 && distance < plugin.getConfigFile().getGraveClaimDistance();
+    }
+    public void claimAfterTimedBreak(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof) {
+        if (player != null && proof != null) plugin.getBukkitScheduler().runTask(plugin, () -> beginClaim(player, proof, false), player);
+    }
+    private boolean claimAllowed(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof) {
+        return plugin.canRecover(this, player) || legacyClaimAllowed(player) || (proof != null && proof.allows(player, this));
+    }
+    private void beginClaim(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof, boolean nearby) {
+        final String identity = GraveIdentity.of(gravesConfig);
+        synchronized (this) {
+            if (claimInProgress || !player.isOnline() || !plugin.isLiveGrave(this)
+                    || (!claimAllowed(player, proof) || (nearby && !nearbyClaimAllowed(player)))) return;
+            if (plugin.getGraveClaimLedger().isBlocked(identity)) {
+                player.sendMessage("\u00a7cThis grave has a pending or completed recovery record; it cannot be paid again."); return;
+            }
+            if (!prepareCleanup()) return;
+            claimInProgress = true;
+        }
+        // Events are part of the admission boundary: handlers may amend the live
+        // grave contents or XP, so capture only after both callbacks have run.
+        GraveClaimEvent claimEvent = new GraveClaimEvent(this, player, isOwner(player));
+        GraveRemoveEvent removeEvent = new GraveRemoveEvent(this, GraveRemoveReason.CLAIMED);
+        try {
+            Bukkit.getPluginManager().callEvent(claimEvent);
+            if (!claimEvent.isCancelled()) Bukkit.getPluginManager().callEvent(removeEvent);
+        } catch (RuntimeException callbackFailure) {
+            releaseClaim();
+            plugin.getLogger().warning("Grave claim callback failed; claim remains available without payout.");
+            return;
+        }
+        if (claimEvent.isCancelled() || removeEvent.isCancelled() || !player.isOnline()
+                || !plugin.isEnabled() || !plugin.isLiveGrave(this) || (!claimAllowed(player, proof) || (nearby && !nearbyClaimAllowed(player)))) {
+            releaseClaim(); return;
+        }
+        final com.bencodez.gravestonesplus.storage.GravesConfig captured;
+        final String evidence;
+        try {
+            captured = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig);
+            evidence = GraveClaimLedger.evidence(captured);
+        } catch (RuntimeException invalid) {
+            releaseClaim();
+            player.sendMessage("\u00a7cGrave recovery evidence could not be captured. No payout was made."); return;
+        }
+        plugin.getGraveClaimLedger().reserve(identity, player.getUniqueId(), evidence).whenComplete((saved, failure) -> {
+            java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
+            Runnable retired = () -> {
+                if (started.compareAndSet(false, true)) {
+                    if (failure == null && Boolean.TRUE.equals(saved)) cancelClaim(identity); else releaseClaim();
+                }
+            };
+            try {
+            plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtEntityWithFallback(player, task -> {
+                if (!started.compareAndSet(false, true)) return;
+                if (failure != null || !Boolean.TRUE.equals(saved)) {
+                    releaseClaim();
+                    player.sendMessage("\u00a7cRecovery was not durably reserved. No payout was made; restart/reconcile storage before retrying."); return;
+                }
+                // Serialize the helper authorization boundary with revocation admission.
+                synchronized (plugin.getTrustedGraveAccessStore()) {
+                    if (!player.isOnline() || !plugin.isEnabled() || !plugin.isLiveGrave(this)
+                            || (!claimAllowed(player, proof) || (nearby && !nearbyClaimAllowed(player)))) { cancelClaim(identity); return; }
+                    try {
+                        java.util.Map<Integer, ItemStack> payout = GravePayout.select(captured.getItems(), plugin.getConfigFile().getPercentageDrops(), () -> ThreadLocalRandom.current().nextInt(100));
+                        List<java.util.concurrent.CompletableFuture<Void>> overflow = new ArrayList<>();
+                        boolean displaced = GravePayout.deliver(player, payout, captured.getExp(), item -> {
+                            var handler = plugin.getFullInventoryHandler();
+                            if (handler != null) overflow.add(handler.giveItemAsync(player, item).toCompletableFuture());
+                            else player.getWorld().dropItem(player.getLocation(), item);
+                        });
+                        if (overflow.isEmpty()) completeClaim(player, identity, displaced);
+                        else java.util.concurrent.CompletableFuture.allOf(overflow.toArray(java.util.concurrent.CompletableFuture[]::new))
+                                .whenComplete((unused, deliveryFailure) -> finishOverflowClaim(player, identity, displaced, deliveryFailure));
+                    } catch (RuntimeException payoutFailure) {
+                        plugin.getLogger().severe("Grave recovery interrupted after durable reservation; automatic replay is blocked. Inspect selected-claims.yml and retained grave data.");
+                        player.sendMessage("\u00a7cRecovery was interrupted. This grave is held for administrator reconciliation; do not retry the payout.");
+                        releaseClaim();
+                    }
+                }
+            }, retired).whenComplete((result, schedulingFailure) -> {
+                if (schedulingFailure != null || result != com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS) retired.run();
+            });
+            } catch (RuntimeException schedulingFailure) { retired.run(); }
+        });
+    }
+    private void finishOverflowClaim(Player player, String identity, boolean displaced, Throwable deliveryFailure) {
+        var started = new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable retired = () -> {
+            if (!started.compareAndSet(false, true)) return;
+            plugin.getLogger().warning("Grave overflow completion could not be acknowledged on its recipient; recovery evidence remains reserved.");
+            releaseClaim();
+        };
+        try {
+            plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtEntityWithFallback(player, task -> {
+                if (!started.compareAndSet(false, true)) return;
+                if (deliveryFailure == null && player.isOnline() && plugin.isEnabled()) completeClaim(player, identity, displaced);
+                else {
+                    plugin.getLogger().warning("Grave overflow delivery was not acknowledged; recovery evidence remains reserved for reconciliation.");
+                    if (player.isOnline()) player.sendMessage("\u00a7cRecovery is held for administrator reconciliation; overflow delivery was not acknowledged.");
+                    releaseClaim();
+                }
+            }, retired).whenComplete((scheduled, failure) -> {
+                if (failure != null || scheduled != com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS) retired.run();
+            });
+        } catch (RuntimeException schedulingFailure) { retired.run(); }
+    }
+    /** Recipient-owner commit boundary, reached only after all selected items and XP are acknowledged. */
+    private void completeClaim(Player player, String identity, boolean displaced) {
+        try {
+            plugin.getGraveClaimLedger().paid(identity, player.getUniqueId()).whenComplete((paidSaved, paidFailure) -> {
+                if (paidFailure != null || !Boolean.TRUE.equals(paidSaved)) plugin.getLogger().severe("Grave payout completed but completion record could not be saved; durable reservation still prevents replay.");
+            });
+            remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(System.currentTimeMillis());
+            plugin.removeGrave(this);
+            plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
+            plugin.getGraveNavigation().invalidate(identity); removeTimer();
+            plugin.getBukkitScheduler().runTask(plugin, this::cleanupMarker, gravesConfig.getLocation());
+            if (isOwner(player) || plugin.getConfigFile().isBreakOtherGravesSendMessage()) player.sendMessage(MessageAPI.colorize(isOwner(player)
+                    ? plugin.getConfigFile().getFormatGraveBroke()
+                    : MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBrokeOther(), "player", gravesConfig.getPlayerName())));
+            if (displaced) player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatItemsNotInGrave()));
+        } finally { releaseClaim(); }
+    }
+    private synchronized boolean prepareCleanup() {
+        GraveMarkerCleanup cleanup = plugin.getMarkerCleanup();
+        if (cleanup == null) return true;
+        cleanupTicket = cleanup.prepare(gravesConfig); return cleanupTicket != null;
+    }
+    private synchronized void releaseClaim() {
+        claimInProgress = false;
+        if (!remove && cleanupTicket != null) { cleanupTicket.close(); cleanupTicket = null; }
+        if (!remove && expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) removeGrave(GraveRemoveReason.EXPIRED);
+    }
+    private void cancelClaim(String identity) {
+        plugin.getGraveClaimLedger().cancel(identity).whenComplete((saved, failure) -> releaseClaim());
+    }
+    private synchronized void cleanupMarker() {
+        removeHologram();
+        GraveMarkerCleanup cleanup = plugin.getMarkerCleanup();
+        if (cleanup != null) {
+            GraveMarkerCleanup.Ticket ticket = cleanupTicket; cleanupTicket = null;
+            if (ticket != null) ticket.commit(); else cleanup.retain(gravesConfig);
+            return;
+        }
+        // Legacy API/test seam when the selected lifecycle has not initialized.
+        if (gravesConfig.getLocation().getWorld() == null || !gravesConfig.getLocation().getWorld().isChunkLoaded(gravesConfig.getLocation().getBlockX() >> 4, gravesConfig.getLocation().getBlockZ() >> 4)) return;
+        if (gravesConfig.getLocation().getWorld() == null) return;
+        // Cleanup does not force-load a chunk; a stored removed grave is already inaccessible.
+        Location loc = gravesConfig.getLocation();
+        if (!loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) return;
+        Block block = loc.getBlock();
+        Object owner = block.getMetadata("Grave").stream().filter(m -> m.getOwningPlugin() == plugin).map(org.bukkit.metadata.MetadataValue::value).findFirst().orElse(null);
+        if (owner != this) return;
+        if (itemDisplay != null) { itemDisplay.remove(); itemDisplay = null; }
+        block.removeMetadata("Grave", plugin);
+        if (isValid()) block.setType(Material.AIR);
+    }
+    /** Invoked only after a matching chunk-load event; never forces a chunk. */
+    public void cleanupDeferredMarker() { if (remove) cleanupMarker(); }
 
-		final AdvancedCoreUser user = plugin.getUserManager().getUser(player);
-		user.giveExp(getGravesConfig().getExp());
-
-		final int chance = plugin.getConfigFile().getPercentageDrops();
-
-		plugin.getBukkitScheduler().runTaskAsynchronously(plugin, new Runnable() {
-
-			@Override
-			public void run() {
-				removeCompass();
-
-				HashMap<Integer, ItemStack> toGive = new HashMap<Integer, ItemStack>();
-				for (Entry<Integer, ItemStack> e : getGravesConfig().getItems().entrySet()) {
-					if (chance == 100 || ThreadLocalRandom.current().nextInt(100) < chance) {
-						ItemStack cloned = e.getValue() == null ? null : e.getValue().clone();
-						toGive.put(e.getKey(), cloned);
-					}
-				}
-
-				plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-					@Override
-					public void run() {
-						PlayerInventory inv = player.getInventory();
-						ArrayList<ItemStack> leftovers = new ArrayList<ItemStack>();
-						boolean notInCorrectSlot = false;
-
-						for (Entry<Integer, ItemStack> e : toGive.entrySet()) {
-							Integer key = e.getKey();
-							ItemStack stack = e.getValue();
-							if (stack == null || stack.getType().isAir()) {
-								continue;
-							}
-
-							if (key.intValue() >= 0) {
-								ItemStack cur = inv.getItem(key.intValue());
-								if (cur == null || cur.getType().isAir()) {
-									inv.setItem(key.intValue(), stack);
-								} else {
-									notInCorrectSlot = true;
-									leftovers.add(stack);
-								}
-							} else {
-								switch (key.intValue()) {
-								case -1:
-									if (inv.getHelmet() == null || inv.getHelmet().getType().isAir()) {
-										inv.setHelmet(stack);
-									} else {
-										notInCorrectSlot = true;
-										leftovers.add(stack);
-									}
-									break;
-								case -2:
-									if (inv.getChestplate() == null || inv.getChestplate().getType().isAir()) {
-										inv.setChestplate(stack);
-									} else {
-										notInCorrectSlot = true;
-										leftovers.add(stack);
-									}
-									break;
-								case -3:
-									if (inv.getLeggings() == null || inv.getLeggings().getType().isAir()) {
-										inv.setLeggings(stack);
-									} else {
-										notInCorrectSlot = true;
-										leftovers.add(stack);
-									}
-									break;
-								case -4:
-									if (inv.getBoots() == null || inv.getBoots().getType().isAir()) {
-										inv.setBoots(stack);
-									} else {
-										notInCorrectSlot = true;
-										leftovers.add(stack);
-									}
-									break;
-								case -5:
-									if (inv.getItemInOffHand() == null || inv.getItemInOffHand().getType().isAir()) {
-										inv.setItemInOffHand(stack);
-									} else {
-										notInCorrectSlot = true;
-										leftovers.add(stack);
-									}
-									break;
-								default:
-									notInCorrectSlot = true;
-									leftovers.add(stack);
-									break;
-								}
-							}
-						}
-
-						if (!leftovers.isEmpty()) {
-							user.giveItems(leftovers.toArray(new ItemStack[0]));
-						}
-
-						if (isOwner(player)) {
-							user.sendMessage(plugin.getConfigFile().getFormatGraveBroke());
-						}
-						if (notInCorrectSlot) {
-							user.sendMessage(plugin.getConfigFile().getFormatItemsNotInGrave());
-						}
-
-						removeHologramsAround();
-						removeGrave(GraveRemoveReason.CLAIMED);
-					}
-				});
-			}
-		});
+	public boolean legacyClaimAllowed(Player player) {
+        return isOwner(player) || (!plugin.getConfigFile().isBreakOtherGravesRequireBreakTime() && legacyBreakAllowed(player));
+    }
+    /** Rights shared by starting, progressing and completing the physical timed-break path. */
+    public boolean legacyBreakAllowed(Player player) {
+		if (isOwner(player)) return true;
+		if (!plugin.getConfigFile().isBreakOtherGravesEnabled()) return false;
+		if (plugin.getConfigFile().isBreakOtherGravesRequirePermission()
+				&& !player.hasPermission("GraveStonesPlus.BreakOtherGraves")) return false;
+		return canNonOwnerClaim();
 	}
 
-	public void removeCompass() {
-		NamespacedKey key = new NamespacedKey(plugin, "gravecompass");
-		for (Player player : Bukkit.getOnlinePlayers()) {
-			for (ItemStack item : player.getInventory().getContents()) {
-				if (item != null && item.getType().equals(Material.COMPASS)) {
-					if (item.hasItemMeta() && item.getItemMeta() instanceof CompassMeta) {
-						CompassMeta meta = (CompassMeta) item.getItemMeta();
-						if (meta.getPersistentDataContainer().has(key, PersistentDataType.LONG)) {
-							Long v = meta.getPersistentDataContainer().get(key, PersistentDataType.LONG);
-							if (v != null
-									&& (v.longValue() == getGravesConfig().getTime() || (meta.getLodestone() != null
-											&& meta.getLodestone().equals(getGravesConfig().getLocation())))) {
-								player.getInventory().remove(item);
-							}
-						}
-					}
-				}
-			}
-		}
-	}
+    public void removeCompass() { plugin.getGraveNavigation().invalidate(GraveIdentity.of(gravesConfig)); }
 
 	public void checkBlockDisplay() {
 		boolean hasDisplayEntities = true;
@@ -1188,5 +1521,6 @@ public class Grave {
 				plugin.debug(e);
 			}
 		}
+        tagDisplay();
 	}
 }

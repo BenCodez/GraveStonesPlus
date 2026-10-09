@@ -44,8 +44,12 @@ public final class GraveRestoration {
     }
     public void retry() {
         if (retired || !plugin.isEnabled() || !running.compareAndSet(false, true)) return;
-        if (!recordsLoaded) plugin.getFeatureIO().submit(() -> {
-            List<GravesConfig> active = storage.loadGraves(), broken = storage.loadBrokenGraves();
+        if (!recordsLoaded) {
+            CompletableFuture<GraveStorageManager.RestorationRecords> read = storage.isMySQL()
+                    ? storage.loadMySQLForRestoration()
+                    : plugin.getFeatureIO().submit(() -> new GraveStorageManager.RestorationRecords(storage.loadGraves(), storage.loadBrokenGraves()));
+            read.thenApply(records -> {
+            List<GravesConfig> active = records.active(), broken = records.broken();
             storage.retainRestoration(active, broken);
             synchronized (this) {
                 int invalid = 0;
@@ -61,7 +65,7 @@ public final class GraveRestoration {
             if (error != null) { running.set(false); plugin.getLogger().warning("Stored graves remain withheld until backend restoration can retry."); }
             else cycle();
         });
-        else cycle();
+        } else cycle();
     }
     private static List<GravesConfig> concat(List<GravesConfig> active, List<GravesConfig> broken) {
         List<GravesConfig> result = new ArrayList<>(active); result.addAll(broken); return result;
@@ -83,7 +87,21 @@ public final class GraveRestoration {
             if (error != null || decision == GraveClaimLedger.Restoration.UNAVAILABLE) { process(batch); return; }
             if (decision == GraveClaimLedger.Restoration.RESERVED) { process(batch); return; }
             Location loc = record.getLocation();
-            if (loc != null && loc.getWorld() == null && record.getWorldId() != null) loc.setWorld(org.bukkit.Bukkit.getWorld(record.getWorldId()));
+            if (loc != null && loc.getWorld() == null && record.getWorldId() != null) {
+                try {
+                    plugin.getBukkitScheduler().runTask(plugin, () -> {
+                        if (retired || !plugin.isEnabled()) { running.set(false); return; }
+                        try {
+                            loc.setWorld(org.bukkit.Bukkit.getWorld(record.getWorldId()));
+                            processResolved(batch, key, record, decision, loc);
+                        } catch (RuntimeException unavailable) { running.set(false); }
+                    });
+                } catch (RuntimeException rejected) { running.set(false); }
+            } else processResolved(batch, key, record, decision, loc);
+        });
+    }
+    private void processResolved(Iterator<String> batch, String key, GravesConfig record,
+            GraveClaimLedger.Restoration decision, Location loc) {
             // Both active and historical records require a resolved world before publication.
             // Keep unavailable worlds pending so menus and recreation never see a null world.
             if (loc == null || loc.getWorld() == null) { process(batch); return; }
@@ -158,7 +176,6 @@ public final class GraveRestoration {
                     resolved(key, record);
                 }).whenComplete((unused, failure) -> process(batch));
             } catch (RuntimeException rejected) { running.set(false); }
-        });
     }
     private void persistResolvedRemoval(GravesConfig record) {
         if (storage.isMySQL()) storage.updateExistingGrave(record, true);

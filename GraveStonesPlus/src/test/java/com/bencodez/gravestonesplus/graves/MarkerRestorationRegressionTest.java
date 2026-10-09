@@ -662,6 +662,9 @@ class MarkerRestorationRegressionTest {
     @Test void missingWorldYamlRecordRemainsSerializableThroughUnionSaveAndLaterRestores() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             when(h.plugin.getFeatureIO()).thenReturn(h.io); when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());
+            var globalTasks = new LinkedBlockingQueue<Runnable>(); Thread ownerThread = Thread.currentThread();
+            doAnswer(call -> { globalTasks.add(call.getArgument(1)); return null; })
+                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class));
             UUID missing = UUID.randomUUID();
             var legacy = new HashMap<String,Object>(); legacy.put("UUID",h.owner.getUniqueId().toString()); legacy.put("PlayerName","Owner");
             legacy.put("World",missing.toString()); legacy.put("X",1);legacy.put("Y",64);legacy.put("Z",1);legacy.put("EXP",17);legacy.put("Time",12345L);legacy.put("Items", new HashMap<Integer,org.bukkit.inventory.ItemStack>());
@@ -689,10 +692,11 @@ class MarkerRestorationRegressionTest {
             });
             var restoration=new GraveRestoration(h.plugin,manager);restoration.retry();
             Objects.requireNonNull(decisions.poll(5,TimeUnit.SECONDS)).complete(GraveClaimLedger.Restoration.AVAILABLE);
+            Objects.requireNonNull(globalTasks.poll(5,TimeUnit.SECONDS)).run();
             FeaturePersistenceTest.await(h.io.barrier()); // Wait until the archive callback has released this restoration cycle.
             assertTrue(h.regionWork.isEmpty());
-            h.bukkit.when(() -> Bukkit.getWorld(missing)).thenReturn(h.world);restoration.retry();
-            Objects.requireNonNull(decisions.poll(5,TimeUnit.SECONDS)).complete(GraveClaimLedger.Restoration.AVAILABLE);h.regionWork.remove().run();
+            h.bukkit.when(() -> Bukkit.getWorld(missing)).thenAnswer(call -> { assertSame(ownerThread, Thread.currentThread()); return h.world; });restoration.retry();
+            Objects.requireNonNull(decisions.poll(5,TimeUnit.SECONDS)).complete(GraveClaimLedger.Restoration.AVAILABLE); Objects.requireNonNull(globalTasks.poll(5,TimeUnit.SECONDS)).run(); h.regionWork.remove().run();
             assertEquals(1,h.active.size());assertEquals(missing,h.active.getFirst().getGravesConfig().getWorldId()); verify(h.world,never()).getChunkAt(anyInt(),anyInt());restoration.retire();
         }
     }
@@ -802,6 +806,9 @@ class MarkerRestorationRegressionTest {
     }
     @Test void paidAndDestroyedMissingWorldRecordsStayPendingThenRebindBeforeHistoricalPublication() throws Exception {
         for(boolean paid:List.of(false,true)) try(var h=new GraveActionsTest.Harness()) {
+            var globalTasks = new LinkedBlockingQueue<Runnable>(); Thread ownerThread = Thread.currentThread();
+            doAnswer(call -> { globalTasks.add(call.getArgument(1)); return null; })
+                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class));
             UUID missing=UUID.randomUUID();var record=h.grave.getGravesConfig();record.setWorldId(missing);record.getLocation().setWorld(null);record.setDestroyed(!paid);
             h.active.clear();when(h.config.getBrokenGraveTimeLimit()).thenReturn("7d");when(h.plugin.getFeatureIO()).thenReturn(h.io);
             when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());var cleanup=cleanup(h,new DurableFeatureState(h.io,new FeaturePersistenceTest.Disk(),8192));
@@ -812,11 +819,11 @@ class MarkerRestorationRegressionTest {
             var status=paid?GraveClaimLedger.Restoration.PAID:GraveClaimLedger.Restoration.AVAILABLE;
             var firstDecision=Objects.requireNonNull(decisions.poll(5,TimeUnit.SECONDS));
             FeaturePersistenceTest.await(h.io.barrier()); // Attach callback before completing on the mocked Bukkit owner.
-            firstDecision.complete(status);
+            firstDecision.complete(status); Objects.requireNonNull(globalTasks.poll(5,TimeUnit.SECONDS)).run();
             assertTrue(restoration.hasPending(GraveIdentity.of(record)));assertEquals(missing.toString(),record.serialize().get("World"));assertEquals(17,record.getExp());
             verify(h.plugin,never()).restoreBrokenRecord(any());verify(backend,never()).restorationResolved(any());
-            h.bukkit.when(()->Bukkit.getWorld(missing)).thenReturn(h.world);restoration.retry();
-            Objects.requireNonNull(decisions.poll(5,TimeUnit.SECONDS)).complete(status);FeaturePersistenceTest.await(h.io.barrier());
+            h.bukkit.when(()->Bukkit.getWorld(missing)).thenAnswer(call -> { assertSame(ownerThread, Thread.currentThread()); return h.world; });restoration.retry();
+            Objects.requireNonNull(decisions.poll(5,TimeUnit.SECONDS)).complete(status); Objects.requireNonNull(globalTasks.poll(5,TimeUnit.SECONDS)).run(); FeaturePersistenceTest.await(h.io.barrier());
             var restored=org.mockito.ArgumentCaptor.forClass(Grave.class);verify(h.plugin).restoreBrokenRecord(restored.capture());
             assertSame(h.world,restored.getValue().getGravesConfig().getLocation().getWorld());assertFalse(restoration.hasPending(GraveIdentity.of(record)));
             verify(h.world,never()).getChunkAt(anyInt(),anyInt());restoration.retire();cleanup.retire();

@@ -282,67 +282,48 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param broken broken flag
 	 * @return list of graves
 	 */
-	public List<GravesConfig> loadAll(boolean broken) {
-		List<GravesConfig> out = new ArrayList<GravesConfig>();
-
-		String sql = "SELECT * FROM " + qi(tableName) + " WHERE " + qi("broken") + "=?;";
-		try (Connection conn = mysql.getConnectionManager().getConnection();
-				PreparedStatement ps = conn.prepareStatement(sql)) {
-
-			ps.setInt(1, broken ? 1 : 0);
-
-			try (ResultSet rs = ps.executeQuery()) {
-				while (rs.next()) {
-					UUID playerUuid = safeUuid(rs.getString("player_uuid"));
-					if (playerUuid == null) {
-						continue;
-					}
-
-					UUID worldUuid = safeUuid(rs.getString("world_uuid"));
-					World world = worldUuid != null ? Bukkit.getWorld(worldUuid) : null;
-					if (worldUuid == null) {
-						continue;
-					}
-
-					Location loc = new Location(world, rs.getInt("x"), rs.getInt("y"), rs.getInt("z"));
-
-					HashMap<Integer, ItemStack> items = decodeItemsSafe(rs.getString("items_encoded"));
-
-					String playerName = rs.getString("player_name");
-					String deathMessage = rs.getString("death_message");
-					long time = rs.getLong("time");
-					int exp = rs.getInt("exp");
-					boolean destroyed = rs.getInt("destroyed") == 1;
-					long destroyedTime = rs.getLong("destroyed_time");
-
-					UUID display = safeUuid(rs.getString("display_uuid"));
-					UUID interact = safeUuid(rs.getString("interact_uuid"));
-
-					// NEW: may be null for older rows
-					String graveDisplayType = rs.getString("grave_display_type");
-
-					GravesConfig record = new GravesConfig(playerUuid,
-							playerName != null ? playerName : "",
-							loc,
-							items,
-							exp,
-							deathMessage != null ? deathMessage : "",
-							time,
-							destroyed,
-							destroyedTime,
-							display,
-							interact,
-							graveDisplayType);
-                    record.setWorldId(worldUuid); out.add(record);
-				}
-			}
-
-		} catch (SQLException e) {
-			debug(e);
-		}
-
-		return out;
-	}
+    /** Legacy synchronous API: caller owns Bukkit materialization, never use on the I/O worker. */
+    public List<GravesConfig> loadAll(boolean broken) {
+        try { return new ArrayList<>(loadDeferred(broken).stream().map(java.util.function.Supplier::get).toList()); }
+        catch (java.util.concurrent.CompletionException failure) {
+            if (failure.getCause() instanceof SQLException sql) { debug(sql); return new ArrayList<>(); }
+            throw failure;
+        }
+    }
+    /** JDBC-only phase. The returned decoder must run on the supported server context. */
+    List<java.util.function.Supplier<GravesConfig>> loadDeferred(boolean broken) {
+        List<StoredGrave> rows = new ArrayList<>();
+        String sql = "SELECT * FROM " + qi(tableName) + " WHERE " + qi("broken") + "=?;";
+        try (Connection conn = mysql.getConnectionManager().getConnection();
+                PreparedStatement ps = conn.prepareStatement(sql)) {
+            ps.setInt(1, broken ? 1 : 0);
+            try (ResultSet rs = ps.executeQuery()) {
+                while (rs.next()) {
+                    UUID player = safeUuid(rs.getString("player_uuid")), world = safeUuid(rs.getString("world_uuid"));
+                    if (player == null || world == null) continue;
+                    rows.add(new StoredGrave(player, world, rs.getInt("x"), rs.getInt("y"), rs.getInt("z"),
+                            rs.getString("items_encoded"), rs.getString("player_name"), rs.getString("death_message"),
+                            rs.getLong("time"), rs.getInt("exp"), rs.getInt("destroyed") == 1,
+                            rs.getLong("destroyed_time"), safeUuid(rs.getString("display_uuid")),
+                            safeUuid(rs.getString("interact_uuid")), rs.getString("grave_display_type")));
+                }
+            }
+        } catch (SQLException failure) {
+            // An incomplete read is unknown, not a successful empty restoration.
+            throw new java.util.concurrent.CompletionException(failure);
+        }
+        return rows.stream().<java.util.function.Supplier<GravesConfig>>map(row -> () -> {
+            World world = Bukkit.getWorld(row.world());
+            GravesConfig record = new GravesConfig(row.player(), safeString(row.name()),
+                    new Location(world, row.x(), row.y(), row.z()), decodeItemsSafe(row.items()),
+                    row.exp(), safeString(row.death()), row.time(), row.destroyed(), row.destroyedTime(),
+                    row.display(), row.interact(), row.type());
+            record.setWorldId(row.world()); return record;
+        }).toList();
+    }
+    private record StoredGrave(UUID player, UUID world, int x, int y, int z, String items, String name,
+            String death, long time, int exp, boolean destroyed, long destroyedTime,
+            UUID display, UUID interact, String type) {}
 
 	private void bindInsert(PreparedStatement ps, GravesConfig g, boolean broken) throws SQLException {
 		ps.setInt(1, broken ? 1 : 0);

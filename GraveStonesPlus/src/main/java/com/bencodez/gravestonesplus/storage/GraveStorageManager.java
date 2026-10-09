@@ -94,6 +94,41 @@ public class GraveStorageManager {
 		return backend != null ? backend.loadBrokenGraves() : new ArrayList<GravesConfig>();
 	}
 
+    public record RestorationRecords(List<GravesConfig> active, List<GravesConfig> broken) {}
+    /** Keep JDBC on the serial I/O owner and Bukkit decoding/world lookup on the server owner. */
+    public java.util.concurrent.CompletableFuture<RestorationRecords> loadMySQLForRestoration() {
+        if (!(backend instanceof MySQLGraveStorageBackend sql))
+            return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("MySQL backend unavailable"));
+        return plugin.getFeatureIO().submit(() ->
+                List.of(sql.loadDeferred(false), sql.loadDeferred(true))).thenCompose(raw -> {
+            var result = new java.util.concurrent.CompletableFuture<RestorationRecords>();
+            class Decode implements Runnable {
+                final List<GravesConfig> active = new ArrayList<>(), broken = new ArrayList<>();
+                int audience, cursor;
+                void schedule() {
+                    try { plugin.getBukkitScheduler().runTask(plugin, this); }
+                    catch (RuntimeException failure) { result.completeExceptionally(failure); }
+                }
+                public void run() {
+                    if (!plugin.isEnabled()) { result.completeExceptionally(new IllegalStateException("Plugin retired during restoration")); return; }
+                    try {
+                        // Fair owner admission: never decode an entire large SQL installation in one tick.
+                        int budget = 128;
+                        while (audience < raw.size() && budget > 0) {
+                            var rows = raw.get(audience);
+                            if (cursor == rows.size()) { audience++; cursor = 0; continue; }
+                            (audience == 0 ? active : broken).add(rows.get(cursor++).get()); budget--;
+                        }
+                        if (audience == raw.size() || audience == 1 && cursor == raw.get(1).size())
+                            result.complete(new RestorationRecords(List.copyOf(active), List.copyOf(broken)));
+                        else schedule();
+                    } catch (Throwable failure) { result.completeExceptionally(failure); }
+                }
+            }
+            new Decode().schedule(); return result;
+        });
+    }
+
 	/**
 	 * Incremental broken flag update. For flatfile this is a no-op here (flatfile
 	 * is saved via bulk list).

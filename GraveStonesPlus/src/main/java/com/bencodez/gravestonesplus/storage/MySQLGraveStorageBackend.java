@@ -48,6 +48,10 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
 		return table != null ? table.loadAll(true) : new ArrayList<GravesConfig>();
 	}
 
+    List<java.util.function.Supplier<GravesConfig>> loadDeferred(boolean broken) {
+        return table != null ? table.loadDeferred(broken) : List.of();
+    }
+
 	@Override
 	public void saveGraves(List<GravesConfig> graves) {
 		// Bulk is intentionally not used for MySQL.

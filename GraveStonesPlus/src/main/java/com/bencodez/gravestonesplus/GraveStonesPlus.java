@@ -149,7 +149,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			return java.util.concurrent.CompletableFuture.completedFuture(false);
 		}
 
-        return grave.recreateAsync(actor, actor != null).thenApply(restored -> {
+        var completion = grave.recreateAsync(actor, actor != null).thenApply(restored -> {
         if (!restored) return false;
 		if (!containsByKey(graves, grave)) {
 			graves.add(grave);
@@ -164,6 +164,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
         return true;
         });
+		// Caller cancellation/completion affects only observation. The internal stage
+		// must still move the lists and request persistence after recreation commits.
+		return completion.copy();
 	}
 
 	private boolean containsByKey(List<Grave> list, Grave grave) {

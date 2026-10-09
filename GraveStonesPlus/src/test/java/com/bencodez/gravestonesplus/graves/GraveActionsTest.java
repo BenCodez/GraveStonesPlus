@@ -429,6 +429,65 @@ class GraveActionsTest {
         }
     }
 
+    @Test void cancellingRecreationObserverCannotSkipCommittedListAndBackendTransfer() throws Exception {
+        assertRecreationObserverIsolation(observer -> assertTrue(observer.cancel(true)), true);
+    }
+
+    @Test void externallyCompletingRecreationObserverCannotSkipCommittedListAndBackendTransfer() throws Exception {
+        for (boolean suppliedResult : List.of(false, true))
+            assertRecreationObserverIsolation(observer -> assertTrue(observer.complete(suppliedResult)), true);
+    }
+
+    @Test void exceptionallyCompletingRecreationObserverCannotSkipCommittedListAndBackendTransfer() throws Exception {
+        assertRecreationObserverIsolation(observer ->
+                assertTrue(observer.completeExceptionally(new IllegalStateException("caller completion"))), true);
+    }
+
+    @Test void cancellingCompletedRecreationObserverCannotUndoListAndBackendTransfer() throws Exception {
+        assertRecreationObserverIsolation(observer -> assertFalse(observer.cancel(true)), false);
+    }
+
+    private void assertRecreationObserverIsolation(
+            java.util.function.Consumer<java.util.concurrent.CompletableFuture<Boolean>> interfere,
+            boolean beforeCommit) throws Exception {
+        for (boolean mysql : List.of(false, true)) try (Harness h = new Harness()) {
+            Field deadline = Grave.class.getDeclaredField("expiryDeadline"); deadline.setAccessible(true);
+            deadline.setLong(h.grave, System.currentTimeMillis() - 1);
+            h.grave.removeGrave(GraveRemoveReason.EXPIRED); h.regionWork.remove().run(); h.drain();
+            assertTrue(h.grave.getGravesConfig().isDestroyed()); assertTrue(h.active.isEmpty());
+            var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            when(storage.isMySQL()).thenReturn(mysql);
+            List<Grave> broken = Collections.synchronizedList(new ArrayList<>(List.of(h.grave)));
+            field(h.plugin, "storageManager", storage); field(h.plugin, "brokenGraves", broken);
+            doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any());
+
+            var observer = h.plugin.recreateBrokenGrave(h.grave, null); h.drain();
+            assertFalse(observer.isDone()); assertEquals(1, h.regionWork.size());
+            assertTrue(h.grave.getGravesConfig().isDestroyed()); assertTrue(h.active.isEmpty());
+            assertEquals(List.of(h.grave), broken); verifyNoInteractions(storage);
+            if (beforeCommit) interfere.accept(observer);
+            h.regionWork.remove().run();
+            if (!beforeCommit) {
+                assertTrue(FeaturePersistenceTest.await(observer));
+                interfere.accept(observer);
+            }
+
+            assertFalse(h.grave.getGravesConfig().isDestroyed()); assertEquals(0, h.grave.getExpiryDeadline());
+            assertEquals(List.of(h.grave), h.active); assertTrue(broken.isEmpty());
+            assertTrue(h.plugin.canTrack(h.grave, h.owner));
+            if (mysql) {
+                verify(storage).setBroken(h.grave.getGravesConfig(), false);
+                verify(storage, never()).saveGravesFromObjects(any());
+                verify(storage, never()).saveBrokenGravesFromObjects(any());
+            } else {
+                verify(storage).saveGravesFromObjects(h.active);
+                verify(storage).saveBrokenGravesFromObjects(broken);
+                verify(storage, never()).setBroken(any(), anyBoolean());
+            }
+            verify(h.owner, never()).giveExp(anyInt()); verify(h.helper, never()).giveExp(anyInt());
+        }
+    }
+
     @Test void nonOwnerSuccessMessagePreservesConfiguredBreakingOtherSwitch() throws Exception {
         for (boolean enabled : List.of(false, true)) try (Harness h = new Harness()) {
             h.grant(TrustedGraveAccess.Kind.RECOVER); when(h.config.isBreakOtherGravesSendMessage()).thenReturn(enabled);

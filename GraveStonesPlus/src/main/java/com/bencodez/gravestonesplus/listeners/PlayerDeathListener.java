@@ -44,17 +44,27 @@ public class PlayerDeathListener implements Listener {
 
 	// Players in separate Folia regions can die/respawn concurrently. Each value is
     // one death generation; delayed callbacks must never consume a successor's items.
-    private static final class KeptItems {
-        final List<Map<Integer, ItemStack>> batches;
-        // A new identity fences callbacks even when the new death captures no items.
-        KeptItems(KeptItems previous) { batches = previous.batches; }
-        KeptItems(KeptItems previous, Map<Integer, ItemStack> source) {
+    private static final class KeptBatch {
+        final Map<Integer, ItemStack> items;
+        volatile boolean accepted;
+        KeptBatch(Map<Integer, ItemStack> source) {
             HashMap<Integer, ItemStack> snapshot = new HashMap<>();
             source.forEach((slot, item) -> snapshot.put(slot, item.clone()));
-            List<Map<Integer, ItemStack>> merged = previous == null ? new ArrayList<>() : new ArrayList<>(previous.batches);
-            merged.add(Map.copyOf(snapshot));
+            items = Map.copyOf(snapshot);
+        }
+    }
+    private static final class KeptItems {
+        final List<KeptBatch> batches;
+        // A new identity fences callbacks even when the new death captures no items.
+        KeptItems(KeptItems previous) { batches = previous.batches; }
+        KeptItems(List<KeptBatch> batches) { this.batches = List.copyOf(batches); }
+        KeptItems(KeptItems previous, Map<Integer, ItemStack> source) {
+            List<KeptBatch> merged = previous == null ? new ArrayList<>() : new ArrayList<>(previous.batches);
+            merged.add(new KeptBatch(source));
             batches = List.copyOf(merged);
         }
+        KeptBatch newest() { return batches.get(batches.size() - 1); }
+        boolean ready() { return batches.stream().allMatch(batch -> batch.accepted); }
     }
     private static final int MAX_PENDING_KEPT_SNAPSHOTS = 8;
     private final ConcurrentMap<UUID, KeptItems> deathItems = new ConcurrentHashMap<>();
@@ -100,17 +110,6 @@ public class PlayerDeathListener implements Listener {
 
 		final Player entity = event.getEntity();
         final String playerName = entity.getName();
-		if (plugin.numberOfGraves(entity.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {
-			Grave oldest = plugin.getOldestGrave(entity.getUniqueId());
-			if (oldest != null) {
-				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-					oldest.dropAndRemoveForLimit(entity);
-				} else {
-                    oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
-                    entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
-                }
-			}
-		}
 
 		Location emptyBlock = null;
 		if (deathLocation.getBlock().isEmpty() && deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()
@@ -150,7 +149,7 @@ public class PlayerDeathListener implements Listener {
         BiConsumer<Integer, ItemStack> processItem = (idx, item) -> {
             switch (evaluator.evaluate(item)) {
                 case KEEP_LORE, KEEP_NBT -> keepItems.put(idx, item);
-                case GRAVE_NBT, GRAVE_DEFAULT -> itemsWithSlot.put(idx, item);
+                case GRAVE_NBT, GRAVE_DEFAULT -> itemsWithSlot.put(idx, item.clone());
                 default -> { }
             }
         };
@@ -166,24 +165,44 @@ public class PlayerDeathListener implements Listener {
 		processItem.accept(-4, inv.getBoots()); // Boots
 		processItem.accept(-5, inv.getItemInOffHand()); // Offhand
 
-		if (!keepItems.isEmpty()) {
-			boolean[] admitted = { false };
+        // Admission comes before limit removal, but a failed preflight must not
+        // leave these same items eligible for both native drops and respawn.
+        KeptItems[] admitted = { null };
+        if (!keepItems.isEmpty()) {
 			deathItems.compute(playerId, (id, pending) -> {
                 if (pending != null && pending.batches.size() >= MAX_PENDING_KEPT_SNAPSHOTS) return pending;
                 KeptItems merged = new KeptItems(pending, keepItems);
-                admitted[0] = true;
+                admitted[0] = merged;
                 return merged;
 			});
-			if (!admitted[0]) {
+			if (admitted[0] == null) {
 				plugin.getLogger().warning("Kept items not retained: pending snapshot limit reached");
 				return;
 			}
 		}
-		if (plugin.getConfigFile().isKeepAllExp()) event.setDroppedExp(droppedExp);
-		event.setDroppedExp(0); // Clear Bukkit's default dropped experience
-		event.getDrops().clear(); // Clear Bukkit's default dropped items
 
 		final Location emptyBlockFinal = emptyBlock;
+
+        boolean limitChecked = false;
+        try {
+            if (plugin.numberOfGraves(playerId) >= plugin.getConfigFile().getGraveLimit()) {
+                Grave oldest = plugin.getOldestGrave(playerId);
+                if (oldest != null) {
+                    if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
+                        oldest.dropAndRemoveForLimit(entity);
+                    } else {
+                        oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
+                        entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+                    }
+                }
+            }
+            limitChecked = true;
+        } finally {
+            if (!limitChecked && admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+        }
+        event.setDroppedExp(0);
+        event.getDrops().clear();
+        if (admitted[0] != null) admitted[0].newest().accepted = true;
 
 		plugin.getBukkitScheduler().runTaskLater(plugin, new Runnable() {
 			@Override
@@ -221,9 +240,20 @@ public class PlayerDeathListener implements Listener {
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
 			}
-		}, 2, emptyBlockFinal);
+		}, 2L, emptyBlockFinal);
 
 	}
+
+    private void rollbackKeptBatch(UUID playerId, KeptItems admitted) {
+        // Remove only this death's batch from the current generation. Restoring
+        // an earlier whole snapshot would discard a successor's kept items.
+        KeptBatch batch = admitted.newest();
+        deathItems.computeIfPresent(playerId, (id, pending) -> {
+            List<KeptBatch> retained = new ArrayList<>(pending.batches);
+            retained.removeIf(candidate -> candidate == batch);
+            return retained.isEmpty() ? null : new KeptItems(retained);
+        });
+    }
 
 	private boolean doesItemMatchAnyRule(ItemStack item, List<NBTRule> keepNbtRules) {
 		if (plugin.isNbtAPIHooked()) {
@@ -240,9 +270,9 @@ public class PlayerDeathListener implements Listener {
         if (pending != null) {
             try {
                 plugin.getBukkitScheduler().runTask(plugin, () -> {
-                    if (!plugin.isEnabled() || !player.isOnline() || player.isDead() || !deathItems.remove(uuid, pending)) return;
+                    if (!plugin.isEnabled() || !player.isOnline() || player.isDead() || !pending.ready() || !deathItems.remove(uuid, pending)) return;
 				PlayerInventory inv = player.getInventory();
-				pending.batches.forEach(batch -> batch.forEach((slot, item) -> {
+				pending.batches.forEach(batch -> batch.items.forEach((slot, item) -> {
 					if (item == null || item.getType().isAir())
 						return;
 					if (slot >= 0) {

@@ -128,21 +128,167 @@ class DeathPlayerOwnershipTest {
             respawn(listener, h.owner); assertTrue(h.entityWork.isEmpty());
         }
     }
-    @Test void snapshotBoundLeavesNewDeathDropsAndExperienceUntouchedAndRetainsEarlierEntitlements() throws Exception {
+    @ParameterizedTest @ValueSource(booleans = { false, true })
+    void snapshotBoundLeavesNewDeathDropsAndExperienceUntouchedAndRetainsEarlierEntitlements(boolean dropOldContents) throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             var listener = new PlayerDeathListener(h.plugin);
             for (int i = 0; i < 8; i++) capture(h, listener, h.owner, h.ownerInventory, h.stored);
             when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            Grave oldest = mock(Grave.class);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(1);
+            when(h.config.getGraveLimit()).thenReturn(1);
+            when(h.config.isDropItemsOnGraveRemoval()).thenReturn(dropOldContents);
+            when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(oldest);
             var event = mock(PlayerDeathEvent.class); when(event.getEntity()).thenReturn(h.owner);
             var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
             when(event.getDroppedExp()).thenReturn(7);
             listener.onPlayerDeath(event);
             assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            verify(oldest, never()).removeGrave(any());
+            verify(oldest, never()).dropAndRemoveForLimit(any());
+            assertEquals(8, h.regionWork.size(), "Rejected ninth death must not queue a replacement");
             when(h.ownerInventory.getItem(4)).thenReturn(null, h.cloned);
             respawn(listener, h.owner); respawn(listener, h.owner); h.drain();
             verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
             verify(h.ownerInventory, times(7)).addItem(h.cloned);
             respawn(listener, h.owner); assertTrue(h.entityWork.isEmpty());
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = { false, true })
+    void missingReplacementLocationPreservesOldGraveAndNewDeathDrops(boolean dropOldContents) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            Grave oldest = mock(Grave.class);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(1);
+            when(h.config.getGraveLimit()).thenReturn(1);
+            when(h.config.isDropItemsOnGraveRemoval()).thenReturn(dropOldContents);
+            when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(oldest);
+            Block occupied = mock(Block.class);
+            when(occupied.isEmpty()).thenReturn(false);
+            when(occupied.getType()).thenReturn(Material.STONE);
+            when(h.world.getBlockAt(anyInt(), anyInt(), anyInt())).thenReturn(occupied);
+            when(h.world.getBlockAt(any(Location.class))).thenReturn(occupied);
+            var event = mock(PlayerDeathEvent.class);
+            when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored));
+            when(event.getDrops()).thenReturn(drops);
+            when(event.getDroppedExp()).thenReturn(7);
+            listener.onPlayerDeath(event);
+            assertEquals(List.of(h.stored), drops);
+            verify(event, never()).setDroppedExp(anyInt());
+            verify(oldest, never()).removeGrave(any());
+            verify(oldest, never()).dropAndRemoveForLimit(any());
+            assertEquals(1, h.regionWork.size(), "Failed location preflight must not queue a replacement");
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = { false, true })
+    void acceptedReplacementStillUsesConfiguredLimitRemoval(boolean dropOldContents) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            Grave oldest = mock(Grave.class);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(1);
+            when(h.config.getGraveLimit()).thenReturn(1);
+            when(h.config.isDropItemsOnGraveRemoval()).thenReturn(dropOldContents);
+            when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(oldest);
+            var event = mock(PlayerDeathEvent.class);
+            when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored));
+            when(event.getDrops()).thenReturn(drops);
+            listener.onPlayerDeath(event);
+            assertTrue(drops.isEmpty()); verify(event).setDroppedExp(0);
+            if (dropOldContents) {
+                verify(oldest, times(1)).dropAndRemoveForLimit(h.owner);
+                verify(oldest, never()).removeGrave(any());
+            } else {
+                verify(oldest, times(1)).removeGrave(com.bencodez.gravestonesplus.events.GraveRemoveReason.LIMIT_REACHED);
+                verify(oldest, never()).dropAndRemoveForLimit(any());
+            }
+            assertEquals(2, h.regionWork.size());
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = { false, true })
+    void failedLimitPreflightRollsBackOnlyNewKeptBatchAndCannotPayBeforeDropsClear(boolean dropOldContents) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            Grave oldest = mock(Grave.class);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(1);
+            when(h.config.getGraveLimit()).thenReturn(1);
+            when(h.config.isDropItemsOnGraveRemoval()).thenReturn(dropOldContents);
+            when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(oldest);
+            org.mockito.stubbing.Answer<Void> fail = call -> {
+                respawn(listener, h.owner);
+                h.entityWork.remove().run();
+                verify(h.ownerInventory, never()).setItem(anyInt(), any());
+                throw new IllegalStateException("limit removal rejected");
+            };
+            if (dropOldContents) doAnswer(fail).when(oldest).dropAndRemoveForLimit(any());
+            else doAnswer(fail).when(oldest).removeGrave(any());
+            var event = mock(PlayerDeathEvent.class);
+            when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored));
+            when(event.getDrops()).thenReturn(drops);
+            assertThrows(IllegalStateException.class, () -> listener.onPlayerDeath(event));
+            assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            assertEquals(1, h.regionWork.size());
+            when(h.ownerInventory.getItem(4)).thenReturn(null);
+            respawn(listener, h.owner); h.drain();
+            verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            verify(h.ownerInventory, never()).addItem(any(ItemStack.class));
+        }
+    }
+    @Test void failedPreflightDoesNotDiscardASuccessorKeptBatch() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            Grave oldest = mock(Grave.class);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(1);
+            when(h.config.getGraveLimit()).thenReturn(1);
+            when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(oldest);
+            var successor = mock(ItemStack.class); var successorClone = mock(ItemStack.class);
+            var material = h.stored.getType();
+            when(successor.getType()).thenReturn(material); when(successor.clone()).thenReturn(successorClone);
+            when(successorClone.getType()).thenReturn(material);
+            doAnswer(call -> {
+                capture(h, listener, h.owner, h.ownerInventory, successor);
+                throw new IllegalStateException("predecessor removal failed");
+            }).when(oldest).removeGrave(any());
+            var event = mock(PlayerDeathEvent.class);
+            when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
+            assertThrows(IllegalStateException.class, () -> listener.onPlayerDeath(event));
+            assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            when(h.ownerInventory.getItem(4)).thenReturn(null, h.cloned);
+            respawn(listener, h.owner); h.drain();
+            verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            verify(h.ownerInventory, times(1)).addItem(successorClone);
+            verify(h.ownerInventory, never()).addItem(h.cloned);
+        }
+    }
+    @Test void deferredGraveReceivesDetachedCapturedItems() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            when(h.config.getKeepItemsWithLore()).thenReturn("");
+            when(h.stored.hasItemMeta()).thenReturn(false);
+            var event = mock(PlayerDeathEvent.class);
+            when(event.getEntity()).thenReturn(h.owner); when(event.getDrops()).thenReturn(new ArrayList<>());
+            listener.onPlayerDeath(event);
+            var records = new ArrayList<com.bencodez.gravestonesplus.storage.GravesConfig>();
+            try (var graves = mockConstruction(Grave.class, (grave, context) ->
+                    records.add((com.bencodez.gravestonesplus.storage.GravesConfig) context.arguments().get(1)))) {
+                h.regionWork.remove().run(); // first kept-only death
+                h.regionWork.remove().run(); // second grave-bound death
+                assertSame(h.cloned, records.get(1).getItems().get(4));
+                assertNotSame(h.stored, records.get(1).getItems().get(4));
+            }
         }
     }
     @Test void simultaneousPendingPlayersRestoreTheirOwnSnapshotsOnly() throws Exception {

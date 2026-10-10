@@ -160,6 +160,18 @@ retained rather than discarded solely to invalidate the callback. The existing f
 remain session-local; this change does not add restart recovery for legacy death
 capture or make its persistence atomic with the death event.
 
+Death replacement preflight resolves the location, evaluates/copies items and
+reserves kept-item capacity before enforcing the configured grave limit. A missing
+location or full kept-item backlog leaves the existing oldest grave untouched and
+preserves native death drops and XP. A kept-item reservation cannot be paid by a
+respawn callback before those drops are consumed. If limit preflight throws, only
+that death's reservation is withdrawn; older and successor entitlements remain.
+Successful replacement still uses the existing oldest-grave removal policy.
+This preflight change does not yet count unpublished/restoring graves toward the
+limit or add durable creation intents: failure or shutdown after death capture
+remains a separate legacy lifecycle limitation.
+
+
 Flat-file startup protects exact persisted marker positions from the already-decoded
 Graves.yml records before deferred Folia item preparation runs. This early index
 neither exposes claims nor resolves worlds, clones items, or scans blocks. Chunk

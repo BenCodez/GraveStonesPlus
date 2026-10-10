@@ -19,6 +19,18 @@ public class NBTConfigManager {
         loadConfig();
     }
 
+    private NBTConfigManager(GraveStonesPlus plugin, FileConfiguration data, String keepLore) {
+        this.plugin = plugin;
+        this.config = data;
+        rules = new RulesSnapshot(loadRulesFromSection("ignore_nbt_rules"),
+                loadRulesFromSection("keep_nbt_rules"), loadRulesFromSection("grave_nbt_rules"),
+                keepLore == null ? "" : keepLore);
+    }
+    /** Prepare against the same general-config generation, without publishing or reading files. */
+    public static NBTConfigManager prepare(GraveStonesPlus plugin, FileConfiguration data, String keepLore) {
+        return new NBTConfigManager(plugin, data, keepLore);
+    }
+
     public void loadConfig() {
         File file = new File(plugin.getDataFolder(), "nbt_rules.yml");
         if (!file.exists()) {

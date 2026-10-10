@@ -193,9 +193,11 @@ class RecoveryCompletionTest {
             reloadPaths(h);
             Files.writeString(directory.resolve("Config.yml"), "broken: [\n");
             doCallRealMethod().when(h.plugin).reloadAsync();
-            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(h.plugin.reloadAsync()));
+            var reload = h.plugin.reloadAsync(); FeaturePersistenceTest.await(h.io.barrier());
+            h.ownerWork.remove().run();
+            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(reload));
             verify(h.config, never()).reloadData();
-            verify(h.scheduler, never()).runTask(eq(h.plugin), any(Runnable.class));
+            verify(h.plugin, never()).reloadAdvancedCore(false);
         }
     }
 
@@ -257,12 +259,82 @@ class RecoveryCompletionTest {
             GraveActionsTest.field(h.plugin, "configFile", h.config);
             GraveActionsTest.field(h.plugin, "gravesConfig", mock(com.bencodez.gravestonesplus.storage.GraveLocations.class));
             GraveActionsTest.field(h.plugin, "nbtConfigManager", mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class));
-            doThrow(new IllegalStateException("read failed")).when(h.config).reloadData();
             reloadPaths(h);
+            Files.delete(directory.resolve("Config.yml"));
             doCallRealMethod().when(h.plugin).reloadAsync();
             var reload = h.plugin.reloadAsync();
             assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(reload));
             verify(h.scheduler, never()).runTask(eq(h.plugin), any(Runnable.class));
+        }
+    }
+
+    @Test void lateNbtPreparationFailureRetainsAllLiveConfigurationObjects() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config); reloadPaths(h);
+            var oldNbt = mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class);
+            GraveActionsTest.field(h.plugin, "nbtConfigManager", oldNbt);
+            doCallRealMethod().when(h.plugin).getConfigFile();
+            doCallRealMethod().when(h.plugin).getGravesConfig();
+            doCallRealMethod().when(h.plugin).getNbtConfigManager();
+            var locations = h.plugin.getGravesConfig();
+            Files.writeString(directory.resolve("Config.yml"), "KeepItemsWithLore: new-lore\nGraveTimeLimit: 9m\n");
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            var reload = h.plugin.reloadAsync(); FeaturePersistenceTest.await(h.io.barrier());
+            assertSame(h.config, h.plugin.getConfigFile());
+            try (var nbt = mockStatic(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class)) {
+                nbt.when(() -> com.bencodez.gravestonesplus.nbt.NBTConfigManager.prepare(eq(h.plugin), any(), any()))
+                        .thenThrow(new IllegalStateException("late NBT preparation failed"));
+                h.ownerWork.remove().run();
+            }
+            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(reload));
+            assertSame(h.config, h.plugin.getConfigFile()); assertSame(locations, h.plugin.getGravesConfig());
+            assertSame(oldNbt, h.plugin.getNbtConfigManager());
+            verify(h.config, never()).reloadData(); verify(h.plugin, never()).reloadAdvancedCore(false);
+        }
+    }
+
+    @Test void reloadPublishesOnePreparedGenerationWithoutRereadingChangedFiles() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config); reloadPaths(h);
+            GraveActionsTest.field(h.plugin, "nbtConfigManager", mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class));
+            doCallRealMethod().when(h.plugin).getConfigFile(); doCallRealMethod().when(h.plugin).getGravesConfig();
+            doCallRealMethod().when(h.plugin).getNbtConfigManager();
+            when(h.plugin.getJavascriptEngine()).thenReturn(new HashMap<>());
+            when(h.plugin.activeGraveSnapshot()).thenReturn(List.of());
+            Files.writeString(directory.resolve("Config.yml"), "KeepItemsWithLore: captured-lore\nGraveTimeLimit: 9m\n");
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            var reload = h.plugin.reloadAsync(); FeaturePersistenceTest.await(h.io.barrier());
+            assertSame(h.config, h.plugin.getConfigFile());
+            Files.writeString(directory.resolve("Config.yml"), "broken: [\n");
+            Files.writeString(directory.resolve("nbt_rules.yml"), "broken: [\n");
+            h.ownerWork.remove().run(); FeaturePersistenceTest.await(reload);
+            assertNotSame(h.config, h.plugin.getConfigFile());
+            assertEquals("captured-lore", h.plugin.getConfigFile().getKeepItemsWithLore());
+            assertEquals("captured-lore", h.plugin.getNbtConfigManager().snapshot().keepLore());
+            assertEquals("9m", h.plugin.getConfigFile().getGraveTimeLimit());
+            verify(h.config, never()).reloadData();
+        }
+    }
+
+    @Test void corePublicationFailureRestoresPreviousConfigurationGeneration() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config); reloadPaths(h);
+            var oldNbt = mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class);
+            GraveActionsTest.field(h.plugin, "nbtConfigManager", oldNbt);
+            doCallRealMethod().when(h.plugin).getConfigFile(); doCallRealMethod().when(h.plugin).getGravesConfig();
+            doCallRealMethod().when(h.plugin).getNbtConfigManager();
+            var oldGraves = h.plugin.getGravesConfig();
+            when(h.plugin.getJavascriptEngine()).thenReturn(new HashMap<>());
+            doThrow(new IllegalStateException("core publication failed")).when(h.plugin).reloadAdvancedCore(false);
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            var reload = h.plugin.reloadAsync(); FeaturePersistenceTest.await(h.io.barrier());
+            h.ownerWork.remove().run();
+            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(reload));
+            assertSame(h.config, h.plugin.getConfigFile()); assertSame(oldGraves, h.plugin.getGravesConfig());
+            assertSame(oldNbt, h.plugin.getNbtConfigManager());
         }
     }
 

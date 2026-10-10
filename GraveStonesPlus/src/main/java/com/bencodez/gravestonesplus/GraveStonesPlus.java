@@ -82,8 +82,14 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Getter
 	private GraveDisplayEntityHandle graveDisplayEntityHandler;
 
-	@Getter
 	private NBTConfigManager nbtConfigManager;
+    private record ReloadFiles(String config, String graves, String nbt) { }
+    private record RuntimeConfiguration(Config config, GraveLocations graves, NBTConfigManager nbt) { }
+    private volatile RuntimeConfiguration runtimeConfiguration;
+    public NBTConfigManager getNbtConfigManager() {
+        RuntimeConfiguration current = runtimeConfiguration;
+        return current == null ? nbtConfigManager : current.nbt();
+    }
 
 	@Getter
 	private boolean nbtAPIHooked = false;
@@ -405,12 +411,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
         }
         try {
             diskOwner.submit(() -> {
-                validateReloadFile(configFile.getdFile());
-                validateReloadFile(gravesConfig.getdFile());
                 java.io.File nbtRules = new java.io.File(getDataFolder(), "nbt_rules.yml");
                 if (!nbtRules.exists()) saveResource("nbt_rules.yml", false);
-                validateReloadFile(nbtRules);
-                configFile.reloadData(); gravesConfig.reloadData(); nbtConfigManager.reloadConfig(); return true;
+                return new ReloadFiles(readReloadFile(configFile.getdFile()),
+                        readReloadFile(gravesConfig.getdFile()), readReloadFile(nbtRules));
             }).whenComplete((loaded, failure) -> {
                 if (failure != null) {
                     getLogger().severe("Grave configuration reload failed; inspect configuration before retrying.");
@@ -423,12 +427,25 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
                             completion.completeExceptionally(new IllegalStateException("Grave reload lifecycle retired"));
                             return;
                         }
+                        RuntimeConfiguration previous = runtimeConfiguration;
+                        boolean published = false;
                         try {
+                            Config preparedConfig = Config.prepare(this, parseReloadFile(loaded.config()));
+                            GraveLocations preparedGraves = GraveLocations.prepare(this, parseReloadFile(loaded.graves()));
+                            NBTConfigManager preparedNbt = NBTConfigManager.prepare(this,
+                                    parseReloadFile(loaded.nbt()), preparedConfig.getKeepItemsWithLore());
+                            runtimeConfiguration = new RuntimeConfiguration(preparedConfig, preparedGraves, preparedNbt);
+                            published = true;
                             updateAdvancedCoreHook(); reloadAdvancedCore(false);
                             for (Grave grave : activeGraveSnapshot()) getBukkitScheduler().runTask(this,
                                     () -> grave.checkTimeLimit(getConfigFile().getGraveTimeLimit()), grave.getGravesConfig().getLocation());
                             completion.complete(null);
                         } catch (RuntimeException ownerFailure) {
+                            if (published) {
+                                runtimeConfiguration = previous;
+                                try { updateAdvancedCoreHook(); }
+                                catch (RuntimeException rollbackFailure) { ownerFailure.addSuppressed(rollbackFailure); }
+                            }
                             getLogger().severe("Grave reload owner publication failed; inspect configuration before retrying.");
                             completion.completeExceptionally(ownerFailure);
                         }
@@ -443,41 +460,58 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
         return completion;
     }
 
-    /** Bukkit's convenience YAML loader logs parse failures and returns an empty configuration. */
-    private static void validateReloadFile(java.io.File file) {
-        try { new org.bukkit.configuration.file.YamlConfiguration().load(file); }
-        catch (java.io.IOException | org.bukkit.configuration.InvalidConfigurationException failure) {
+    /** Read bytes only on I/O; Bukkit YAML deserialization runs on the publication owner. */
+    private static String readReloadFile(java.io.File file) {
+        final int limit = 16 * 1024 * 1024;
+        try (var input = java.nio.file.Files.newInputStream(file.toPath())) {
+            byte[] bytes = input.readNBytes(limit + 1);
+            if (bytes.length > limit) throw new IllegalStateException("Grave reload file exceeds capacity");
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException failure) {
             throw new IllegalStateException("Grave configuration file cannot be read", failure);
+        }
+    }
+    private static org.bukkit.configuration.file.YamlConfiguration parseReloadFile(String text) {
+        var data = new org.bukkit.configuration.file.YamlConfiguration();
+        try { data.loadFromString(text); return data; }
+        catch (org.bukkit.configuration.InvalidConfigurationException failure) {
+            throw new IllegalStateException("Grave configuration file cannot be parsed", failure);
         }
     }
 
 	private void updateAdvancedCoreHook() {
 		getJavascriptEngine().put("GraveStonesPlus", this);
-		setConfigData(new YMLConfig(plugin, configFile.getData()) {
+		setConfigData(new YMLConfig(plugin, getConfigFile().getData()) {
 			@Override
 			public void setValue(String path, Object value) {
-				configFile.setValue(path, value);
+				getConfigFile().setValue(path, value);
 			}
 
 			@Override
 			public void saveData() {
-				configFile.saveData();
+				getConfigFile().saveData();
 			}
 
 			@Override
 			public void createSection(String key) {
-				configFile.createSection(key);
+				getConfigFile().createSection(key);
 			}
 		});
 		setLoadUserData(false);
 		setLoadVault(false);
 	}
 
-	@Getter
 	private Config configFile;
+    public Config getConfigFile() {
+        RuntimeConfiguration current = runtimeConfiguration;
+        return current == null ? configFile : current.config();
+    }
 
-	@Getter
 	private GraveLocations gravesConfig;
+    public GraveLocations getGravesConfig() {
+        RuntimeConfiguration current = runtimeConfiguration;
+        return current == null ? gravesConfig : current.graves();
+    }
 
 	public int numberOfGraves(UUID uuid) {
 		int num = 0;

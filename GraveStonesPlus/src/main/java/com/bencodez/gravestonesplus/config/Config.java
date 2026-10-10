@@ -30,6 +30,19 @@ public class Config extends YMLFile {
 		super(plugin, new File(plugin.getDataFolder(), "Config.yml"), true);
 	}
 
+    private boolean suppressMigrationPersistence;
+    private Config(AdvancedCorePlugin plugin, org.bukkit.configuration.file.FileConfiguration prepared) {
+        super(plugin, new File(plugin.getDataFolder(), "Config.yml"), plugin.getBukkitScheduler(), false);
+        suppressMigrationPersistence = true;
+        setData(prepared);
+        loadValues();
+        suppressMigrationPersistence = false;
+    }
+    /** Owner-thread preparation only: no file read or publication. */
+    public static Config prepare(AdvancedCorePlugin plugin, org.bukkit.configuration.file.FileConfiguration data) {
+        return new Config(plugin, data);
+    }
+
 	@Override
 	public void loadValues() {
 		migrateLegacyConfigKeys();
@@ -79,7 +92,7 @@ public class Config extends YMLFile {
 			changed = true;
 		}
 
-		if (changed) {
+		if (changed && !suppressMigrationPersistence) {
 			saveData();
 		}
 	}

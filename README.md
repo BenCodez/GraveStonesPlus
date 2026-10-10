@@ -131,3 +131,15 @@ a region thread. This keeps marker creation on its correct owner without leaving
 a persistent force-load behind. Bukkit/Paper retain the existing force-load and
 release behavior. This change does not make every legacy death/respawn path or
 cross-region recovery scenario verified on Folia.
+
+Reload reads bounded file contents on the I/O worker, then prepares general
+settings, grave YAML and NBT rules on the Bukkit owner. All three publish as one
+configuration generation only after preparation succeeds; a failed preparation
+keeps the previous objects and rules. Reload uses the captured file contents rather
+than rereading files during publication. The read limit is 16 MiB per file, in
+addition to Bukkit's YAML parser limits. Legacy key migration still runs during
+preparation but writes no file from the owner callback; those migrated keys persist
+when the configuration is subsequently saved. Initial startup retains its existing
+migration behavior. Backend selection and arbitrary AdvancedCore runtime side
+effects are not a transactional storage switch; changing database settings still
+requires a restart.

@@ -14,6 +14,14 @@ public class GraveLocations extends YMLFile {
 		super(plugin, new File(plugin.getDataFolder(), "Graves.yml"), true);
 	}
 
+    private GraveLocations(AdvancedCorePlugin plugin, org.bukkit.configuration.file.FileConfiguration prepared) {
+        super(plugin, new File(plugin.getDataFolder(), "Graves.yml"), plugin.getBukkitScheduler(), false);
+        setData(prepared);
+    }
+    public static GraveLocations prepare(AdvancedCorePlugin plugin, org.bukkit.configuration.file.FileConfiguration data) {
+        return new GraveLocations(plugin, data);
+    }
+
 	@Override
 	public void loadValues() {
 	}

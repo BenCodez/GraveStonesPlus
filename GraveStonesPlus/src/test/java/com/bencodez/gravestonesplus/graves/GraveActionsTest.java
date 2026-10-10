@@ -24,6 +24,11 @@ class GraveActionsTest {
     static void field(Object target, String name, Object value) throws Exception {
         Field field = GraveStonesPlus.class.getDeclaredField(name); field.setAccessible(true); field.set(target, value);
     }
+    static void retryOnOwner(Harness h, GraveRestoration restoration) {
+        h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+        try { restoration.retry(); Runnable task; while ((task = h.ownerWork.poll()) != null) task.run(); }
+        finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+    }
     static final class Harness implements AutoCloseable {
         final FeatureIO io = new FeatureIO();
         final FeaturePersistenceTest.Disk accessDisk = new FeaturePersistenceTest.Disk(), claimDisk = new FeaturePersistenceTest.Disk();
@@ -38,7 +43,7 @@ class GraveActionsTest {
         final Player owner = mock(Player.class), helper = mock(Player.class);
         final PlayerInventory ownerInventory = mock(PlayerInventory.class), helperInventory = mock(PlayerInventory.class);
         final PluginManager events = mock(PluginManager.class);
-        final Queue<Runnable> entityWork = new ConcurrentLinkedQueue<>(), regionWork = new ConcurrentLinkedQueue<>();
+        final Queue<Runnable> entityWork = new ConcurrentLinkedQueue<>(), regionWork = new ConcurrentLinkedQueue<>(), ownerWork = new ConcurrentLinkedQueue<>();
         final List<Grave> active = Collections.synchronizedList(new ArrayList<>());
         final GraveNavigation navigation = new GraveNavigation(plugin);
         final MockedStatic<Bukkit> bukkit = mockStatic(Bukkit.class);
@@ -87,12 +92,20 @@ class GraveActionsTest {
                 var future = new java.util.concurrent.CompletableFuture<Void>();
                 regionWork.add(() -> { work.accept(null); future.complete(null); }); return future;
             }).when(platform).runAtLocation(any(Location.class), any());
+            doAnswer(call -> { ownerWork.add(call.getArgument(1)); return null; })
+                .when(scheduler).runTask(eq(plugin), any(Runnable.class));
             FeaturePersistenceTest.await(access.loaded()); FeaturePersistenceTest.await(ledger.loaded());
         }
         String identity() { return GraveIdentity.of(grave.getGravesConfig()); }
         void drain() throws Exception {
             for (int i = 0; i < 4; i++) {
-                Runnable task; while ((task = entityWork.poll()) != null) task.run();
+                Runnable task;
+                while ((task = ownerWork.poll()) != null) {
+                    bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                    try { task.run(); }
+                    finally { bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+                }
+                while ((task = entityWork.poll()) != null) task.run();
                 FeaturePersistenceTest.await(io.barrier());
             }
         }
@@ -687,7 +700,7 @@ class GraveActionsTest {
             when(backend.loadGraves()).thenReturn(List.of(h.grave.getGravesConfig())); when(backend.loadBrokenGraves()).thenReturn(List.of());
             doAnswer(i -> { h.active.add(i.getArgument(0)); return null; }).when(h.plugin).restoreActiveRecord(any());
             var restarted = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restarted);
-            restarted.retry(); drainGround(h); assertEquals(1, h.active.size()); assertTrue(h.active.getFirst().isLimitPayoutPending());
+            retryOnOwner(h, restarted); drainGround(h); assertEquals(1, h.active.size()); assertTrue(h.active.getFirst().isLimitPayoutPending());
             assertTrue(restarted.hasPending(h.identity())); verify(h.world, never()).dropItem(any(), any());
             ExperienceOrb orb = groundWorld(h); restarted.onChunk(h.world.getUID(), 0, 0); drainGround(h);
             verify(h.world, times(1)).dropItem(any(), eq(h.cloned)); verify(orb).setExperience(17);

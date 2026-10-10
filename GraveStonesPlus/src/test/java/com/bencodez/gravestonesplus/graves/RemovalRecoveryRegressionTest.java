@@ -43,7 +43,7 @@ class RemovalRecoveryRegressionTest {
             doAnswer(call -> { restored.add(call.getArgument(0)); published.countDown(); return null; })
                     .when(h.plugin).restoreBrokenRecord(any());
             var restoration = new GraveRestoration(h.plugin, backend);
-            restoration.retry(); assertTrue(published.await(2, TimeUnit.SECONDS)); h.drain();
+            GraveActionsTest.retryOnOwner(h, restoration); assertTrue(published.await(2, TimeUnit.SECONDS)); h.drain();
             Grave historical = restored.getFirst();
             assertTrue(historical.getGravesConfig().isDestroyed());
             assertFalse(h.plugin.canRecover(historical, h.helper));
@@ -138,7 +138,7 @@ class RemovalRecoveryRegressionTest {
             when(backend.loadGraves()).thenReturn(List.of(record)); when(backend.loadBrokenGraves()).thenReturn(List.of());
             doAnswer(call -> { h.active.add(call.getArgument(0)); return null; }).when(h.plugin).restoreActiveRecord(any());
             var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
-            restoration.retry(); GraveActionsTest.drainGround(h);
+            GraveActionsTest.retryOnOwner(h, restoration); GraveActionsTest.drainGround(h);
             var admitted = ArgumentCaptor.forClass(Grave.class); verify(h.plugin).restoreActiveRecord(admitted.capture());
             Grave restored = admitted.getValue(); assertEquals(death + 60_000L, restored.getExpiryDeadline());
             verify(h.world, never()).dropItem(any(), any()); verify(h.world, never()).getChunkAt(anyInt(), anyInt());

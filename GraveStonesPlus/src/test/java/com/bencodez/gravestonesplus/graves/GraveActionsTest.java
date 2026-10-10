@@ -110,6 +110,23 @@ class GraveActionsTest {
             h.grave.claim(h.helper); h.drain(); verify(h.helper).giveExp(17); verify(h.helperInventory).setItem(4, h.cloned);
         }
     }
+
+    @Test void ownerAndHelperAuthorizationUsesStableUuidAcrossDisplayNameChanges() throws Exception {
+        try (Harness h = new Harness()) {
+            when(h.owner.getName()).thenReturn("OriginalOwner");
+            assertTrue(h.plugin.canTrack(h.grave, h.owner));
+            assertTrue(h.plugin.canRecover(h.grave, h.owner));
+
+            h.grant(TrustedGraveAccess.Kind.RECOVER);
+            when(h.helper.getName()).thenReturn("RenamedHelper");
+            assertTrue(h.plugin.canRecover(h.grave, h.helper));
+            assertFalse(h.plugin.canTrack(h.grave, h.helper));
+
+            when(h.owner.getName()).thenReturn("RenamedOwner");
+            assertTrue(h.plugin.canTrack(h.grave, h.owner));
+            assertTrue(h.plugin.canRecover(h.grave, h.owner));
+        }
+    }
     @Test void ownerAndHelperConcurrentClaimsPayOnlyWinnerOnce() throws Exception {
         try (Harness h = new Harness()) {
             h.grant(TrustedGraveAccess.Kind.RECOVER);

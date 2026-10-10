@@ -91,6 +91,27 @@ class FeaturePersistenceTest {
             clock.set(200); assertFalse(store.allows(GRAVE, HELPER, TrustedGraveAccess.Kind.TRACK));
         }
     }
+
+    @Test void offlineUuidGrantRoundTripsAndKeepsKindAndGraveBoundaries() throws Exception {
+        Disk disk = new Disk();
+        UUID offlineHelper = UUID.randomUUID();
+        String otherGrave = GRAVE + "/other";
+        try (FeatureIO io = new FeatureIO()) {
+            var store = new TrustedGraveAccessStore(new DurableFeatureState(io, disk, 4096), () -> 100L);
+            assertTrue(await(store.loaded()));
+            assertTrue(await(store.grantAsync(GRAVE, offlineHelper, TrustedGraveAccess.Kind.RECOVER, 200)));
+            assertTrue(store.allows(GRAVE, offlineHelper, TrustedGraveAccess.Kind.RECOVER));
+            assertFalse(store.allows(GRAVE, offlineHelper, TrustedGraveAccess.Kind.TRACK));
+            assertFalse(store.allows(otherGrave, offlineHelper, TrustedGraveAccess.Kind.RECOVER));
+        }
+        try (FeatureIO io = new FeatureIO()) {
+            var reopened = new TrustedGraveAccessStore(new DurableFeatureState(io, disk, 4096), () -> 100L);
+            assertTrue(await(reopened.loaded()));
+            assertTrue(reopened.allows(GRAVE, offlineHelper, TrustedGraveAccess.Kind.RECOVER));
+            assertFalse(reopened.allows(GRAVE, offlineHelper, TrustedGraveAccess.Kind.TRACK));
+            assertFalse(reopened.allows(otherGrave, offlineHelper, TrustedGraveAccess.Kind.RECOVER));
+        }
+    }
     @Test void capacityAllowsReplacementAndRevocationAndPrunesExpired() throws Exception {
         AtomicLong clock = new AtomicLong(100);
         try (FeatureIO io = new FeatureIO()) {

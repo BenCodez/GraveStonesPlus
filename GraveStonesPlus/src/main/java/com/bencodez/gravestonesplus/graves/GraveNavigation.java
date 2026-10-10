@@ -56,8 +56,13 @@ public final class GraveNavigation {
             if (item == null || item.getType() != Material.COMPASS || !(item.getItemMeta() instanceof CompassMeta meta)) continue;
             String identity = meta.getPersistentDataContainer().get(identityKey, PersistentDataType.STRING);
             if (identity == null && !meta.getPersistentDataContainer().has(legacy, PersistentDataType.LONG)) continue;
+            String legacyIdentity = identity == null ? legacyIdentity(player, meta, legacy) : null;
             Grave grave = identity == null ? legacyTarget(player, meta, legacy) : resolve(identity);
-            if (grave == null && pending(identity)) continue;
+            // Legacy items predate the identity tag. Reconstruct the same stable
+            // owner/time/position identity before deciding that a withheld record
+            // is stale; restoration may have finished its backend read while the
+            // matching record is still awaiting admission.
+            if (grave == null && pending(identity == null ? legacyIdentity : identity)) continue;
             if (grave == null || !plugin.canTrack(grave, player)) {
                 meta.setLodestone(null); meta.getPersistentDataContainer().remove(identityKey);
                 meta.getPersistentDataContainer().remove(legacy); meta.setDisplayName("Inactive grave compass");
@@ -74,5 +79,12 @@ public final class GraveNavigation {
         for (Grave grave : plugin.getGraves(player)) if (time != null && time == grave.getGravesConfig().getTime()
                 && meta.getLodestone() != null && meta.getLodestone().equals(grave.getGravesConfig().getLocation())) return grave;
         return null;
+    }
+    private String legacyIdentity(Player player, CompassMeta meta, NamespacedKey key) {
+        Long time = meta.getPersistentDataContainer().get(key, PersistentDataType.LONG);
+        Location location = meta.getLodestone();
+        if (time == null || location == null || location.getWorld() == null) return null;
+        return player.getUniqueId() + "/" + time + "/" + location.getWorld().getUID()
+                + "/" + location.getBlockX() + "/" + location.getBlockY() + "/" + location.getBlockZ();
     }
 }

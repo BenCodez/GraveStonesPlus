@@ -5,7 +5,6 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map.Entry;
-import java.lang.reflect.Method;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
@@ -1071,11 +1070,6 @@ public class Grave {
                     }
                     Runnable commit = () -> {
                         synchronized (this) {
-                            if (actor != null && plugin.getBukkitScheduler().getFoliaLib().isFolia()
-                                    && !isOwnedByCurrentRegion(gravesConfig.getLocation())) {
-                                result.complete(false);
-                                return;
-                            }
                             if (!recreationStateAllowed(identity) || actor != null && (!actor.isOnline() || !canAdministerHistorical(actor))) { result.complete(false); return; }
                             markRecreated(); gravesConfig.setDestroyed(false); gravesConfig.setDestroyedTime(0);
                             if (createMarker) {
@@ -1093,26 +1087,6 @@ public class Grave {
             } catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
         });
         return result;
-    }
-
-    /** Check the actual Folia region owner before mutating this grave's location. */
-    static boolean isOwnedByCurrentRegion(Location location) {
-        if (location == null) return false;
-        try {
-            Method method = Bukkit.class.getMethod("isOwnedByCurrentRegion", Location.class);
-            return isOwnedByCurrentRegion(location, method);
-        } catch (ReflectiveOperationException | RuntimeException unavailable) {
-            return false;
-        }
-    }
-
-    static boolean isOwnedByCurrentRegion(Location location, Method method) {
-        if (location == null || method == null) return false;
-        try {
-            return Boolean.TRUE.equals(method.invoke(null, location));
-        } catch (ReflectiveOperationException | RuntimeException unavailable) {
-            return false;
-        }
     }
 
     private boolean recreationStateAllowed(String identity) {

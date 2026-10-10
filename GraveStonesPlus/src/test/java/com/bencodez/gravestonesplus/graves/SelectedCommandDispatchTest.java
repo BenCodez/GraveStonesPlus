@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.CompletableFuture;
 import java.util.function.Consumer;
 import com.bencodez.advancedcore.AdvancedCoreConfigOptions;
 import com.bencodez.advancedcore.api.command.CommandHandler;
@@ -339,6 +340,36 @@ class SelectedCommandDispatchTest {
             assertTrue(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.TRACK));
             assertEquals(1, h.entityWork.size()); commands.manager.invalidateAuthorization(); h.drain();
             verify(h.owner, never()).sendMessage(any(String.class));
+        }
+    }
+
+    @Test void reloadCommandDefersOwnerReplyUntilAsyncReloadCompletes() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var commands = new Commands(h);
+            var reload = new CompletableFuture<Void>();
+            when(h.plugin.reloadAsync()).thenReturn(reload);
+            assertTrue(commands.get("Reload").runCommand(h.owner, new String[] { "Reload" }));
+            assertEquals(1, commands.async.size()); commands.async.remove().run();
+            verify(h.owner, never()).sendMessage(any(String.class));
+            reload.complete(null);
+            assertEquals(1, h.entityWork.size(), "completion reply must be dispatched to the owner scheduler");
+            h.entityWork.remove().run();
+            verify(h.owner).sendMessage("\u00a7cGraveStonesPlus reloaded");
+        }
+    }
+
+    @Test void reloadCommandReportsAsyncFailureOnlyOnOwnerScheduler() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var commands = new Commands(h);
+            var reload = new CompletableFuture<Void>();
+            when(h.plugin.reloadAsync()).thenReturn(reload);
+            assertTrue(commands.get("Reload").runCommand(h.owner, new String[] { "Reload" }));
+            assertEquals(1, commands.async.size()); commands.async.remove().run();
+            reload.completeExceptionally(new IllegalStateException("read failed"));
+            verify(h.owner, never()).sendMessage(any(String.class));
+            assertEquals(1, h.entityWork.size());
+            h.entityWork.remove().run();
+            verify(h.owner).sendMessage("\u00a7cGraveStonesPlus reload failed; inspect the server log");
         }
     }
 }

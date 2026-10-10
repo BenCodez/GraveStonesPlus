@@ -83,8 +83,16 @@ public class CommandLoader {
 
 					@Override
 					public void execute(CommandSender sender, String[] args) {
-						plugin.reload();
-						sendMessage(sender, "&cGraveStonesPlus reloaded");
+						plugin.reloadAsync().whenComplete((ignored, failure) -> {
+							Runnable reply = () -> {
+								if (sender instanceof Player player && (!plugin.isEnabled() || !player.isOnline()
+										|| !player.hasPermission("GraveStonesPlus.Reload"))) return;
+								if (failure == null) sendMessage(sender, "&cGraveStonesPlus reloaded");
+								else sendMessage(sender, "&cGraveStonesPlus reload failed; inspect the server log");
+							};
+							if (sender instanceof Player player) plugin.getBukkitScheduler().runTask(plugin, reply, player);
+							else plugin.getBukkitScheduler().runTask(plugin, reply);
+						});
 					}
 				});
 

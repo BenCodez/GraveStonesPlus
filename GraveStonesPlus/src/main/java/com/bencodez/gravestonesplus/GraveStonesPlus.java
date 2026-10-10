@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
@@ -93,6 +94,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Getter
 	private TrustedGraveAccessStore trustedGraveAccessStore;
     @Getter private com.bencodez.gravestonesplus.graves.FeatureIO featureIO;
+    private volatile CompletableFuture<Void> pendingReload;
+    private volatile boolean reloadRetired;
     @Getter private com.bencodez.gravestonesplus.graves.GraveMarkerCleanup markerCleanup;
     @Getter private com.bencodez.gravestonesplus.graves.GraveRestoration graveRestoration;
     @Getter private com.bencodez.gravestonesplus.graves.GraveClaimLedger graveClaimLedger;
@@ -216,6 +219,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	public void onPostLoad() {
 		if (featureIO != null && !featureIO.isTerminated()) throw new IllegalStateException("Previous grave disk owner is still draining; cannot reload selected state yet");
         featureIO = new com.bencodez.gravestonesplus.graves.FeatureIO();
+        reloadRetired = false;
         graveClaimLedger = new com.bencodez.gravestonesplus.graves.GraveClaimLedger(
             new com.bencodez.gravestonesplus.graves.DurableFeatureState(featureIO,
                 new java.io.File(getDataFolder(), "selected-claims.yml").toPath(), 8192),
@@ -329,6 +333,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Override
 	public void onUnLoad() {
+        synchronized (this) {
+            reloadRetired = true;
+            CompletableFuture<Void> reload = pendingReload;
+            if (reload != null) reload.completeExceptionally(new IllegalStateException("Grave reload lifecycle retired"));
+        }
+
 		if (graveRestoration != null) graveRestoration.retire();
         if (markerCleanup != null) markerCleanup.retire();
 		if (graveReminderListener != null) graveReminderListener.stop();
@@ -358,17 +368,73 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Override
     public void reload() {
-        if (playerBreakManager != null) playerBreakManager.invalidateAuthorization();
-        featureIO.submit(() -> {
-            configFile.reloadData(); gravesConfig.reloadData(); nbtConfigManager.reloadConfig(); return true;
-        }).whenComplete((loaded, failure) -> {
-            if (failure != null) { getLogger().severe("Grave configuration reload failed; retaining current lifecycle state."); return; }
-            getBukkitScheduler().runTask(this, () -> {
-                updateAdvancedCoreHook(); reloadAdvancedCore(false);
-                for (Grave grave : activeGraveSnapshot()) getBukkitScheduler().runTask(this,
-                        () -> grave.checkTimeLimit(getConfigFile().getGraveTimeLimit()), grave.getGravesConfig().getLocation());
+        reloadAsync();
+    }
+
+    /**
+     * Reloads the files off-thread and completes after the Bukkit owner has
+     * published the new configuration. The legacy void method intentionally
+     * remains fire-and-forget for binary/source compatibility.
+     */
+    public CompletableFuture<Void> reloadAsync() {
+        final CompletableFuture<Void> completion;
+        final com.bencodez.gravestonesplus.graves.FeatureIO diskOwner;
+        synchronized (this) {
+            if (reloadRetired || !isEnabled() || featureIO == null) return CompletableFuture.failedFuture(
+                    new IllegalStateException("Grave configuration lifecycle is unavailable"));
+            if (pendingReload != null && !pendingReload.isDone()) return CompletableFuture.failedFuture(
+                    new IllegalStateException("A grave configuration reload is already pending"));
+            completion = new CompletableFuture<>();
+            pendingReload = completion;
+            diskOwner = featureIO;
+            if (playerBreakManager != null) playerBreakManager.invalidateAuthorization();
+        }
+        try {
+            diskOwner.submit(() -> {
+                validateReloadFile(configFile.getdFile());
+                validateReloadFile(gravesConfig.getdFile());
+                java.io.File nbtRules = new java.io.File(getDataFolder(), "nbt_rules.yml");
+                if (!nbtRules.exists()) saveResource("nbt_rules.yml", false);
+                validateReloadFile(nbtRules);
+                configFile.reloadData(); gravesConfig.reloadData(); nbtConfigManager.reloadConfig(); return true;
+            }).whenComplete((loaded, failure) -> {
+                if (failure != null) {
+                    getLogger().severe("Grave configuration reload failed; inspect configuration before retrying.");
+                    completion.completeExceptionally(failure);
+                    return;
+                }
+                try {
+                    getBukkitScheduler().runTask(this, () -> {
+                        if (reloadRetired || !isEnabled() || featureIO != diskOwner || pendingReload != completion || completion.isDone()) {
+                            completion.completeExceptionally(new IllegalStateException("Grave reload lifecycle retired"));
+                            return;
+                        }
+                        try {
+                            updateAdvancedCoreHook(); reloadAdvancedCore(false);
+                            for (Grave grave : activeGraveSnapshot()) getBukkitScheduler().runTask(this,
+                                    () -> grave.checkTimeLimit(getConfigFile().getGraveTimeLimit()), grave.getGravesConfig().getLocation());
+                            completion.complete(null);
+                        } catch (RuntimeException ownerFailure) {
+                            getLogger().severe("Grave reload owner publication failed; inspect configuration before retrying.");
+                            completion.completeExceptionally(ownerFailure);
+                        }
+                    });
+                } catch (RuntimeException schedulingFailure) {
+                    completion.completeExceptionally(schedulingFailure);
+                }
             });
-        });
+        } catch (RuntimeException admissionFailure) {
+            completion.completeExceptionally(admissionFailure);
+        }
+        return completion;
+    }
+
+    /** Bukkit's convenience YAML loader logs parse failures and returns an empty configuration. */
+    private static void validateReloadFile(java.io.File file) {
+        try { new org.bukkit.configuration.file.YamlConfiguration().load(file); }
+        catch (java.io.IOException | org.bukkit.configuration.InvalidConfigurationException failure) {
+            throw new IllegalStateException("Grave configuration file cannot be read", failure);
+        }
     }
 
 	private void updateAdvancedCoreHook() {

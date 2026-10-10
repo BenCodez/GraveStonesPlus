@@ -151,6 +151,7 @@ class RecoveryCompletionTest {
 
     @Test void completedTimedBreakIsInvalidAfterReloadPermissionLossOrLongerDurationDuringReservation() throws Exception {
         for (int change : List.of(0, 1, 2)) try (GraveActionsTest.Harness h = new GraveActionsTest.Harness()) {
+            CompletableFuture<Void> reload = null;
             PlayerBreakManager manager = manager(h); manager.handleHit(h.helper, h.grave); elapsed(manager, h);
             assertTrue(manager.handleHit(h.helper, h.grave)); h.entityWork.remove().run(); FeaturePersistenceTest.await(h.io.barrier());
             if (change == 0) {
@@ -159,12 +160,109 @@ class RecoveryCompletionTest {
                 GraveActionsTest.field(h.plugin, "configFile", h.config);
                 GraveActionsTest.field(h.plugin, "gravesConfig", mock(com.bencodez.gravestonesplus.storage.GraveLocations.class));
                 GraveActionsTest.field(h.plugin, "nbtConfigManager", mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class));
-                doCallRealMethod().when(h.plugin).reload(); h.plugin.reload();
+                reloadPaths(h);
+            doCallRealMethod().when(h.plugin).reloadAsync();
+                when(h.plugin.getJavascriptEngine()).thenReturn(new HashMap<>());
+                doAnswer(call -> { h.entityWork.add(call.getArgument(1)); return null; })
+                        .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class));
+                reload = h.plugin.reloadAsync();
+                assertFalse(reload.isDone(), "reload must not complete before the owner callback runs");
             }
             else if (change == 1) when(h.helper.hasPermission("GraveStonesPlus.BreakOtherGraves")).thenReturn(false);
             else when(h.config.getBreakOtherGravesTime()).thenReturn(duration("1m"));
-            h.drain(); verify(h.helper, never()).giveExp(anyInt()); assertFalse(h.ledger.isBlocked(h.identity()));
+            h.drain(); if (reload != null) assertTrue(reload.isDone()); verify(h.helper, never()).giveExp(anyInt()); assertFalse(h.ledger.isBlocked(h.identity()));
             assertFalse(h.grave.getGravesConfig().isDestroyed());
+        }
+    }
+
+    private void reloadPaths(GraveActionsTest.Harness h) throws Exception {
+        Path config = directory.resolve("Config.yml"), graves = directory.resolve("Graves.yml");
+        Files.writeString(config, "Root: {}\n"); Files.writeString(graves, "");
+        Files.writeString(directory.resolve("nbt_rules.yml"), "Root: {}\n");
+        when(h.plugin.getDataFolder()).thenReturn(directory.toFile());
+        when(h.config.getdFile()).thenReturn(config.toFile());
+        var locations = mock(com.bencodez.gravestonesplus.storage.GraveLocations.class);
+        when(locations.getdFile()).thenReturn(graves.toFile());
+        GraveActionsTest.field(h.plugin, "gravesConfig", locations);
+    }
+
+    @Test void malformedYamlFailsBeforeConfigMutationOrOwnerPublication() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config);
+            reloadPaths(h);
+            Files.writeString(directory.resolve("Config.yml"), "broken: [\n");
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(h.plugin.reloadAsync()));
+            verify(h.config, never()).reloadData();
+            verify(h.scheduler, never()).runTask(eq(h.plugin), any(Runnable.class));
+        }
+    }
+
+    @Test void missingNbtRulesAreRecreatedBeforeValidationAndOwnerPublication() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config);
+            GraveActionsTest.field(h.plugin, "nbtConfigManager", mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class));
+            reloadPaths(h);
+            Path rules = directory.resolve("nbt_rules.yml");
+            Files.delete(rules);
+            doAnswer(call -> { Files.writeString(rules, "ignore_nbt_rules: []\n"); return null; })
+                    .when(h.plugin).saveResource("nbt_rules.yml", false);
+            when(h.plugin.getJavascriptEngine()).thenReturn(new HashMap<>());
+            when(h.plugin.activeGraveSnapshot()).thenReturn(List.of());
+            doAnswer(call -> { h.entityWork.add(call.getArgument(1)); return null; })
+                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class));
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            var reload = h.plugin.reloadAsync();
+            FeaturePersistenceTest.await(h.io.barrier());
+            assertTrue(Files.exists(rules));
+            verify(h.plugin).saveResource("nbt_rules.yml", false);
+            assertFalse(reload.isDone());
+            h.entityWork.remove().run();
+            FeaturePersistenceTest.await(reload);
+            verify(h.plugin).reloadAdvancedCore(false);
+        }
+    }
+
+    @Test void reloadOwnerCompletionRejectsConcurrentDisabledAndFailedPublication() throws Exception {
+        for (int outcome : List.of(0, 1, 2)) try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config);
+            GraveActionsTest.field(h.plugin, "gravesConfig", mock(com.bencodez.gravestonesplus.storage.GraveLocations.class));
+            GraveActionsTest.field(h.plugin, "nbtConfigManager", mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class));
+            when(h.plugin.getJavascriptEngine()).thenReturn(new HashMap<>());
+            when(h.plugin.activeGraveSnapshot()).thenReturn(List.of());
+            doAnswer(call -> { h.entityWork.add(call.getArgument(1)); return null; })
+                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class));
+            reloadPaths(h);
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            var reload = h.plugin.reloadAsync();
+            FeaturePersistenceTest.await(h.io.barrier());
+            assertFalse(reload.isDone());
+            var duplicate = h.plugin.reloadAsync();
+            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(duplicate));
+            if (outcome == 1) when(h.plugin.isEnabled()).thenReturn(false);
+            if (outcome == 2) doThrow(new IllegalStateException("owner failed")).when(h.plugin).reloadAdvancedCore(false);
+            h.entityWork.remove().run();
+            if (outcome == 0) { FeaturePersistenceTest.await(reload); verify(h.plugin).reloadAdvancedCore(false); }
+            else assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(reload));
+            if (outcome == 1) verify(h.plugin, never()).reloadAdvancedCore(false);
+        }
+    }
+
+    @Test void reloadAsyncPropagatesReadFailureWithoutSchedulingOwnerPublication() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config);
+            GraveActionsTest.field(h.plugin, "gravesConfig", mock(com.bencodez.gravestonesplus.storage.GraveLocations.class));
+            GraveActionsTest.field(h.plugin, "nbtConfigManager", mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class));
+            doThrow(new IllegalStateException("read failed")).when(h.config).reloadData();
+            reloadPaths(h);
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            var reload = h.plugin.reloadAsync();
+            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(reload));
+            verify(h.scheduler, never()).runTask(eq(h.plugin), any(Runnable.class));
         }
     }
 

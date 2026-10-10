@@ -1107,8 +1107,26 @@ public class Grave {
         }, actor);
     }
 
-    /** Limit-removal payout shares the claim ledger, so queued drops cannot race recovery. */
+    /**
+     * Legacy item-only drop API. This does not remove the grave, pay experience,
+     * or reserve a recovery; callers remain responsible for the grave lifecycle.
+     * Items are captured before the region handoff so later edits cannot change
+     * an already requested drop. Player is retained for source compatibility.
+     */
     public void dropItemsOnGround(Player recipient) {
+        Location location = gravesConfig.getLocation();
+        if (location == null || location.getWorld() == null) return;
+        Location target = location.clone();
+        var items = GravePayout.select(gravesConfig.getItems(), plugin.getConfigFile().getPercentageDrops(),
+                () -> ThreadLocalRandom.current().nextInt(100));
+        plugin.getBukkitScheduler().runTask(plugin, () -> {
+            if (!plugin.isEnabled()) return;
+            for (ItemStack item : items.values()) target.getWorld().dropItem(target, item);
+        }, target);
+    }
+
+    /** Limit-removal payout shares the claim ledger, so queued drops cannot race recovery. */
+    public void dropAndRemoveForLimit(Player recipient) {
         String identity = GraveIdentity.of(gravesConfig);
         synchronized (this) {
             if (remove || claimInProgress || limitPayoutPending || !plugin.isLiveGrave(this) || plugin.getGraveClaimLedger().isBlocked(identity)) return;

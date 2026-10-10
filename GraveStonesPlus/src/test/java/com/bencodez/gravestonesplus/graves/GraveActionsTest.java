@@ -584,6 +584,34 @@ class GraveActionsTest {
         }
     }
 
+    @Test void legacyGroundDropOnlyDropsCapturedItemsWithoutChangingGraveOrExperience() throws Exception {
+        try (Harness h = new Harness()) {
+            groundWorld(h);
+            h.grave.dropItemsOnGround(h.owner);
+            assertEquals(1, h.regionWork.size());
+            // Change the mutable source after scheduling: the accepted drop owns its snapshot.
+            h.grave.getGravesConfig().getItems().clear();
+            h.regionWork.remove().run();
+            verify(h.world).dropItem(eq(h.grave.getGravesConfig().getLocation()), same(h.cloned));
+            verify(h.world, never()).spawn(any(Location.class), eq(ExperienceOrb.class));
+            verify(h.owner, never()).giveExp(anyInt()); verify(h.plugin, never()).removeGrave(any());
+            verify(h.events, never()).callEvent(any());
+            assertTrue(h.plugin.isLiveGrave(h.grave)); assertFalse(h.grave.isLimitPayoutPending());
+            assertFalse(h.grave.getGravesConfig().isDestroyed()); assertEquals(17, h.grave.getGravesConfig().getExp());
+            assertNull(h.ledger.status(h.identity())); assertTrue(h.claimDisk.values.isEmpty());
+        }
+    }
+    @Test void legacyGroundDropWorksWithoutRecoveryInfrastructureAndCanBeUsedOnAHistoricalRecord() throws Exception {
+        try (Harness h = new Harness()) {
+            groundWorld(h); h.grave.getGravesConfig().setDestroyed(true);
+            when(h.plugin.getGraveClaimLedger()).thenReturn(null); when(h.plugin.getMarkerCleanup()).thenReturn(null);
+            h.grave.dropItemsOnGround(null); h.regionWork.remove().run();
+            verify(h.world).dropItem(any(Location.class), same(h.cloned));
+            verify(h.world, never()).spawn(any(Location.class), eq(ExperienceOrb.class));
+            verify(h.plugin, never()).removeGrave(any()); assertEquals(1, h.grave.getGravesConfig().getItems().size());
+        }
+    }
+
     static ExperienceOrb groundWorld(Harness h) {
         when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
         org.bukkit.block.Block marker = mock(org.bukkit.block.Block.class);
@@ -630,7 +658,7 @@ class GraveActionsTest {
         try (Harness h = new Harness()) {
             limitRestoration(h);
             ExperienceOrb orb = groundWorld(h); h.grant(TrustedGraveAccess.Kind.RECOVER);
-            h.grave.dropItemsOnGround(h.owner); h.grave.claim(h.helper); h.grave.claim(h.owner); h.grave.dropItemsOnGround(h.owner);
+            h.grave.dropAndRemoveForLimit(h.owner); h.grave.claim(h.helper); h.grave.claim(h.owner); h.grave.dropAndRemoveForLimit(h.owner);
             h.drain(); verify(h.world, never()).dropItem(any(), any());
             drainGround(h);
             verify(h.world, times(1)).dropItem(h.grave.getGravesConfig().getLocation(), h.cloned); verify(orb).setExperience(17);
@@ -638,13 +666,13 @@ class GraveActionsTest {
             assertEquals(Material.AIR, h.world.getBlockAt(h.grave.getGravesConfig().getLocation()).getType());
             assertTrue(h.world.getBlockAt(h.grave.getGravesConfig().getLocation()).getMetadata("Grave").isEmpty());
             assertTrue(h.grave.getGravesConfig().isDestroyed()); assertTrue(h.ledger.status(h.identity()).startsWith("PAID:"));
-            h.grave.dropItemsOnGround(h.owner); h.grave.claim(h.helper); h.drain(); verify(h.world, times(1)).dropItem(any(), any());
+            h.grave.dropAndRemoveForLimit(h.owner); h.grave.claim(h.helper); h.drain(); verify(h.world, times(1)).dropItem(any(), any());
         }
     }
     @Test void failedLimitReservationLeavesGraveContentsAndWorldUntouched() throws Exception {
         try (Harness h = new Harness()) {
             limitRestoration(h);
-            h.claimDisk.fail = true; h.grave.dropItemsOnGround(h.owner); h.drain();
+            h.claimDisk.fail = true; h.grave.dropAndRemoveForLimit(h.owner); h.drain();
             assertTrue(h.regionWork.isEmpty()); verify(h.world, never()).dropItem(any(), any()); verify(h.world, never()).spawn(any(Location.class), eq(ExperienceOrb.class));
             verify(h.plugin, never()).removeGrave(any()); assertFalse(h.grave.getGravesConfig().isDestroyed());
         }
@@ -657,7 +685,7 @@ class GraveActionsTest {
                     if (mode == 0) event.setCancelled(true); else when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(false);
                 } return null;
             }).when(h.events).callEvent(any()); }
-            h.grave.dropItemsOnGround(h.owner); h.drain(); drainGround(h);
+            h.grave.dropAndRemoveForLimit(h.owner); h.drain(); drainGround(h);
             assertEquals(mode != 0, h.ledger.isBlocked(h.identity()));
             if (mode != 0) assertTrue(h.ledger.status(h.identity()).startsWith("QUEUED_LIMIT:"));
             assertFalse(h.grave.getGravesConfig().isDestroyed());
@@ -668,9 +696,9 @@ class GraveActionsTest {
         try (Harness h = new Harness()) {
             limitRestoration(h);
             groundWorld(h); when(h.world.spawn(any(Location.class), eq(ExperienceOrb.class))).thenThrow(new IllegalStateException("spawn failed"));
-            h.grant(TrustedGraveAccess.Kind.RECOVER); h.grave.dropItemsOnGround(h.owner); h.drain(); drainGround(h);
+            h.grant(TrustedGraveAccess.Kind.RECOVER); h.grave.dropAndRemoveForLimit(h.owner); h.drain(); drainGround(h);
             assertTrue(h.ledger.status(h.identity()).startsWith("RESERVED:")); assertFalse(h.grave.getGravesConfig().isDestroyed());
-            h.grave.claim(h.helper); h.grave.dropItemsOnGround(h.owner); h.drain(); verify(h.world, times(1)).dropItem(any(), any()); verify(h.helper, never()).giveExp(anyInt());
+            h.grave.claim(h.helper); h.grave.dropAndRemoveForLimit(h.owner); h.drain(); verify(h.world, times(1)).dropItem(any(), any()); verify(h.helper, never()).giveExp(anyInt());
             var restart = new GraveClaimLedger(new DurableFeatureState(h.io, h.claimDisk, 8192)); FeaturePersistenceTest.await(restart.loaded()); assertTrue(restart.isBlocked(h.identity()));
         }
     }
@@ -680,10 +708,10 @@ class GraveActionsTest {
             ExperienceOrb orb = groundWorld(h); when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(false);
             var restoration = limitRestoration(h);
             when(h.plugin.getOldestGrave(any())).thenCallRealMethod();
-            h.grave.dropItemsOnGround(h.owner); drainGround(h);
+            h.grave.dropAndRemoveForLimit(h.owner); drainGround(h);
             assertTrue(h.grave.isLimitPayoutPending()); assertNull(h.plugin.getOldestGrave(h.owner.getUniqueId()));
             assertTrue(h.ledger.status(h.identity()).startsWith("QUEUED_LIMIT:")); verify(h.world, never()).dropItem(any(), any());
-            h.grave.dropItemsOnGround(h.owner); h.grave.claim(h.owner); drainGround(h);
+            h.grave.dropAndRemoveForLimit(h.owner); h.grave.claim(h.owner); drainGround(h);
             when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
             restoration.onChunk(h.world.getUID(), 0, 0); drainGround(h);
             verify(h.world, times(1)).dropItem(any(), eq(h.cloned)); verify(orb).setExperience(17);
@@ -694,7 +722,7 @@ class GraveActionsTest {
     }
     @Test void queuedLimitStateSurvivesRestartAndCannotBecomeAReplayableReservation() throws Exception {
         try (Harness h = new Harness()) {
-            var restoration = limitRestoration(h); h.grave.dropItemsOnGround(h.owner); drainGround(h); restoration.retire();
+            var restoration = limitRestoration(h); h.grave.dropAndRemoveForLimit(h.owner); drainGround(h); restoration.retire();
             var restartedLedger = new GraveClaimLedger(new DurableFeatureState(h.io, h.claimDisk, 8192));
             assertTrue(FeaturePersistenceTest.await(restartedLedger.loaded()));
             assertEquals(GraveClaimLedger.Restoration.QUEUED_LIMIT, FeaturePersistenceTest.await(restartedLedger.restoration(h.identity())));
@@ -716,7 +744,7 @@ class GraveActionsTest {
 
     @Test void manualRemovalCancelsOnlyUnstartedLimitPayout() throws Exception {
         try (Harness h = new Harness()) {
-            var restoration = limitRestoration(h); h.grave.dropItemsOnGround(h.owner); drainGround(h);
+            var restoration = limitRestoration(h); h.grave.dropAndRemoveForLimit(h.owner); drainGround(h);
             assertTrue(h.grave.isLimitPayoutPending());
             h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE); drainGround(h);
             assertTrue(h.grave.isRemove()); assertFalse(h.grave.isLimitPayoutPending());

@@ -554,7 +554,7 @@ public class CommandLoader {
 			Grave oldest = plugin.getOldestGrave(uuid);
 			if (oldest != null) {
 				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-					oldest.dropItemsOnGround(null);
+					oldest.dropAndRemoveForLimit(null);
 				} else oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
 			}
 		}

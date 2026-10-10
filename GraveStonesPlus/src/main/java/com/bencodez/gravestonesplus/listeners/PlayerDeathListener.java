@@ -82,7 +82,7 @@ public class PlayerDeathListener implements Listener {
 			Grave oldest = plugin.getOldestGrave(entity.getUniqueId());
 			if (oldest != null) {
 				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-					oldest.dropItemsOnGround(entity);
+					oldest.dropAndRemoveForLimit(entity);
 				} else {
                     oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
                     entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));

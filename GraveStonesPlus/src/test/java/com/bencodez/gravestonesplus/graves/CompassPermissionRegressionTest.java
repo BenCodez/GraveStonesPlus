@@ -5,7 +5,6 @@ import static org.mockito.Mockito.*;
 
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.TimeUnit;
 import com.bencodez.advancedcore.AdvancedCoreConfigOptions;
 import com.bencodez.advancedcore.api.command.CommandHandler;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
@@ -116,7 +115,7 @@ class CompassPermissionRegressionTest {
             when(h.config.isGiveCompassOnRespawn()).thenReturn(true); when(h.plugin.getLatestGrave(h.owner)).thenReturn(h.grave);
             when(h.owner.hasPermission("GraveStonesPlus.Compass")).thenReturn(true);
             Queue<Runnable> delayed = new ConcurrentLinkedQueue<>();
-            when(h.platform.runLater(any(Runnable.class), eq(5L), eq(TimeUnit.SECONDS))).thenAnswer(call -> {
+            when(h.platform.runLater(any(Runnable.class), eq(5L))).thenAnswer(call -> {
                 delayed.add(call.getArgument(0)); return mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
             });
             PlayerRespawnEvent event = mock(PlayerRespawnEvent.class); when(event.getPlayer()).thenReturn(h.owner);

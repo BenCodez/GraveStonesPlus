@@ -70,7 +70,7 @@ class RespawnSchedulingRegressionTest {
             var scheduler = new BundledScheduler(h, paper);
             when(h.ownerInventory.addItem(any(ItemStack[].class))).thenReturn(new HashMap<>());
             assertDoesNotThrow(() -> respawn(h, h.owner));
-            verify(scheduler.nativeScheduler).runTaskLater(eq(h.plugin), any(Runnable.class), eq(100L));
+            verify(scheduler.nativeScheduler).runTaskLater(eq(h.plugin), any(Runnable.class), eq(5L));
             assertEquals(1, scheduler.delayed.size()); assertTrue(items.constructed().isEmpty()); assertTrue(h.entityWork.isEmpty());
             scheduler.delayed.remove().run(); assertTrue(items.constructed().isEmpty()); assertEquals(1, h.entityWork.size());
             h.drain(); assertEquals(1, items.constructed().size()); verify(h.ownerInventory).addItem(items.constructed().getFirst());
@@ -100,7 +100,7 @@ class RespawnSchedulingRegressionTest {
         try (var h = new GraveActionsTest.Harness(); var items = compasses()) {
             when(h.folia.isFolia()).thenReturn(true);
             List<Runnable> delayed = new ArrayList<>(), retired = new ArrayList<>();
-            when(h.platform.runAtEntityLater(eq(h.owner), any(Runnable.class), any(Runnable.class), eq(100L))).thenAnswer(call -> {
+            when(h.platform.runAtEntityLater(eq(h.owner), any(Runnable.class), any(Runnable.class), eq(5L))).thenAnswer(call -> {
                 delayed.add(call.getArgument(1)); retired.add(call.getArgument(2)); return mock(WrappedTask.class);
             });
             respawn(h, h.owner); assertEquals(1, delayed.size()); retired.getFirst().run();
@@ -110,7 +110,7 @@ class RespawnSchedulingRegressionTest {
             respawn(h, h.owner); delayed.get(1).run(); assertEquals(1, h.entityWork.size());
             when(h.owner.hasPermission("GraveStonesPlus.Compass")).thenReturn(false); h.drain();
             assertTrue(items.constructed().isEmpty()); verify(h.ownerInventory, never()).addItem(any(ItemStack[].class));
-            doReturn(null).when(h.platform).runAtEntityLater(eq(h.owner), any(Runnable.class), any(Runnable.class), eq(100L));
+            doReturn(null).when(h.platform).runAtEntityLater(eq(h.owner), any(Runnable.class), any(Runnable.class), eq(5L));
             respawn(h, h.owner); assertTrue(h.entityWork.isEmpty()); assertEquals(2, delayed.size());
             assertTrue(items.constructed().isEmpty());
         }

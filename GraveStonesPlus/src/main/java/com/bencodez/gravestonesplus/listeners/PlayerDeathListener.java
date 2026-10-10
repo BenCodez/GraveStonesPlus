@@ -3,7 +3,6 @@ package com.bencodez.gravestonesplus.listeners;
 import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
-import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 import org.bukkit.Location;
@@ -258,11 +257,11 @@ public class PlayerDeathListener implements Listener {
 				}
             };
             var folia = plugin.getBukkitScheduler().getFoliaLib();
-            // SimpleAPI's original delay is five seconds. Its Spigot/Paper entity-delay
+            // The original respawn delay is five server ticks. Its Spigot/Paper entity-delay
             // overloads recurse, so use the synchronous delay there. Folia needs the
             // moving player's entity owner; a retired entity receives no compass.
-            if (folia.isFolia()) folia.getImpl().runAtEntityLater(player, deliverCompass, () -> {}, 100L);
-            else folia.getImpl().runLater(deliverCompass, 5L, TimeUnit.SECONDS);
+            if (folia.isFolia()) folia.getImpl().runAtEntityLater(player, deliverCompass, () -> {}, 5L);
+            else folia.getImpl().runLater(deliverCompass, 5L);
 		}
 	}
 

@@ -153,7 +153,8 @@ DropItemsOnGraveRemoval: true
 
 # Time before a grave is automatically removed
 # Supports: 10m, 1h, 12h, 1d, 7d
-# Set to '' to disable
+# Set to '' or 0 to disable; bare positive numbers are legacy minutes.
+# Invalid or overflowing replacements keep existing grave timers unchanged.
 GraveTimeLimit: ''
 
 # Time broken graves are kept before being removed

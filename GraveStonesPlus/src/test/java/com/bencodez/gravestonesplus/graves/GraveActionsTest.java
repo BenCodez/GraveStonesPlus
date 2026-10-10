@@ -309,6 +309,29 @@ class GraveActionsTest {
         }
     }
 
+    @Test void invalidExpiryReplacementRetainsTheActualScheduledTaskAndDeadline() throws Exception {
+        try (Harness h = new Harness()) {
+            var timer = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+            when(h.plugin.getTimer()).thenReturn(timer);
+            try {
+                h.grave.checkTimeLimit("1h"); long deadline = h.grave.getExpiryDeadline();
+                Field taskField = Grave.class.getDeclaredField("expirationTask"); taskField.setAccessible(true);
+                var original = (java.util.concurrent.ScheduledFuture<?>) taskField.get(h.grave);
+                assertNotNull(original);
+                for (String invalid : List.of("tomorrow", "999999999999999999999999", "9223372036854775807m")) {
+                    h.grave.checkTimeLimit(invalid);
+                    assertEquals(deadline, h.grave.getExpiryDeadline());
+                    assertSame(original, taskField.get(h.grave)); assertFalse(original.isCancelled());
+                }
+                h.grave.checkTimeLimit("2h"); assertTrue(original.isCancelled());
+                assertEquals(h.grave.getGravesConfig().getTime() + 7_200_000, h.grave.getExpiryDeadline());
+                var replacement = (java.util.concurrent.ScheduledFuture<?>) taskField.get(h.grave);
+                h.grave.checkTimeLimit(""); assertTrue(replacement.isCancelled());
+                assertEquals(0, h.grave.getExpiryDeadline());
+            } finally { timer.shutdownNow(); }
+        }
+    }
+
     @Test void loginAndPeriodicRemindersSendOneUsefulSummaryOnEntityOwner() throws Exception {
         try (Harness h = new Harness()) {
             var state = new DurableFeatureState(h.io, new FeaturePersistenceTest.Disk(), 8192);

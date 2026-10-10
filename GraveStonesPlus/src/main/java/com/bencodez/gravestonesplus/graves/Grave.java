@@ -672,27 +672,14 @@ public class Grave {
 	 *                     as {@code 30m}, {@code 2h}, or {@code 7d}
 	 */
 	public void checkTimeLimit(String timeLimitRaw) {
-		removeTimer(); expiryDeadline = 0;
-        if (timeLimitRaw == null || timeLimitRaw.trim().isEmpty()) {
-			return;
-		}
-
-		String trimmed = timeLimitRaw.trim();
-
-		try {
-			if (trimmed.matches("\\d+")) {
-				checkTimeLimit(Integer.parseInt(trimmed));
-				return;
-			}
-
-			ParsedDuration duration = ParsedDuration.parse(trimmed, TimeUnit.MINUTES);
-			checkTimeLimit(duration);
-		} catch (NumberFormatException e) {
-			plugin.debug("Invalid numeric grave time limit: " + timeLimitRaw);
-		} catch (Exception e) {
-			plugin.debug("Invalid grave time limit duration: " + timeLimitRaw);
-		}
-	}
+        final ParsedDuration replacement;
+        try { replacement = GraveTimeLimit.parse(timeLimitRaw); }
+        catch (RuntimeException invalid) {
+            plugin.debug("Invalid grave time limit; retaining the existing expiry schedule.");
+            return;
+        }
+        checkTimeLimit(replacement);
+    }
 
 	/**
 	 * Checks the configured grave time limit using a parsed duration and removes or

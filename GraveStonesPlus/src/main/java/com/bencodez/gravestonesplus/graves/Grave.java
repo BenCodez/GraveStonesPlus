@@ -797,20 +797,25 @@ public class Grave {
 			@Override
 			public void onClick(ClickEvent clickEvent) {
 				Grave grave = (Grave) getData("grave");
-				if (!canAdministerHistorical(clickEvent.getPlayer())) return;
-                if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
-                    Player actor = clickEvent.getPlayer();
-                    plugin.recreateBrokenGrave(grave, actor).whenComplete((restored, failure) ->
-                        plugin.getBukkitScheduler().runTask(plugin, () -> {
-                            if (actor.isOnline()) actor.sendMessage(Boolean.TRUE.equals(restored) && failure == null
-                                    ? MessageAPI.colorize("&cGrave readded")
-                                    : "\u00a7cThis grave could not be recreated; recovery records or unavailable storage may block it.");
-                        }, actor));
-				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
-					openGUIWithItems(clickEvent.getPlayer());
-				} else {
-                    grave.teleportHistorical(clickEvent.getWhoClicked());
-				}
+                Player actor = clickEvent.getPlayer();
+                ClickType intent = clickEvent.getClick();
+                if (actor == null) return;
+                // Native BInventory dispatch is asynchronous; only click intent crosses this hop.
+                plugin.getBukkitScheduler().runTask(plugin, () -> {
+                    if (!plugin.isEnabled() || !actor.isOnline() || !grave.canAdministerHistorical(actor)) return;
+                    if (intent == ClickType.SHIFT_RIGHT) {
+                        plugin.recreateBrokenGrave(grave, actor).whenComplete((restored, failure) ->
+                            plugin.getBukkitScheduler().runTask(plugin, () -> {
+                                if (plugin.isEnabled() && actor.isOnline()) actor.sendMessage(Boolean.TRUE.equals(restored) && failure == null
+                                        ? MessageAPI.colorize("&cGrave readded")
+                                        : "\u00a7cThis grave could not be recreated; recovery records or unavailable storage may block it.");
+                            }, actor));
+                    } else if (intent == ClickType.SHIFT_LEFT) {
+                        grave.openGUIWithItems(actor);
+                    } else {
+                        grave.teleportHistorical(actor);
+                    }
+                }, actor);
 
 			}
 		};

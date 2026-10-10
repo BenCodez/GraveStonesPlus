@@ -20,6 +20,8 @@ public class GraveStorageManager {
     private Recovery retained;
     private boolean recovering;
     private boolean restorationLoading;
+    private boolean closeRequested;
+    private boolean backendClosed;
     public synchronized void beginRestoration() { restorationLoading = true; }
     private final java.util.Map<String, GravesConfig> restoringActive = new java.util.LinkedHashMap<>();
     private final java.util.Map<String, GravesConfig> restoringBroken = new java.util.LinkedHashMap<>();
@@ -229,9 +231,13 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 	 * Close backend.
 	 */
 	public synchronized void close() {
-		if (backend != null) {
-			enqueue(() -> backend.close());
-		}
+		if (backend == null || backendClosed || closeRequested) return;
+		// Closing is a terminal request, rather than an ordinary write admission.
+		// FeatureIO invokes the drain listener after all admitted work has run,
+		// including its final bounded shutdown drain when the queue is saturated.
+		closeRequested = true;
+		com.bencodez.gravestonesplus.graves.FeatureIO.Admission wake = plugin.getFeatureIO().admit();
+		if (wake != null) wake.submit(() -> null);
 	}
     private static List<Grave> copy(List<Grave> graves) { synchronized (graves) { return new ArrayList<>(graves); } }
     public static GravesConfig snapshot(GravesConfig grave) {
@@ -245,10 +251,13 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
     /** Retain one latest authoritative snapshot when admission fails, rather than
      * discarding a death/removal transition. Capture and admission share this lock. */
     private synchronized void enqueue(Runnable write) {
+        if (closeRequested || backendClosed) return;
         if (retained != null || recovering) { retained = recoverySnapshot(); return; }
         com.bencodez.gravestonesplus.graves.FeatureIO.Admission admitted = plugin.getFeatureIO().admit();
         if (admitted == null) { retained = recoverySnapshot(); return; }
+        var started = new java.util.concurrent.atomic.AtomicBoolean();
         admitted.submit(() -> {
+            started.set(true);
             try { write.run(); return true; }
             catch (RuntimeException failure) {
                 synchronized (this) { if (retained == null) retained = recoverySnapshot(); }
@@ -256,8 +265,10 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
             }
         }).whenComplete((saved, failure) -> {
             if (failure != null) {
-                synchronized (this) { if (retained == null) retained = recoverySnapshot(); }
-                plugin.getLogger().severe("Grave backend write failed; latest grave snapshot is retained for storage recovery.");
+                // Action failure already retained before FeatureIO's owner drain. Only
+                // rejected execution needs a new snapshot; do not resurrect recovered work.
+                if (!started.get()) synchronized (this) { if (!backendClosed && retained == null) retained = recoverySnapshot(); }
+                plugin.getLogger().severe("Grave backend write failed; storage recovery was required.");
             }
         });
     }
@@ -271,12 +282,24 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
     private void flushRetained() {
         while (true) {
             Recovery recovery;
+            boolean loading;
             synchronized (this) {
-                if (restorationLoading) return;
-                recovery = retained; retained = null; recovering = recovery != null;
+                if (backendClosed) return;
+                loading = restorationLoading;
+                recovery = loading ? null : retained;
+                if (!loading) retained = null;
+                recovering = recovery != null;
                 if (recovery != null) recovery = new Recovery(preserving(recovery.active(), false), preserving(recovery.broken(), true));
             }
-            if (recovery == null) return;
+            if (loading) {
+                // Shutdown during restoration must not publish an incomplete grave index.
+                closeBackendIfRequested(true);
+                return;
+            }
+            if (recovery == null) {
+                closeBackendIfRequested();
+                return;
+            }
             boolean failed = false;
             try {
                 if (isMySQL()) {
@@ -291,7 +314,30 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                 plugin.getLogger().severe("Retained grave backend snapshot could not be flushed; storage requires repair before shutdown.");
             } finally { synchronized (this) { recovering = false; } }
             // No busy retry on broken storage, and give queued feature commands priority.
-            if (failed || plugin.getFeatureIO().hasQueuedWork()) return;
+            if (failed || plugin.getFeatureIO().hasQueuedWork()) {
+                if (failed) closeBackendIfRequested(true);
+                return;
+            }
+        }
+    }
+
+    /** Called only by the FeatureIO serial owner after accepted work drains. */
+    private void closeBackendIfRequested() { closeBackendIfRequested(false); }
+
+    private void closeBackendIfRequested(boolean recoveryFailed) {
+        GraveStorageBackend toClose;
+        synchronized (this) {
+            if (!closeRequested || backendClosed || (!recoveryFailed && retained != null) || recovering
+                    || plugin.getFeatureIO().hasQueuedWork()) return;
+            backendClosed = true;
+            toClose = backend;
+        }
+        try {
+            if (toClose != null) toClose.close();
+        } catch (RuntimeException failure) {
+            // The terminal close is intentionally at-most-once. The worker's
+            // bounded shutdown must not keep retrying a backend that rejected it.
+            plugin.getLogger().severe("Grave backend close failed after storage drain.");
         }
     }
 }

@@ -160,6 +160,9 @@ public final class GraveRestoration {
                     }
                     if (grave.isRemove() || record.isDestroyed()) { resolved(key, record); return; }
                     boolean loaded = loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
+                    // Material alone cannot prove ownership: a newer grave may occupy this position.
+                    // Keep the old record pending without publishing it or changing the successor.
+                    if (loaded && GraveMarkerCleanup.hasConflictingIdentity(plugin, loc.getBlock(), GraveIdentity.of(record))) return;
                     if (decision == GraveClaimLedger.Restoration.QUEUED_LIMIT) {
                         grave.markLimitPayoutPending();
                         synchronized (this) {

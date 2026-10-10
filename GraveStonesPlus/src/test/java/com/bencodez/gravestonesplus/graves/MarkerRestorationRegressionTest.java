@@ -647,6 +647,28 @@ class MarkerRestorationRegressionTest {
             restoration.onChunk(h.world.getUID(), 0, 0); FeaturePersistenceTest.await(h.io.barrier()); assertTrue(h.regionWork.isEmpty()); restoration.retire();
         }
     }
+    @ParameterizedTest @ValueSource(strings = {"AVAILABLE", "QUEUED_LIMIT"})
+    void restorationNeverAdoptsATaggedSuccessorEvenWhenItsMaterialMatches(String decision) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h);
+            GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity() + "-successor");
+            var chunkTags = new HashMap<>(marker.values); var tileTags = new HashMap<>(marker.tileValues);
+            clearInvocations(marker.block, marker.chunkData, marker.tileData);
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.valueOf(decision));
+            var restoration = restoration(h, h.grave.getGravesConfig(), ready, ready);
+            GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier());
+            h.regionWork.remove().run();
+            assertTrue(h.active.isEmpty()); assertTrue(restoration.hasPending(h.identity()));
+            assertFalse(restoration.protectsPendingMarker(marker.block));
+            verify(h.plugin, never()).restoreActiveRecord(any()); verify(h.plugin, never()).restoreBrokenRecord(any());
+            verify(marker.block, never()).setMetadata(anyString(), any()); verify(marker.block, never()).setType(any());
+            assertEquals(chunkTags, marker.values); assertEquals(tileTags, marker.tileValues);
+            restoration.onChunk(h.world.getUID(), 0, 0); h.regionWork.remove().run();
+            assertTrue(h.active.isEmpty()); assertTrue(restoration.hasPending(h.identity()));
+            assertEquals(chunkTags, marker.values); assertEquals(tileTags, marker.tileValues);
+            restoration.retire();
+        }
+    }
     @Test void initiallyLoadedInvalidMarkerIsNeverPublishedAsAnActiveRecord() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             h.active.clear(); var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.STONE);

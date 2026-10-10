@@ -587,6 +587,9 @@ class GraveActionsTest {
     static ExperienceOrb groundWorld(Harness h) {
         when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
         org.bukkit.block.Block marker = mock(org.bukkit.block.Block.class);
+        var markerChunk = mock(org.bukkit.Chunk.class);
+        when(marker.getChunk()).thenReturn(markerChunk);
+        when(markerChunk.getPersistentDataContainer()).thenReturn(mock(org.bukkit.persistence.PersistentDataContainer.class));
         var material = new java.util.concurrent.atomic.AtomicReference<>(Material.PLAYER_HEAD);
         when(marker.getType()).thenAnswer(call -> material.get());
         doAnswer(call -> { material.set(call.getArgument(0)); return null; }).when(marker).setType(any(Material.class));

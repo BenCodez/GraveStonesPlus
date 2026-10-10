@@ -25,6 +25,24 @@ public class GravesConfig implements ConfigurationSerializable {
 	@Getter
 	private HashMap<Integer, ItemStack> items;
 
+    // Set only on detached owner-prepared storage snapshots. Never serialized as a new field.
+    private transient String preparedItems;
+    private transient RuntimeException preparationFailure;
+
+    void prepareItemsForStorage() {
+        try { preparedItems = InventorySerializer.encode(items); }
+        catch (IOException failure) { preparationFailure = new java.io.UncheckedIOException("Could not prepare grave items", failure); }
+        catch (RuntimeException failure) { preparationFailure = failure; }
+    }
+
+    String encodedItemsForStorage() {
+        if (preparationFailure != null) throw preparationFailure;
+        if (preparedItems != null) return preparedItems;
+        // Compatibility for direct owner-context users of the legacy backend API.
+        try { return InventorySerializer.encode(items); }
+        catch (IOException failure) { throw new java.io.UncheckedIOException("Could not encode grave items", failure); }
+    }
+
 	@Getter
 	private int exp;
 
@@ -108,6 +126,7 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@Override
 	public Map<String, Object> serialize() {
+        if (preparationFailure != null) throw preparationFailure;
 		Map<String, Object> serialized = new HashMap<String, Object>();
 
 		serialized.put("DeathMessage", deathMessage);
@@ -135,7 +154,7 @@ public class GravesConfig implements ConfigurationSerializable {
 
 		// New primary format
 		try {
-			serialized.put("ItemsEncoded", InventorySerializer.encode(items));
+			serialized.put("ItemsEncoded", preparedItems != null ? preparedItems : InventorySerializer.encode(items));
 		} catch (IOException e) {
 			// Fallback: if encoding fails, write legacy format so data is not lost
 			serialized.put("Items", items);

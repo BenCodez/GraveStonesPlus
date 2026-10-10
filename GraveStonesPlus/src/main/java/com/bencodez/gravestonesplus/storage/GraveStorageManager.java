@@ -18,6 +18,7 @@ public class GraveStorageManager {
 	private DataStorageType type = DataStorageType.FLATFILE;
     private record Recovery(List<GravesConfig> active, List<GravesConfig> broken) { }
     private Recovery retained;
+    private Recovery latestPrepared;
     private boolean recovering;
     private boolean restorationLoading;
     private boolean closeRequested;
@@ -277,28 +278,29 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         GravesConfig copy = new GravesConfig(grave.getUuid(), grave.getPlayerName(), grave.getLocation().clone(), items,
                 grave.getExp(), grave.getDeathMessage(), grave.getTime(), grave.isDestroyed(), grave.getDestroyedTime(),
                 grave.getDisplayUUID(), grave.getInteractUUID(), grave.getGraveDisplayType());
-        copy.setWorldId(grave.getWorldId()); return copy;
+        copy.setWorldId(grave.getWorldId()); copy.prepareItemsForStorage(); return copy;
     }
     /** Retain one latest authoritative snapshot when admission fails, rather than
      * discarding a death/removal transition. Capture and admission share this lock. */
     private synchronized void enqueue(Runnable write) {
         if (closeRequested || backendClosed) return;
         if (retained != null || recovering) { retained = recoverySnapshot(); return; }
+        latestPrepared = recoverySnapshot();
         com.bencodez.gravestonesplus.graves.FeatureIO.Admission admitted = plugin.getFeatureIO().admit();
-        if (admitted == null) { retained = recoverySnapshot(); return; }
+        if (admitted == null) { retained = latestPrepared; return; }
         var started = new java.util.concurrent.atomic.AtomicBoolean();
         admitted.submit(() -> {
             started.set(true);
             try { write.run(); return true; }
             catch (RuntimeException failure) {
-                synchronized (this) { if (retained == null) retained = recoverySnapshot(); }
+                synchronized (this) { if (retained == null) retained = latestPrepared; }
                 throw failure;
             }
         }).whenComplete((saved, failure) -> {
             if (failure != null) {
                 // Action failure already retained before FeatureIO's owner drain. Only
-                // rejected execution needs a new snapshot; do not resurrect recovered work.
-                if (!started.get()) synchronized (this) { if (!backendClosed && retained == null) retained = recoverySnapshot(); }
+                // rejected execution retains the latest owner-prepared state; never rescan Bukkit items here.
+                if (!started.get()) synchronized (this) { if (!backendClosed && retained == null) retained = latestPrepared; }
                 plugin.getLogger().severe("Grave backend write failed; storage recovery was required.");
             }
         });
@@ -307,14 +309,15 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 	private synchronized <T> java.util.concurrent.CompletableFuture<T> enqueueFuture(java.util.function.Supplier<T> write) {
 		if (closeRequested || backendClosed) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage is closing"));
 		if (retained != null || recovering) { retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage recovery pending")); }
+		latestPrepared = recoverySnapshot();
 		var admitted = plugin.getFeatureIO().admit();
-		if (admitted == null) { retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException("feature worker unavailable")); }
+		if (admitted == null) { retained = latestPrepared; return java.util.concurrent.CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException("feature worker unavailable")); }
 		var started = new java.util.concurrent.atomic.AtomicBoolean();
 		var result = admitted.submit(() -> { started.set(true); try { return write.get(); } catch (RuntimeException failure) {
-			synchronized (this) { if (retained == null) retained = recoverySnapshot(); } throw failure;
+			synchronized (this) { if (retained == null) retained = latestPrepared; } throw failure;
 		} });
 		result.whenComplete((saved, failure) -> { if (failure != null) {
-			if (!started.get()) synchronized (this) { if (!backendClosed && retained == null) retained = recoverySnapshot(); }
+			if (!started.get()) synchronized (this) { if (!backendClosed && retained == null) retained = latestPrepared; }
 			plugin.getLogger().severe("Grave backend snapshot write failed; storage recovery was required.");
 		} });
 		return result;

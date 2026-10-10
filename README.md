@@ -89,3 +89,5 @@ uncommitted connections fail the acknowledgement. Existing YAML record keys and 
 
 Pre-upgrade compasses with only the legacy time/lodestone tags retain their target while their exact saved grave
 is awaiting restoration admission. Once that record is retired without admission, stale compass cleanup resumes.
+
+Storage snapshots prepare encoded items before I/O admission. The worker reuses that captured payload for YAML/SQL and recovery; it never re-encodes the snapshot's Bukkit items. A preparation failure fails the write acknowledgement and retains repair state in memory, rather than publishing an empty inventory. Repair/retry must prepare a new snapshot on the owner; failed storage is not durable across a crash. Later captured removal state supersedes an older failed write. Existing persisted fields and schemas are unchanged.

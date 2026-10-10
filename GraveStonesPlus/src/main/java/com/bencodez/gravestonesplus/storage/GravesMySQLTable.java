@@ -188,7 +188,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 			ps.setString(7, grave.getDisplayUUID() != null ? grave.getDisplayUUID().toString() : null);
 			ps.setString(8, grave.getInteractUUID() != null ? grave.getInteractUUID().toString() : null);
 			ps.setString(9, safeString(grave.getGraveDisplayType()));
-			ps.setString(10, encodeItemsSafe(grave.getItems()));
+			ps.setString(10, grave.encodedItemsForStorage());
 
 			ps.setString(11, grave.getUuid().toString());
 			ps.setString(12, grave.getWorldId().toString());
@@ -372,7 +372,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		ps.setString(13, g.getDisplayUUID() != null ? g.getDisplayUUID().toString() : null);
 		ps.setString(14, g.getInteractUUID() != null ? g.getInteractUUID().toString() : null);
 		ps.setString(15, safeString(g.getGraveDisplayType()));
-		ps.setString(16, encodeItemsSafe(g.getItems()));
+		ps.setString(16, g.encodedItemsForStorage());
 	}
 
 	private static String safeString(String s) {
@@ -387,14 +387,6 @@ public class GravesMySQLTable extends AbstractSqlTable {
 			return UUID.fromString(s);
 		} catch (Exception e) {
 			return null;
-		}
-	}
-
-	private static String encodeItemsSafe(HashMap<Integer, ItemStack> items) {
-		try {
-			return InventorySerializer.encode(items);
-		} catch (IOException e) {
-			return "";
 		}
 	}
 

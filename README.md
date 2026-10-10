@@ -99,3 +99,12 @@ is awaiting restoration admission. Once that record is retired without admission
 Storage snapshots prepare encoded items before I/O admission. The worker reuses that captured payload for YAML/SQL and recovery; it never re-encodes the snapshot's Bukkit items. A preparation failure fails the write acknowledgement and retains repair state in memory, rather than publishing an empty inventory. Repair/retry must prepare a new snapshot on the owner; failed storage is not durable across a crash. Later captured removal state supersedes an older failed write. Existing persisted fields and schemas are unchanged.
 
 For the default flat-file backend, startup on the server owner indexes the already-loaded record positions before protection listeners are registered; blocked claim/archive work does not delay that protection. Startup from other contexts hands preparation to the server owner, and protection begins when that handoff completes. In-memory record preparation and retries run on the server owner. MySQL continues to fetch records asynchronously: exact positions cannot be protected before the initial backend read completes. Ordinary blocks are never globally cancelled during that interval.
+
+Java helper-access overloads taking owner UUID and death timestamp resolve a unique
+location-bound grave identity from the active/historical index and canonical stored
+grants. Missing or ambiguous references return no access and do not write or revoke
+a grant. Prefer the full `GraveIdentity` overload when two graves share the same death
+timestamp. The whole-grave compatibility revocation future reports unresolved identity
+or persistence failure instead of silently acknowledging it. Shortened experimental
+owner/time grant rows cannot establish a location and are never promoted into access;
+existing command-created canonical rows continue to work across restart.

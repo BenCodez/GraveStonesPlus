@@ -11,14 +11,18 @@ public final class TrustedGraveAccessStore {
     public static final long MAX_LIFETIME = 90L * 24 * 60 * 60 * 1000;
     private final DurableFeatureState state;
     private final LongSupplier clock;
+    private final GraveStonesPlus plugin;
     private final Map<String, Long> denied = new HashMap<>();
     private final Map<String, Long> deniedGraves = new HashMap<>();
     private long operation;
     private boolean denyAll;
     public TrustedGraveAccessStore(GraveStonesPlus plugin) {
-        this(new DurableFeatureState(plugin.getFeatureIO(), new java.io.File(plugin.getDataFolder(), "selected-access.yml").toPath(), 4096), System::currentTimeMillis);
+        this(new DurableFeatureState(plugin.getFeatureIO(), new java.io.File(plugin.getDataFolder(), "selected-access.yml").toPath(), 4096), System::currentTimeMillis, plugin);
     }
-    public TrustedGraveAccessStore(DurableFeatureState state, LongSupplier clock) { this.state = state; this.clock = clock; }
+    public TrustedGraveAccessStore(DurableFeatureState state, LongSupplier clock) { this(state, clock, null); }
+    TrustedGraveAccessStore(DurableFeatureState state, LongSupplier clock, GraveStonesPlus plugin) {
+        this.state = state; this.clock = clock; this.plugin = plugin;
+    }
     public CompletableFuture<Boolean> loaded() { return state.loaded(); }
     private static String key(String grave, UUID helper, TrustedGraveAccess.Kind kind) { return grave + "/" + helper + "/" + kind; }
     public synchronized CompletableFuture<Boolean> grantAsync(String grave, UUID helper, TrustedGraveAccess.Kind kind, long expiresAt) {
@@ -77,10 +81,47 @@ public final class TrustedGraveAccessStore {
             return saved;
         });
     }
-    // Preserve the initially introduced Java signatures for callers using owner/death keys.
-    public CompletableFuture<Boolean> grantAsync(UUID owner, long time, UUID helper, TrustedGraveAccess.Kind kind, long expires) { return grantAsync(owner + "/" + time, helper, kind, expires); }
-    public CompletableFuture<Boolean> revokeAsync(UUID owner, long time, UUID helper, TrustedGraveAccess.Kind kind) { return revokeAsync(owner + "/" + time, helper, kind); }
-    public boolean allows(UUID owner, long time, UUID helper, TrustedGraveAccess.Kind kind) { return allows(owner + "/" + time, helper, kind); }
-    public List<TrustedGraveAccess> list(UUID owner, long time) { return list(owner + "/" + time); }
-    public CompletableFuture<Void> revokeForGraveAsync(UUID owner, long time) { return revokeForGraveAsync(owner + "/" + time).thenApply(saved -> null); }
+    /** Resolve an owner/death reference only when it identifies one exact stored grave. */
+    private String legacyIdentity(UUID owner, long time) {
+        if (owner == null) return null;
+        String prefix = owner + "/" + time + "/";
+        Set<String> identities = new HashSet<>();
+        if (plugin != null) {
+            for (List<Grave> records : List.of(plugin.activeGraveSnapshot(), plugin.brokenGraveSnapshot()))
+                for (Grave grave : records) {
+                    String identity = GraveIdentity.of(grave.getGravesConfig());
+                    if (identity != null && identity.startsWith(prefix)) identities.add(identity);
+                }
+        }
+        // A standalone store can resolve already-persisted canonical grants after restart.
+        // Shortened legacy rows cannot establish location ownership and are never promoted.
+        for (String key : state.snapshot().keySet()) {
+            String[] parts = key.split("/", -1);
+            if (parts.length != 8 || !key.startsWith(prefix)) continue;
+            try {
+                UUID.fromString(parts[2]); Integer.parseInt(parts[3]); Integer.parseInt(parts[4]); Integer.parseInt(parts[5]);
+                UUID.fromString(parts[6]); TrustedGraveAccess.Kind.valueOf(parts[7]);
+                identities.add(String.join("/", Arrays.copyOf(parts, 6)));
+            } catch (IllegalArgumentException invalid) { /* A malformed row cannot establish grave ownership. */ }
+        }
+        return identities.size() == 1 ? identities.iterator().next() : null;
+    }
+    // Preserve owner/death signatures without writing keys the real authorization path cannot read.
+    public CompletableFuture<Boolean> grantAsync(UUID owner, long time, UUID helper, TrustedGraveAccess.Kind kind, long expires) {
+        return grantAsync(legacyIdentity(owner, time), helper, kind, expires);
+    }
+    public CompletableFuture<Boolean> revokeAsync(UUID owner, long time, UUID helper, TrustedGraveAccess.Kind kind) {
+        return revokeAsync(legacyIdentity(owner, time), helper, kind);
+    }
+    public boolean allows(UUID owner, long time, UUID helper, TrustedGraveAccess.Kind kind) {
+        return allows(legacyIdentity(owner, time), helper, kind);
+    }
+    public List<TrustedGraveAccess> list(UUID owner, long time) { return list(legacyIdentity(owner, time)); }
+    public CompletableFuture<Void> revokeForGraveAsync(UUID owner, long time) {
+        String identity = legacyIdentity(owner, time);
+        if (identity == null) return CompletableFuture.failedFuture(new IllegalArgumentException("Grave reference is missing or ambiguous"));
+        return revokeForGraveAsync(identity).thenCompose(saved -> Boolean.TRUE.equals(saved)
+                ? CompletableFuture.completedFuture(null)
+                : CompletableFuture.failedFuture(new IllegalStateException("Grave access revocation was not persisted")));
+    }
 }

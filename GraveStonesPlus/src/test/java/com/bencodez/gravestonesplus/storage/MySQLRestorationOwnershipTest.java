@@ -8,12 +8,35 @@ import java.util.concurrent.*;
 import org.bukkit.*;
 import org.bukkit.inventory.ItemStack;
 import org.junit.jupiter.api.Test;
+import org.bukkit.configuration.file.YamlConfiguration;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
+import com.bencodez.gravestonesplus.config.Config;
 import com.bencodez.gravestonesplus.graves.FeatureIO;
 import com.bencodez.simpleapi.scheduler.BukkitScheduler;
 import com.bencodez.simpleapi.sql.mysql.*;
 
 class MySQLRestorationOwnershipTest {
+    @Test void missingDatabaseFallsBackToFlatFileForAllLaterOperations() throws Exception {
+        var active = mock(GravesConfig.class); var broken = mock(GravesConfig.class);
+        try (var io = new FeatureIO(); var files = mockConstruction(GraveLocations.class, (file, context) -> {
+            when(file.loadGraves()).thenReturn(List.of(active));
+            when(file.loadBrokenGraves()).thenReturn(List.of(broken));
+        })) {
+            var plugin = mock(GraveStonesPlus.class);
+            var config = mock(Config.class);
+            var data = new YamlConfiguration(); data.set("DataStorage", "MYSQL");
+            when(plugin.getFeatureIO()).thenReturn(io); when(plugin.getConfigFile()).thenReturn(config);
+            when(config.getData()).thenReturn(data); when(plugin.getDataFolder()).thenReturn(new java.io.File("target/storage-init-regression"));
+            when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
+            var manager = new GraveStorageManager(plugin);
+            manager.init();
+            assertFalse(manager.isMySQL());
+            assertEquals(List.of(active), manager.loadGraves());
+            assertEquals(List.of(broken), manager.loadBrokenGraves());
+            verify(files.constructed().getFirst()).reloadData();
+            assertTrue(manager.loadMySQLForRestoration().isCompletedExceptionally());
+        }
+    }
     private static void field(Object target, Class<?> type, String name, Object value) throws Exception {
         var field = type.getDeclaredField(name); field.setAccessible(true); field.set(target, value);
     }

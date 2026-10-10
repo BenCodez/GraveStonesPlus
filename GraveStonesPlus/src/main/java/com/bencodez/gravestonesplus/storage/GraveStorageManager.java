@@ -67,6 +67,7 @@ public class GraveStorageManager {
 			ConfigurationSection dbSection = plugin.getConfigFile().getData().getConfigurationSection("Database");
 			if (dbSection == null) {
 				plugin.getLogger().severe("Database section missing, falling back to FLATFILE");
+				type = DataStorageType.FLATFILE;
 				backend = new FlatFileGraveStorageBackend(new GraveLocations(plugin));
 			} else {
 				String tableName = "gravestones_graves";

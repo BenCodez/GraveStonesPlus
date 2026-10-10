@@ -40,6 +40,16 @@ public interface GraveStorageBackend {
 	 */
 	void saveBrokenGraves(List<GravesConfig> graves);
 
+	default void saveSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+		saveBrokenGraves(broken);
+		saveGraves(active);
+	}
+
+    /** Strict existing-row recreation acknowledgement; unsupported backends fail closed. */
+    default void saveRecreatedGrave(GravesConfig grave) {
+        throw new UnsupportedOperationException("Backend cannot acknowledge recreation");
+    }
+
 	/**
 	 * Insert or update a single grave (incremental write). Default implementation
 	 * is no-op (used only by MySQL backend).

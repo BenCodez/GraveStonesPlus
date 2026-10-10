@@ -26,6 +26,7 @@ class MySQLRestorationOwnershipTest {
         final Connection connection = mock(Connection.class);
         final PreparedStatement statement = mock(PreparedStatement.class);
         final ResultSet rows = mock(ResultSet.class);
+        final MySQLGraveStorageBackend backend = mock(MySQLGraveStorageBackend.class);
         final GraveStorageManager storage;
         final UUID player = UUID.randomUUID(), world = UUID.randomUUID();
         Fixture() throws Exception {
@@ -44,7 +45,6 @@ class MySQLRestorationOwnershipTest {
             field(table, AbstractSqlTable.class, "tableName", "graves");
             field(table, AbstractSqlTable.class, "dbType", DbType.MYSQL);
             doCallRealMethod().when(table).loadDeferred(anyBoolean());
-            var backend = mock(MySQLGraveStorageBackend.class);
             field(backend, MySQLGraveStorageBackend.class, "table", table);
             doCallRealMethod().when(backend).loadDeferred(anyBoolean());
             storage = new GraveStorageManager(plugin);
@@ -58,6 +58,72 @@ class MySQLRestorationOwnershipTest {
         }
         public void close() { io.close(); }
     }
+    private static GravesConfig recreated(Fixture h) {
+        GravesConfig grave = mock(GravesConfig.class);
+        when(grave.getUuid()).thenReturn(h.player);
+        when(grave.getWorldId()).thenReturn(h.world);
+        when(grave.getLocation()).thenReturn(new Location(null, 11, 64, -9));
+        when(grave.getItems()).thenReturn(new HashMap<>());
+        when(grave.getTime()).thenReturn(42L);
+        when(grave.getExp()).thenReturn(17);
+        when(grave.getGraveDisplayType()).thenReturn("PLAYER_HEAD");
+        return grave;
+    }
+    private static void recreation(Fixture h) throws Exception {
+        when(h.plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
+        when(h.plugin.activeGraveSnapshot()).thenReturn(List.of());
+        when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());
+        field(h.storage, GraveStorageManager.class, "type", DataStorageType.MYSQL);
+        doCallRealMethod().when(h.table).saveRecreatedGrave(any());
+        doCallRealMethod().when(h.backend).saveRecreatedGrave(any());
+        when(h.connection.getAutoCommit()).thenReturn(true);
+    }
+    @Test void recreationWaitsForTheExactExistingRowWriteAndPreservesContents() throws Exception {
+        try (var h = new Fixture()) {
+            recreation(h);
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
+            when(h.statement.executeUpdate()).thenAnswer(call -> {
+                entered.countDown(); assertTrue(release.await(3, TimeUnit.SECONDS)); return 1;
+            });
+            var result = h.storage.saveRecreatedGrave(recreated(h));
+            try {
+                assertTrue(entered.await(3, TimeUnit.SECONDS)); assertFalse(result.isDone());
+            } finally { release.countDown(); }
+            assertTrue(result.get(3, TimeUnit.SECONDS));
+            verify(h.statement).setInt(1, 0); verify(h.statement).setInt(2, 0);
+            verify(h.statement).setString(7, h.player.toString());
+            verify(h.statement).setString(8, h.world.toString());
+            verify(h.statement).setLong(12, 42L);
+            var sql = org.mockito.ArgumentCaptor.forClass(String.class);
+            verify(h.connection).prepareStatement(sql.capture());
+            assertFalse(sql.getValue().contains("items_encoded"));
+            assertFalse(sql.getValue().contains("`exp`"));
+            verify(h.statement).close(); verify(h.connection).close();
+        }
+    }
+    @Test void recreationDoesNotAcknowledgeMissingOrMultipleRows() throws Exception {
+        for (int rows : List.of(0, 2)) try (var h = new Fixture()) {
+            recreation(h); when(h.statement.executeUpdate()).thenReturn(rows);
+            assertThrows(ExecutionException.class, () -> h.storage.saveRecreatedGrave(recreated(h)).get(3, TimeUnit.SECONDS));
+            verify(h.statement).close(); verify(h.connection).close();
+        }
+    }
+    @Test void recreationSurfacesSqlFailureAndClosesResources() throws Exception {
+        try (var h = new Fixture()) {
+            recreation(h); when(h.statement.executeUpdate()).thenThrow(new SQLException("fixture write failed"));
+            assertThrows(ExecutionException.class, () -> h.storage.saveRecreatedGrave(recreated(h)).get(3, TimeUnit.SECONDS));
+            verify(h.statement).close(); verify(h.connection).close();
+        }
+    }
+    @Test void recreationCannotAcknowledgeAnUncommittedBorrowedTransaction() throws Exception {
+        try (var h = new Fixture()) {
+            recreation(h); when(h.connection.getAutoCommit()).thenReturn(false);
+            assertThrows(ExecutionException.class, () -> h.storage.saveRecreatedGrave(recreated(h)).get(3, TimeUnit.SECONDS));
+            verify(h.statement, never()).executeUpdate();
+            verify(h.statement).close(); verify(h.connection).close();
+        }
+    }
+
     @Test void actualJdbcReadDefersWorldAndItemsUntilServerOwnerThenRetainsIdentity() throws Exception {
         try (var h = new Fixture(); var bukkit = mockStatic(Bukkit.class); var inventory = mockStatic(InventorySerializer.class)) {
             Thread owner = Thread.currentThread(); World world = mock(World.class); when(world.getUID()).thenReturn(h.world);

@@ -204,6 +204,37 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		}
 	}
 
+    /** Restore existing metadata with one checked statement; contents/XP are unchanged. */
+    public void saveRecreatedGrave(GravesConfig grave) {
+        if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null)
+            throw new IllegalArgumentException("Recreation requires an existing grave identity");
+        String sql = "UPDATE " + qi(tableName) + " SET " + qi("broken") + "=?, "
+                + qi("destroyed") + "=?, " + qi("destroyed_time") + "=?, "
+                + qi("display_uuid") + "=?, " + qi("interact_uuid") + "=?, "
+                + qi("grave_display_type") + "=? WHERE " + qi("player_uuid") + "=? AND "
+                + qi("world_uuid") + "=? AND " + qi("x") + "=? AND " + qi("y") + "=? AND "
+                + qi("z") + "=? AND " + qi("time") + "=?;";
+        try (Connection connection = mysql.getConnectionManager().getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
+            if (!connection.getAutoCommit()) throw new SQLException("Recreation requires an auto-commit connection");
+            statement.setInt(1, 0);
+            statement.setInt(2, grave.isDestroyed() ? 1 : 0);
+            statement.setLong(3, grave.getDestroyedTime());
+            statement.setString(4, grave.getDisplayUUID() == null ? null : grave.getDisplayUUID().toString());
+            statement.setString(5, grave.getInteractUUID() == null ? null : grave.getInteractUUID().toString());
+            statement.setString(6, safeString(grave.getGraveDisplayType()));
+            statement.setString(7, grave.getUuid().toString());
+            statement.setString(8, grave.getWorldId().toString());
+            statement.setInt(9, grave.getLocation().getBlockX());
+            statement.setInt(10, grave.getLocation().getBlockY());
+            statement.setInt(11, grave.getLocation().getBlockZ());
+            statement.setLong(12, grave.getTime());
+            if (statement.executeUpdate() != 1) throw new SQLException("Existing grave row was not acknowledged");
+        } catch (SQLException failure) {
+            throw new IllegalStateException("Failed to persist recreated grave", failure);
+        }
+    }
+
 	/**
 	 * Update only the broken flag for a grave (incremental write).
 	 *

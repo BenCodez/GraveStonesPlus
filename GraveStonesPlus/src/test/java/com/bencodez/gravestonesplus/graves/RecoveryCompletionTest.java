@@ -300,6 +300,7 @@ class RecoveryCompletionTest {
             GraveActionsTest.field(h.plugin, "brokenGraves", Collections.synchronizedList(new ArrayList<>(List.of(h.grave))));
             h.active.clear(); h.grave.getGravesConfig().setDestroyed(true);
             doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any());
+            doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any(), anyBoolean());
             when(h.helper.hasPermission("GraveStonesPlus.Admin")).thenReturn(true);
 
             assertFalse(FeaturePersistenceTest.await(h.plugin.recreateBrokenGrave(h.grave, h.helper)));

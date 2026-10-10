@@ -1044,7 +1044,13 @@ public class Grave {
 	}
 
 	public void markRecreated() { removeTimer(); expiryDeadline = 0; remove = false; }
-    public void createBrokenGrave() { recreateAsync(null, true); }
+    /**
+     * Legacy fire-and-forget entry point. Route it through the plugin wrapper so
+     * the same list and storage transition used by administrative recovery is
+     * applied after the marker has been recreated. The historical API
+     * intentionally creates a marker.
+     */
+    public void createBrokenGrave() { plugin.recreateBrokenGrave(this, null, true); }
     /** Check durable history before any marker, destroyed-state or active-list mutation. */
     public java.util.concurrent.CompletableFuture<Boolean> recreateAsync(Player actor, boolean createMarker) {
         final String identity = GraveIdentity.of(gravesConfig);

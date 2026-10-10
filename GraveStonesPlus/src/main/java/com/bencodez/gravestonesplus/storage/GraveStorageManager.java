@@ -227,6 +227,37 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		}
 	}
 
+    /** Acknowledge this exact existing SQL row without rewriting or serializing its contents. */
+    public synchronized java.util.concurrent.CompletableFuture<Boolean> saveRecreatedGrave(GravesConfig grave) {
+        if (backend == null || !isMySQL()) return java.util.concurrent.CompletableFuture.failedFuture(
+                new IllegalStateException("MySQL grave backend unavailable"));
+        GravesConfig captured = snapshot(grave);
+        return enqueueFuture(() -> { backend.saveRecreatedGrave(captured); return true; });
+    }
+
+	public synchronized java.util.concurrent.CompletableFuture<Boolean> saveSnapshotFromObjects(
+			List<Grave> activeGraves, List<Grave> brokenGraves) {
+		List<GravesConfig> active = snapshotObjects(activeGraves);
+		List<GravesConfig> broken = snapshotObjects(brokenGraves);
+		if (backend == null) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage backend unavailable"));
+		if (restorationLoading) { retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage restoration pending")); }
+		List<GravesConfig> safeActive = preserving(active, false);
+		List<GravesConfig> safeBroken = preserving(broken, true);
+		if (isMySQL()) return enqueueFuture(() -> {
+			for (GravesConfig grave : safeActive) backend.upsertGrave(grave, false);
+			for (GravesConfig grave : safeBroken) backend.upsertGrave(grave, true);
+			return true;
+		});
+		return enqueueFuture(() -> { backend.saveSnapshot(safeActive, safeBroken); return true; });
+	}
+
+	private static List<GravesConfig> snapshotObjects(List<Grave> graves) {
+		List<GravesConfig> result = new ArrayList<>();
+		if (graves != null) for (Grave grave : copy(graves))
+			if (grave != null && grave.getGravesConfig() != null) result.add(snapshot(grave.getGravesConfig()));
+		return result;
+	}
+
 	/**
 	 * Close backend.
 	 */
@@ -272,6 +303,22 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
             }
         });
     }
+
+	private synchronized <T> java.util.concurrent.CompletableFuture<T> enqueueFuture(java.util.function.Supplier<T> write) {
+		if (closeRequested || backendClosed) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage is closing"));
+		if (retained != null || recovering) { retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage recovery pending")); }
+		var admitted = plugin.getFeatureIO().admit();
+		if (admitted == null) { retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException("feature worker unavailable")); }
+		var started = new java.util.concurrent.atomic.AtomicBoolean();
+		var result = admitted.submit(() -> { started.set(true); try { return write.get(); } catch (RuntimeException failure) {
+			synchronized (this) { if (retained == null) retained = recoverySnapshot(); } throw failure;
+		} });
+		result.whenComplete((saved, failure) -> { if (failure != null) {
+			if (!started.get()) synchronized (this) { if (!backendClosed && retained == null) retained = recoverySnapshot(); }
+			plugin.getLogger().severe("Grave backend snapshot write failed; storage recovery was required.");
+		} });
+		return result;
+	}
     private Recovery recoverySnapshot() {
         List<GravesConfig> active = new ArrayList<>(), broken = new ArrayList<>();
         for (Grave grave : plugin.activeGraveSnapshot()) active.add(snapshot(grave.getGravesConfig()));
@@ -306,7 +353,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                     for (GravesConfig grave : recovery.active()) backend.upsertGrave(grave, false);
                     for (GravesConfig grave : recovery.broken()) backend.upsertGrave(grave, true);
                 } else {
-                    backend.saveBrokenGraves(recovery.broken()); backend.saveGraves(recovery.active());
+                    backend.saveSnapshot(recovery.active(), recovery.broken());
                 }
             } catch (RuntimeException failure) {
                 synchronized (this) { if (retained == null) retained = recovery; }

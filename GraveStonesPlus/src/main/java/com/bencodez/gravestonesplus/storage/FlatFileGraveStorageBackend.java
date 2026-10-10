@@ -49,6 +49,11 @@ public class FlatFileGraveStorageBackend implements GraveStorageBackend {
 	}
 
 	@Override
+	public void saveSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+		graveLocations.saveSnapshot(active, broken);
+	}
+
+	@Override
 	public void close() {
 		// no-op
 	}

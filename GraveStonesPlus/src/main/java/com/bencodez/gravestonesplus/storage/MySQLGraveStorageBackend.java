@@ -71,6 +71,11 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
 		}
 	}
 
+    @Override public void saveRecreatedGrave(GravesConfig grave) {
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.saveRecreatedGrave(grave);
+    }
+
 	@Override
 	public void setBroken(GravesConfig grave, boolean broken) {
 		if (table != null) {

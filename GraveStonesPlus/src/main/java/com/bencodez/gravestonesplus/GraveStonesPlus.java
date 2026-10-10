@@ -148,25 +148,34 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	}
 
     public java.util.concurrent.CompletableFuture<Boolean> recreateBrokenGrave(Grave grave, Player actor) {
+		return recreateBrokenGrave(grave, actor, actor != null);
+	}
+
+    /** Common recovery wrapper with an explicit marker policy for legacy callers. */
+    public java.util.concurrent.CompletableFuture<Boolean> recreateBrokenGrave(Grave grave, Player actor,
+            boolean createMarker) {
 		if (grave == null || grave.getGravesConfig() == null) {
 			return java.util.concurrent.CompletableFuture.completedFuture(false);
 		}
 
-        var completion = grave.recreateAsync(actor, actor != null).thenApply(restored -> {
-        if (!restored) return false;
+        var completion = grave.recreateAsync(actor, createMarker).thenCompose(restored -> {
+        if (!restored) return java.util.concurrent.CompletableFuture.completedFuture(false);
 		if (!containsByKey(graves, grave)) {
 			graves.add(grave);
 		}
 		removeFromListByKey(brokenGraves, grave);
 
 		if (storageManager.isMySQL()) {
-			storageManager.setBroken(grave.getGravesConfig(), false);
-		} else {
-			storageManager.saveBrokenGravesFromObjects(brokenGraves);
-			storageManager.saveGravesFromObjects(graves);
+            return storageManager.saveRecreatedGrave(grave.getGravesConfig());
 		}
-        return true;
+		return storageManager.saveSnapshotFromObjects(graves, brokenGraves);
         });
+		completion.whenComplete((success, failure) -> {
+			if (failure != null) {
+				getLogger().warning("Failed to recreate grave " + grave.getGravesConfig().getLocation()
+						+ ": " + failure.getMessage());
+			}
+		});
 		// Caller cancellation/completion affects only observation. The internal stage
 		// must still move the lists and request persistence after recreation commits.
 		return completion.copy();

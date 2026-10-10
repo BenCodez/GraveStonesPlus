@@ -38,6 +38,18 @@ public class GraveLocations extends YMLFile {
 		setValue("brokengraves", grave);
 	}
 
+	/** Update both sections in memory, then perform the single checked atomic publication. */
+	public void saveSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+		getData().set("brokengraves", broken != null ? broken : new ArrayList<GravesConfig>());
+		getData().set("graves", active != null ? active : new ArrayList<GravesConfig>());
+        try {
+            com.bencodez.gravestonesplus.graves.DurableFeatureState.publishDocument(
+                    getdFile().toPath(), getData().saveToString());
+        } catch (java.io.IOException failure) {
+            throw new java.io.UncheckedIOException("Failed to publish complete grave state", failure);
+        }
+	}
+
 	public void setBrokenGraves(List<Grave> brokenGraves) {
 		ArrayList<GravesConfig> gravesConfig = new ArrayList<GravesConfig>();
 		for (Grave grave : brokenGraves) {

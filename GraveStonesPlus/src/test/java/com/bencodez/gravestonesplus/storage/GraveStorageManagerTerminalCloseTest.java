@@ -24,6 +24,7 @@ class GraveStorageManagerTerminalCloseTest {
             when(plugin.activeGraveSnapshot()).thenReturn(List.of());
             when(plugin.brokenGraveSnapshot()).thenReturn(List.of());
             doThrow(new RuntimeException("write failure")).when(backend).saveGraves(any());
+            doThrow(new RuntimeException("recovery failure")).when(backend).saveSnapshot(any(), any());
             var manager = manager(plugin, backend);
 
             manager.saveGravesFromObjects(List.of());
@@ -62,10 +63,11 @@ class GraveStorageManagerTerminalCloseTest {
             manager.saveGravesFromObjects(List.of());
         }
         verify(backend, times(1)).close();
-        verify(backend, times(1)).saveGraves(any());
+        verify(backend, times(1)).saveSnapshot(any(), any());
+        verify(backend, never()).saveBrokenGraves(any());
+        verify(backend, never()).saveGraves(any());
         var order = inOrder(backend);
-        order.verify(backend).saveBrokenGraves(any());
-        order.verify(backend).saveGraves(any());
+        order.verify(backend).saveSnapshot(any(), any());
         order.verify(backend).close();
     }
 
@@ -101,6 +103,10 @@ class GraveStorageManagerTerminalCloseTest {
             }
             order.add("recovered"); return null;
         }).when(backend).saveGraves(any());
+        doAnswer(call -> {
+            assertEquals(2, writes.incrementAndGet());
+            order.add("recovered"); return null;
+        }).when(backend).saveSnapshot(any(), any());
         doAnswer(call -> { order.add("closed"); return null; }).when(backend).close();
         GraveStorageManager manager;
         try (FeatureIO io = new FeatureIO(2)) {
@@ -123,6 +129,8 @@ class GraveStorageManagerTerminalCloseTest {
         var closed = new java.util.concurrent.atomic.AtomicBoolean();
         doAnswer(call -> { assertFalse(closed.get(), "no retry may use a closed backend"); throw new IllegalStateException("fixture unavailable"); })
                 .when(backend).saveGraves(any());
+        doAnswer(call -> { assertFalse(closed.get(), "no recovery may use a closed backend"); throw new IllegalStateException("fixture recovery unavailable"); })
+                .when(backend).saveSnapshot(any(), any());
         doAnswer(call -> { assertTrue(closed.compareAndSet(false, true)); return null; }).when(backend).close();
         GraveStorageManager manager;
         try (FeatureIO io = new FeatureIO(2)) {

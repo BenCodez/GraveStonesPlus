@@ -107,19 +107,32 @@ public final class DurableFeatureState {
                 }
                 byte[] bytes = yaml.saveToString().getBytes(StandardCharsets.UTF_8);
                 if (bytes.length > 4_194_304) throw new IOException("feature file too large");
-                Files.createDirectories(path.toAbsolutePath().getParent());
-                Path temp = Files.createTempFile(path.toAbsolutePath().getParent(), path.getFileName().toString(), ".tmp");
-                try {
-                    try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE)) {
-                        ByteBuffer buffer = ByteBuffer.wrap(bytes);
-                        while (buffer.hasRemaining()) channel.write(buffer);
-                        channel.force(true);
-                    }
-                    Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
-                    synchronizeDirectory(path.toAbsolutePath().getParent(), nativeWindows, channels);
-                } finally { Files.deleteIfExists(temp); }
+                publishBytes(path, bytes, nativeWindows, channels);
             }
         };
+    }
+
+    /** Publish an already serialized document; callers retain serialization ownership. */
+    public static void publishDocument(Path path, String document) throws IOException {
+        boolean nativeWindows = path.getFileSystem().provider().getClass().getName()
+                .equals("sun.nio.fs.WindowsFileSystemProvider");
+        publishBytes(path, document.getBytes(StandardCharsets.UTF_8), nativeWindows,
+                directory -> FileChannel.open(directory, StandardOpenOption.READ));
+    }
+
+    private static void publishBytes(Path path, byte[] bytes, boolean nativeWindows,
+            DirectoryChannel channels) throws IOException {
+        Files.createDirectories(path.toAbsolutePath().getParent());
+        Path temp = Files.createTempFile(path.toAbsolutePath().getParent(), path.getFileName().toString(), ".tmp");
+        try {
+            try (FileChannel channel = FileChannel.open(temp, StandardOpenOption.WRITE)) {
+                ByteBuffer buffer = ByteBuffer.wrap(bytes);
+                while (buffer.hasRemaining()) channel.write(buffer);
+                channel.force(true);
+            }
+            Files.move(temp, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+            synchronizeDirectory(path.toAbsolutePath().getParent(), nativeWindows, channels);
+        } finally { Files.deleteIfExists(temp); }
     }
 
     private static void synchronizeDirectory(Path parent, boolean nativeWindows, DirectoryChannel channels) throws IOException {

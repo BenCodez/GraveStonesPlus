@@ -74,3 +74,18 @@ Historical grave-menu actions capture click intent and perform permission/online
 Backend shutdown is a terminal request on the existing ordered feature worker. Accepted writes and retained recovery run before the backend closes once; an incomplete startup index is never published as an empty recovery snapshot. A permanently failing recovery logs failure and retains its in-memory snapshot, then closes without retrying against the closed backend. This is not durable preservation of an otherwise unwritable new snapshot across process termination; repair storage using the recorded grave/recovery data, and do not treat the diagnostic as a successful flush.
 
 Historical recreation checks the administrator on the player’s owner and schedules marker and hologram world access separately on the saved grave location. Remote administrators do not need to stand in the grave’s Folia region. Location-only Java requests retain their location-scheduled path.
+
+### Historical recreation persistence
+
+Historical recreation moves the grave from the broken list to the active list only after the existing guarded
+archive/access checks. Flat-file recovery publishes both sections of `Graves.yml` together through a checked
+atomic replacement; the future-returning recreation API reports success after that write. Storage rejection or
+failure is reported rather than acknowledged as saved. Recoverable in-memory state is retained for the existing
+bounded storage recovery path, but unwritable storage cannot guarantee survival across process termination.
+The legacy `Grave.createBrokenGrave()` still creates a marker and now uses the same list/persistence transition;
+void recreation APIs remain asynchronous. MySQL recreation acknowledges one update to the exact existing row,
+including restored destroyed/marker metadata; it leaves items and XP untouched. Missing rows, SQL errors and
+uncommitted connections fail the acknowledgement. Existing YAML record keys and configuration are unchanged.
+
+Pre-upgrade compasses with only the legacy time/lodestone tags retain their target while their exact saved grave
+is awaiting restoration admission. Once that record is retired without admission, stale compass cleanup resumes.

@@ -437,12 +437,68 @@ class GraveActionsTest {
             h.grave.removeGrave(GraveRemoveReason.EXPIRED); h.regionWork.remove().run(); FeaturePersistenceTest.await(h.io.barrier());
             assertTrue(h.grave.getGravesConfig().isDestroyed()); assertFalse(h.plugin.isLiveGrave(h.grave));
             var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            when(storage.saveSnapshotFromObjects(any(), any())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(true));
+            when(storage.saveRecreatedGrave(any())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(true));
             field(h.plugin, "storageManager", storage); field(h.plugin, "brokenGraves", Collections.synchronizedList(new ArrayList<>(List.of(h.grave))));
             doCallRealMethod().when(h.plugin).recreateBrokenGrave(any());
             doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any());
+            doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any(), anyBoolean());
             h.plugin.recreateBrokenGrave(h.grave); h.drain(); h.regionWork.remove().run();
             assertEquals(0, h.grave.getExpiryDeadline()); assertTrue(h.plugin.canTrack(h.grave, h.owner));
             h.grave.claim(h.owner); h.drain(); verify(h.owner).giveExp(17);
+        }
+    }
+
+    @Test void legacyCreateBrokenGraveUsesAuthoritativeWrapperAndCreatesMarker() throws Exception {
+        try (Harness h = new Harness()) {
+            Field deadline = Grave.class.getDeclaredField("expiryDeadline"); deadline.setAccessible(true);
+            deadline.setLong(h.grave, System.currentTimeMillis() - 1);
+            h.grave.removeGrave(GraveRemoveReason.EXPIRED); h.regionWork.remove().run(); h.drain();
+            assertTrue(h.grave.getGravesConfig().isDestroyed()); assertTrue(h.active.isEmpty());
+            var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            field(h.plugin, "storageManager", storage);
+            var broken = Collections.synchronizedList(new ArrayList<>(List.of(h.grave)));
+            field(h.plugin, "brokenGraves", broken);
+            doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any(), anyBoolean());
+
+            h.grave.createBrokenGrave(); h.drain();
+            assertEquals(1, h.regionWork.size());
+            h.regionWork.remove().run(); h.drain();
+
+            assertFalse(h.grave.getGravesConfig().isDestroyed());
+            assertEquals(List.of(h.grave), h.active); assertTrue(broken.isEmpty());
+            assertEquals(0, h.grave.getExpiryDeadline());
+            verify(storage).saveSnapshotFromObjects(h.active, broken);
+        }
+    }
+
+    @Test void recreationAcknowledgesPublicationInsteadOfAdmission() throws Exception {
+        for (boolean mysql : List.of(false, true)) for (boolean cancel : List.of(false, true)) try (Harness h = new Harness()) {
+            Field deadline = Grave.class.getDeclaredField("expiryDeadline"); deadline.setAccessible(true);
+            deadline.setLong(h.grave, System.currentTimeMillis() - 1);
+            h.grave.removeGrave(GraveRemoveReason.EXPIRED); h.regionWork.remove().run(); h.drain();
+            var publication = new java.util.concurrent.CompletableFuture<Boolean>();
+            var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            when(storage.isMySQL()).thenReturn(mysql);
+            when(storage.saveSnapshotFromObjects(any(), any())).thenReturn(publication);
+            when(storage.saveRecreatedGrave(any())).thenReturn(publication);
+            var broken = Collections.synchronizedList(new ArrayList<>(List.of(h.grave)));
+            field(h.plugin, "storageManager", storage); field(h.plugin, "brokenGraves", broken);
+            doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any());
+            doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any(), anyBoolean());
+
+            var observer = h.plugin.recreateBrokenGrave(h.grave, null); h.drain();
+            h.regionWork.remove().run();
+            assertEquals(List.of(h.grave), h.active); assertTrue(broken.isEmpty());
+            if (mysql) verify(storage).saveRecreatedGrave(h.grave.getGravesConfig());
+            else verify(storage).saveSnapshotFromObjects(h.active, broken);
+            assertFalse(observer.isDone());
+            if (cancel) assertTrue(observer.cancel(true));
+            assertFalse(publication.isCancelled());
+            publication.complete(true);
+            if (!cancel) assertTrue(FeaturePersistenceTest.await(observer));
+            assertFalse(h.grave.getGravesConfig().isDestroyed());
+            verify(h.owner, never()).giveExp(anyInt());
         }
     }
 
@@ -474,9 +530,12 @@ class GraveActionsTest {
             assertTrue(h.grave.getGravesConfig().isDestroyed()); assertTrue(h.active.isEmpty());
             var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
             when(storage.isMySQL()).thenReturn(mysql);
+            when(storage.saveSnapshotFromObjects(any(), any())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(true));
+            when(storage.saveRecreatedGrave(any())).thenReturn(java.util.concurrent.CompletableFuture.completedFuture(true));
             List<Grave> broken = Collections.synchronizedList(new ArrayList<>(List.of(h.grave)));
             field(h.plugin, "storageManager", storage); field(h.plugin, "brokenGraves", broken);
             doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any());
+            doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any(), anyBoolean());
 
             var observer = h.plugin.recreateBrokenGrave(h.grave, null); h.drain();
             assertFalse(observer.isDone()); assertEquals(1, h.regionWork.size());
@@ -493,12 +552,11 @@ class GraveActionsTest {
             assertEquals(List.of(h.grave), h.active); assertTrue(broken.isEmpty());
             assertTrue(h.plugin.canTrack(h.grave, h.owner));
             if (mysql) {
-                verify(storage).setBroken(h.grave.getGravesConfig(), false);
+                verify(storage).saveRecreatedGrave(h.grave.getGravesConfig());
                 verify(storage, never()).saveGravesFromObjects(any());
                 verify(storage, never()).saveBrokenGravesFromObjects(any());
             } else {
-                verify(storage).saveGravesFromObjects(h.active);
-                verify(storage).saveBrokenGravesFromObjects(broken);
+                verify(storage).saveSnapshotFromObjects(h.active, broken);
                 verify(storage, never()).setBroken(any(), anyBoolean());
             }
             verify(h.owner, never()).giveExp(anyInt()); verify(h.helper, never()).giveExp(anyInt());

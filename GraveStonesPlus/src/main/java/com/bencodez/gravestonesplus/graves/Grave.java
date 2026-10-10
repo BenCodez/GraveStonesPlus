@@ -584,7 +584,10 @@ public class Grave {
         }, 5L, TimeUnit.SECONDS);
     }
     private boolean expirationEligible(GraveRemoveReason reason) {
-        return reason != GraveRemoveReason.EXPIRED || (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis());
+        if (reason != GraveRemoveReason.EXPIRED) return true;
+        var restoration = plugin.getGraveRestoration();
+        return (restoration == null || !restoration.isConflicted(GraveIdentity.of(gravesConfig)))
+                && expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis();
     }
     public java.util.concurrent.CompletableFuture<Boolean> grantHelper(Player owner, java.util.UUID helper,
             TrustedGraveAccess.Kind kind, long expiresAt) {

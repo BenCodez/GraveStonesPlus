@@ -42,7 +42,8 @@ public final class GraveNavigation {
                 || !plugin.getTrustedGraveAccessStore().loaded().isDone() || !plugin.getGraveClaimLedger().loaded().isDone();
     }
     private boolean pending(String identity) {
-        return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().hasPending(identity);
+        return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().hasPending(identity)
+                && !plugin.getGraveRestoration().isConflicted(identity);
     }
     public void refresh(Player player) {
         if (loading()) return;

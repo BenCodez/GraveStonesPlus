@@ -647,6 +647,67 @@ class MarkerRestorationRegressionTest {
             restoration.onChunk(h.world.getUID(), 0, 0); FeaturePersistenceTest.await(h.io.barrier()); assertTrue(h.regionWork.isEmpty()); restoration.retire();
         }
     }
+    @Test void unloadedPublicationIsWithdrawnWhenLoadedMarkerBelongsToASuccessor() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.grant(TrustedGraveAccess.Kind.RECOVER); h.grant(TrustedGraveAccess.Kind.TRACK);
+            var marker = new Marker(h); when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(false);
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, h.grave.getGravesConfig(), ready, ready);
+            doAnswer(call -> { h.active.remove(call.getArgument(0)); return null; }).when(h.plugin).withholdRestoredRecord(any());
+            var ledger = h.plugin.getGraveClaimLedger(); when(ledger.loaded()).thenReturn(CompletableFuture.completedFuture(true));
+            GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier()); h.regionWork.remove().run();
+            var scheduled = new ArrayList<Runnable>();
+            var timer = mock(ScheduledExecutorService.class); var expiry = mock(ScheduledFuture.class);
+            when(timer.schedule(any(Runnable.class), anyLong(), any(TimeUnit.class))).thenAnswer(call -> {
+                scheduled.add(call.getArgument(0)); return expiry;
+            });
+            when(h.plugin.getTimer()).thenReturn(timer); when(h.config.getGraveTimeLimit()).thenReturn("1m");
+            Grave admitted = h.active.getFirst(); admitted.checkTimeLimit("1m"); long deadline = admitted.getExpiryDeadline();
+            var compass = mock(org.bukkit.inventory.ItemStack.class); var meta = mock(org.bukkit.inventory.meta.CompassMeta.class);
+            var compassData = mock(PersistentDataContainer.class);
+            when(compass.getType()).thenReturn(Material.COMPASS); when(compass.getItemMeta()).thenReturn(meta);
+            when(meta.getPersistentDataContainer()).thenReturn(compassData);
+            when(compassData.get(any(), eq(PersistentDataType.STRING))).thenReturn(h.identity());
+            when(h.helperInventory.getContents()).thenReturn(new org.bukkit.inventory.ItemStack[] {compass});
+            assertTrue(h.navigation.select(h.owner, admitted)); assertTrue(h.navigation.select(h.helper, admitted));
+            assertTrue(h.plugin.canRecover(admitted, h.helper));
+            var successor = new Grave(h.plugin, new GravesConfig(UUID.randomUUID(), "Successor", new Location(h.world, 1, 64, 1),
+                    new HashMap<>(), 0, "new", admitted.getGravesConfig().getTime() + 1, false, 0, null, null, "PLAYER_HEAD"));
+            h.active.add(successor);
+            when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
+            GraveMarkerCleanup.tag(h.plugin, marker.block, GraveIdentity.of(successor.getGravesConfig()));
+            var chunkTags = new HashMap<>(marker.values); var tileTags = new HashMap<>(marker.tileValues);
+            clearInvocations(marker.block, marker.chunkData, marker.tileData);
+            restoration.onChunk(h.world.getUID(), 0, 0); h.regionWork.remove().run();
+            assertEquals(List.of(successor), h.active); assertTrue(restoration.hasPending(h.identity())); assertTrue(restoration.isConflicted(h.identity()));
+            assertFalse(h.plugin.isLiveGrave(admitted)); assertFalse(h.plugin.canRecover(admitted, h.helper));
+            assertNull(h.navigation.target(h.owner)); assertNull(h.navigation.target(h.helper));
+            h.navigation.refresh(h.helper); verify(meta).setLodestone(null); verify(compassData, atLeastOnce()).remove(any());
+            verify(expiry).cancel(false);
+            // Cancellation cannot undo a callback already handed to the timer/region owner.
+            var expiryField = Grave.class.getDeclaredField("expiryDeadline"); expiryField.setAccessible(true);
+            expiryField.setLong(admitted, System.currentTimeMillis() - 1);
+            scheduled.getFirst().run(); h.drain();
+            assertFalse(admitted.isRemove()); assertFalse(admitted.getGravesConfig().isDestroyed());
+            admitted.claim(h.helper); h.drain(); verify(h.helper, never()).giveExp(anyInt());
+            verify(h.plugin, never()).removeGrave(any()); verify(h.plugin, never()).restoreBrokenRecord(any());
+            verify(marker.block, never()).setMetadata(anyString(), any()); verify(marker.block, never()).setType(any());
+            assertEquals(chunkTags, marker.values); assertEquals(tileTags, marker.tileValues);
+            assertFalse(admitted.getGravesConfig().isDestroyed()); assertEquals(17, admitted.getGravesConfig().getExp());
+            when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(false);
+            restoration.onChunk(h.world.getUID(), 0, 0); h.regionWork.remove().run();
+            assertEquals(List.of(successor), h.active); assertTrue(restoration.isConflicted(h.identity()));
+            // Only a loaded region observing the original identity can re-admit the retained record.
+            when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(true);
+            GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity());
+            restoration.onChunk(h.world.getUID(), 0, 0); h.regionWork.remove().run();
+            assertFalse(restoration.isConflicted(h.identity())); assertFalse(restoration.hasPending(h.identity()));
+            assertTrue(h.active.contains(admitted)); assertTrue(h.active.contains(successor)); assertTrue(h.plugin.canRecover(admitted, h.helper));
+            assertEquals(deadline, admitted.getExpiryDeadline(), "re-admission retains the original absolute expiry");
+            verify(h.plugin, times(2)).restoreActiveRecord(admitted); verify(h.world, never()).getChunkAt(anyInt(), anyInt());
+            restoration.retire();
+        }
+    }
     @ParameterizedTest @ValueSource(strings = {"AVAILABLE", "QUEUED_LIMIT"})
     void restorationNeverAdoptsATaggedSuccessorEvenWhenItsMaterialMatches(String decision) throws Exception {
         try (var h = new GraveActionsTest.Harness()) {

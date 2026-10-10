@@ -108,3 +108,10 @@ timestamp. The whole-grave compatibility revocation future reports unresolved id
 or persistence failure instead of silently acknowledging it. Shortened experimental
 owner/time grant rows cannot establish a location and are never promoted into access;
 existing command-created canonical rows continue to work across restart.
+
+A restored grave first published while its chunk is unloaded is withheld again if
+chunk admission observes a successor identity at that location. Its exact stored
+record and helper grants remain retained, but navigation and recovery are unavailable;
+the successor marker and data are untouched. Unloading the chunk again does not
+clear that conflict. Only a loaded region proving the conflict gone can re-admit
+the original record, using its original absolute expiry rather than extending time.

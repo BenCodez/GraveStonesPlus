@@ -108,6 +108,11 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
     /** Restored records were already persisted; admission never republishes a partial startup list. */
     public void restoreActiveRecord(Grave grave) { if (!containsByKey(graves, grave)) graves.add(grave); }
     public void restoreBrokenRecord(Grave grave) { if (!containsByKey(brokenGraves, grave)) brokenGraves.add(grave); }
+    /** Withdraw only this restored instance; its backend record remains pending, not broken. */
+    public void withholdRestoredRecord(Grave grave) {
+        synchronized (graves) { graves.remove(grave); }
+    }
+
 
 	public void addGrave(Grave grave) {
 		if (grave == null || grave.getGravesConfig() == null) {

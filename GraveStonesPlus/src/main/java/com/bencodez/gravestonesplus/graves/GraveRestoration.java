@@ -17,6 +17,7 @@ public final class GraveRestoration {
     private final Map<String, GravesConfig> pending = new LinkedHashMap<>();
     private final Map<String, Grave> admitted = new HashMap<>();
     private final Set<String> published = new HashSet<>();
+    private final Set<String> conflicts = ConcurrentHashMap.newKeySet();
     private final Map<ChunkKey, Set<String>> chunks = new HashMap<>();
     // Shares pending record ownership and retention; never scans worlds or publishes a live Grave.
     private final Map<PositionKey, Set<String>> positions = new HashMap<>();
@@ -162,7 +163,19 @@ public final class GraveRestoration {
                     boolean loaded = loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
                     // Material alone cannot prove ownership: a newer grave may occupy this position.
                     // Keep the old record pending without publishing it or changing the successor.
-                    if (loaded && GraveMarkerCleanup.hasConflictingIdentity(plugin, loc.getBlock(), GraveIdentity.of(record))) return;
+                    if (loaded && GraveMarkerCleanup.hasConflictingIdentity(plugin, loc.getBlock(), GraveIdentity.of(record))) {
+                        boolean firstConflict;
+                        synchronized (this) { firstConflict = conflicts.add(key); published.remove(key); }
+                        plugin.withholdRestoredRecord(grave);
+                        grave.removeTimer();
+                        if (firstConflict) plugin.getGraveNavigation().invalidate(GraveIdentity.of(record));
+                        return;
+                    }
+                    synchronized (this) {
+                        // An unloaded chunk cannot establish that a previously observed successor went away.
+                        if (!loaded && conflicts.contains(key)) return;
+                        if (loaded) conflicts.remove(key);
+                    }
                     if (decision == GraveClaimLedger.Restoration.QUEUED_LIMIT) {
                         grave.markLimitPayoutPending();
                         synchronized (this) {
@@ -215,7 +228,7 @@ public final class GraveRestoration {
         else { storage.saveBrokenGravesFromObjects(plugin.brokenGraveSnapshot()); storage.saveGravesFromObjects(plugin.activeGraveSnapshot()); }
     }
     private synchronized void resolved(String key, GravesConfig record) {
-        pending.remove(key); admitted.remove(key); published.remove(key);
+        pending.remove(key); admitted.remove(key); published.remove(key); conflicts.remove(key);
         // The key retains the original position even if an integration moved its mutable record.
         if (key != null && !key.startsWith("unresolved-")) {
             String[] identity = key.split("/", -1);
@@ -265,6 +278,7 @@ public final class GraveRestoration {
         process(chunks.getOrDefault(new ChunkKey(world, x, z), Set.of()).stream().limit(MAX_BATCH).toList().iterator());
     }
     public synchronized boolean isLoading() { return !recordsLoaded; }
+    public boolean isConflicted(String identity) { return identity != null && conflicts.contains(identity); }
     public synchronized boolean hasPending(String identity) { return identity != null && pending.containsKey(identity); }
     public void retire() { retired = true; if (timer != null) timer.cancel(); }
 }

@@ -154,3 +154,9 @@ death is ineligible for a grave or captures no kept items; an undelivered snapsh
 retained rather than discarded solely to invalidate the callback. The existing five-tick compass delay is unchanged. These kept-item snapshots
 remain session-local; this change does not add restart recovery for legacy death
 capture or make its persistence atomic with the death event.
+
+Flat-file startup protects exact persisted marker positions from the already-decoded
+Graves.yml records before deferred Folia item preparation runs. This early index
+neither exposes claims nor resolves worlds, clones items, or scans blocks. Chunk
+admission waits for owner preparation and retained storage snapshots. MySQL still
+requires its initial asynchronous record read before exact positions are known.

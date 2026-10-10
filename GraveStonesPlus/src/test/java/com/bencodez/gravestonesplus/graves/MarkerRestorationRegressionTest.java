@@ -107,8 +107,10 @@ class MarkerRestorationRegressionTest {
             } finally { restoration.retire(); release.countDown(); blocked.get(2, TimeUnit.SECONDS); }
         }
     }
-    @Test void startupOffOwnerDefersCachedRecordPreparation() throws Exception {
+    @ParameterizedTest @EnumSource(value = Material.class, names = {"PLAYER_HEAD", "BARRIER", "CHEST"})
+    void startupOffOwnerProtectsCachedMarkersBeforePreparation(Material type) throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
+            h.grave.getGravesConfig().setGraveDisplayType(type == Material.BARRIER ? "DISPLAY_ENTITY" : type.name());
             var owners = new ArrayDeque<Runnable>();
             doAnswer(call -> { owners.add(call.getArgument(1)); return null; })
                 .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class));
@@ -117,7 +119,15 @@ class MarkerRestorationRegressionTest {
             restoration.start();
             assertTrue(restoration.isLoading()); assertEquals(1, owners.size());
             verify(h.grave.getGravesConfig().getItems().get(4), never()).serialize();
-            assertFalse(restoration.hasPending(h.identity()));
+            assertTrue(restoration.hasPending(h.identity()));
+            var marker = new Marker(h); when(marker.block.getType()).thenReturn(type);
+            assertTrue(restoration.protectsPendingMarker(marker.block));
+            assertNativeAndEnvironmentalProtection(h, marker.block, neighbor(h, type, 2));
+            verify(h.grave.getGravesConfig().getItems().get(4), never()).clone();
+            verify(h.grave.getGravesConfig().getItems().get(4), never()).serialize();
+            restoration.onChunk(h.world.getUID(), 0, 0);
+            assertTrue(restoration.isLoading()); assertTrue(h.active.isEmpty());
+            verify(h.plugin.getGraveClaimLedger(), never()).restoration(anyString());
             h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
             try { owners.remove().run(); owners.remove().run(); }
             finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }

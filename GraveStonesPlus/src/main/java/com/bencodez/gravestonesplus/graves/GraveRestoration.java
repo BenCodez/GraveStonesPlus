@@ -39,12 +39,17 @@ public final class GraveRestoration {
     }
     public void start() {
         storage.beginRestoration();
-        // Flat-file initialization already loaded/decoded the document.
-        // Only prepare it inline when lifecycle startup is on the server owner; other contexts use retry's handoff.
-        // Publish its exact-position index before listeners are registered, without another disk read.
-        if (!storage.isMySQL() && org.bukkit.Bukkit.isPrimaryThread()) {
-            try { acceptRecords(cachedFlatRecords()); }
-            catch (RuntimeException failure) { plugin.getLogger().warning("Cached grave records remain withheld until owner preparation can retry."); }
+        // Flat-file initialization already decoded the document. Index plain record
+        // identity/position fields before listeners open, even on Folia's global
+        // startup context. Item cloning/encoding and claim admission stay deferred.
+        if (!storage.isMySQL()) {
+            try {
+                var cached = cachedFlatRecords();
+                indexCachedRecords(cached);
+                if (org.bukkit.Bukkit.isPrimaryThread()) acceptRecords(cached);
+            } catch (RuntimeException failure) {
+                plugin.getLogger().warning("Cached grave records remain withheld until owner preparation can retry.");
+            }
         }
         // Even an unavailable archive must leave backend records retained for shutdown.
         retry();
@@ -84,6 +89,14 @@ public final class GraveRestoration {
         try { plugin.getBukkitScheduler().runTask(plugin, accept); }
         catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
         return result;
+    }
+    private synchronized void indexCachedRecords(GraveStorageManager.RestorationRecords records) {
+        // Borrow already-loaded records only until owner preparation. Do not construct
+        // GravesConfig, resolve worlds, serialize inventories or publish live Graves here.
+        for (GravesConfig grave : concat(records.active(), records.broken())) {
+            String identity = GraveIdentity.of(grave);
+            if (identity != null) { pending.put(identity, grave); index(identity, grave); }
+        }
     }
     private void acceptRecords(GraveStorageManager.RestorationRecords records) {
         List<GravesConfig> active = records.active(), broken = records.broken();
@@ -279,7 +292,7 @@ public final class GraveRestoration {
         return switch (type) { case CHEST -> Material.CHEST; case DISPLAY_ENTITY -> Material.BARRIER; case PLAYER_HEAD -> Material.PLAYER_HEAD; };
     }
     public synchronized void onChunk(UUID world, int x, int z) {
-        if (retired || !running.compareAndSet(false, true)) return;
+        if (retired || !recordsLoaded || !running.compareAndSet(false, true)) return;
         // Immediately completed UNAVAILABLE decisions recurse on this owner. Keep
         // native chunk admission bounded like the timer, leaving the rest indexed.
         process(chunks.getOrDefault(new ChunkKey(world, x, z), Set.of()).stream().limit(MAX_BATCH).toList().iterator());

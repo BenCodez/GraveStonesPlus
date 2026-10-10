@@ -24,6 +24,7 @@ public final class TrustedGraveAccessStore {
         this.state = state; this.clock = clock; this.plugin = plugin;
     }
     public CompletableFuture<Boolean> loaded() { return state.loaded(); }
+    public boolean isReady() { return state.isReady(); }
     private static String key(String grave, UUID helper, TrustedGraveAccess.Kind kind) { return grave + "/" + helper + "/" + kind; }
     public synchronized CompletableFuture<Boolean> grantAsync(String grave, UUID helper, TrustedGraveAccess.Kind kind, long expiresAt) {
         long now = clock.getAsLong();

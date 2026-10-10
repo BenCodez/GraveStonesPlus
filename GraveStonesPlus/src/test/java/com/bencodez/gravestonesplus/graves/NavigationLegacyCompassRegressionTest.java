@@ -77,6 +77,30 @@ class NavigationLegacyCompassRegressionTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void unavailableFeatureStateNeverErasesCompassOrSelection(boolean claimFailure) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            assertTrue(h.navigation.select(h.owner, h.grave));
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), h.grave.getGravesConfig().getLocation());
+            when(h.ownerInventory.getContents()).thenReturn(new ItemStack[] {compass.item});
+            var disk = new FeaturePersistenceTest.Disk();
+            var state = new DurableFeatureState(h.io, disk, 8192);
+            assertTrue(FeaturePersistenceTest.await(state.loaded()));
+            if (claimFailure) when(h.plugin.getGraveClaimLedger()).thenReturn(new GraveClaimLedger(state));
+            else when(h.plugin.getTrustedGraveAccessStore()).thenReturn(new TrustedGraveAccessStore(state, System::currentTimeMillis));
+            disk.fail = true;
+            assertFalse(FeaturePersistenceTest.await(state.update(next -> { next.put("fixture", "value"); return true; })));
+            assertTrue(FeaturePersistenceTest.await(state.loaded()), "initial load succeeded before uncertain publication");
+            assertNull(h.navigation.target(h.owner)); h.navigation.refresh(h.owner);
+            verify(compass.data, never()).remove(any()); verify(compass.item, never()).setItemMeta(any());
+            // Restoring an available store lets the same selected target return without re-selection.
+            if (claimFailure) when(h.plugin.getGraveClaimLedger()).thenReturn(h.ledger);
+            else when(h.plugin.getTrustedGraveAccessStore()).thenReturn(h.access);
+            assertSame(h.grave, h.navigation.target(h.owner));
+        }
+    }
+
     private static Compass compass(GraveActionsTest.Harness h, long time, Location location) {
         ItemStack item = mock(ItemStack.class);
         CompassMeta meta = mock(CompassMeta.class);

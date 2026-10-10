@@ -318,8 +318,9 @@ class RecoveryCompletionTest {
             FeaturePersistenceTest.await(ledger.loaded()); when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
             h.grave.getGravesConfig().setDestroyed(true); h.active.clear();
             when(h.helper.hasPermission("GraveStonesPlus.Admin")).thenReturn(true);
-            var recreation = h.grave.recreateAsync(h.helper, true); h.drain();
-            when(h.helper.hasPermission("GraveStonesPlus.Admin")).thenReturn(false); h.regionWork.remove().run(); h.drain();
+            var recreation = h.grave.recreateAsync(h.helper, true);
+            FeaturePersistenceTest.await(h.io.barrier()); FeaturePersistenceTest.await(h.io.barrier());
+            when(h.helper.hasPermission("GraveStonesPlus.Admin")).thenReturn(false); h.entityWork.remove().run(); h.drain();
             assertFalse(FeaturePersistenceTest.await(recreation)); assertTrue(h.regionWork.isEmpty());
             assertTrue(h.grave.getGravesConfig().isDestroyed());
 

@@ -140,10 +140,15 @@ public final class GraveRestoration {
                 plugin.getMarkerCleanup().retain(record).whenComplete((saved, failure) -> {
                     if (retired || !plugin.isEnabled()) { running.set(false); return; }
                     if (!Boolean.TRUE.equals(saved) || failure != null) { process(batch); return; }
-                    record.setDestroyed(true); if (record.getDestroyedTime() == 0) record.setDestroyedTime(System.currentTimeMillis());
-                    long lifetime = com.bencodez.simpleapi.time.ParsedDuration.parse(plugin.getConfigFile().getBrokenGraveTimeLimit(), TimeUnit.HOURS).getMillis();
-                    if (lifetime <= 0 || System.currentTimeMillis() - record.getDestroyedTime() <= lifetime) plugin.restoreBrokenRecord(new Grave(plugin, record));
-                    resolved(key, record); persistResolvedRemoval(record); process(batch);
+                    try { plugin.getBukkitScheduler().runTask(plugin, () -> {
+                        if (retired || !plugin.isEnabled()) { running.set(false); return; }
+                        try {
+                            record.setDestroyed(true); if (record.getDestroyedTime() == 0) record.setDestroyedTime(System.currentTimeMillis());
+                            long lifetime = com.bencodez.simpleapi.time.ParsedDuration.parse(plugin.getConfigFile().getBrokenGraveTimeLimit(), TimeUnit.HOURS).getMillis();
+                            if (lifetime <= 0 || System.currentTimeMillis() - record.getDestroyedTime() <= lifetime) plugin.restoreBrokenRecord(new Grave(plugin, record));
+                            resolved(key, record); persistResolvedRemoval(record);
+                        } finally { process(batch); }
+                    }); } catch (RuntimeException rejected) { running.set(false); }
                 });
                 return;
             }
@@ -214,6 +219,8 @@ public final class GraveRestoration {
                     synchronized (this) {
                         if (!published.contains(key)) {
                             grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
+                            // Native Bukkit expiration can remove synchronously during this call.
+                            if (grave.isRemove() || record.isDestroyed()) { resolved(key, record); return; }
                             plugin.restoreActiveRecord(grave); published.add(key);
                         }
                     }

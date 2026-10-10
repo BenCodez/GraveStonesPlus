@@ -1066,14 +1066,11 @@ public class Grave {
             }
         }).whenComplete((allowed, failure) -> {
             if (failure != null || !Boolean.TRUE.equals(allowed)) { result.complete(false); return; }
-            try {
-                plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(gravesConfig.getLocation(), task -> {
-                    synchronized (this) {
-                        if (!recreationStateAllowed(identity)) { result.complete(false); return; }
-                    }
-                    Runnable commit = () -> {
+            Runnable scheduleCommit = () -> {
+                try {
+                    plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(gravesConfig.getLocation(), task -> {
                         synchronized (this) {
-                            if (!recreationStateAllowed(identity) || actor != null && (!actor.isOnline() || !canAdministerHistorical(actor))) { result.complete(false); return; }
+                            if (!recreationStateAllowed(identity)) { result.complete(false); return; }
                             markRecreated(); gravesConfig.setDestroyed(false); gravesConfig.setDestroyedTime(0);
                             if (createMarker) {
                                 createGrave();
@@ -1081,12 +1078,18 @@ public class Grave {
                             }
                             result.complete(true);
                         }
-                    };
-                    if (actor == null) commit.run();
-                    else try { plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtEntityWithFallback(actor, ignored -> commit.run(), () -> result.complete(false))
-                            .whenComplete((scheduled, error) -> { if (error != null || scheduled != com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS) result.complete(false); });
-                    } catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
-                }).whenComplete((unused, error) -> { if (error != null) result.completeExceptionally(error); });
+                    }).whenComplete((unused, error) -> { if (error != null) result.completeExceptionally(error); });
+                } catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
+            };
+            if (actor == null) scheduleCommit.run();
+            else try {
+                // Player authority belongs to the actor owner; all marker mutation belongs to the grave region.
+                plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtEntityWithFallback(actor, ignored -> {
+                    if (!plugin.isEnabled() || !actor.isOnline() || !canAdministerHistorical(actor)) { result.complete(false); return; }
+                    scheduleCommit.run();
+                }, () -> result.complete(false)).whenComplete((scheduled, error) -> {
+                    if (error != null || scheduled != com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS) result.complete(false);
+                });
             } catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
         });
         return result;

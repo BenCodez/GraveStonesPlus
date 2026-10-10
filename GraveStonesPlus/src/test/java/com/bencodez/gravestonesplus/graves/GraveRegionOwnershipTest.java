@@ -44,12 +44,15 @@ class GraveRegionOwnershipTest {
                 });
                 h.active.clear(); grave.getGravesConfig().setDestroyed(true);
                 grave.getGravesConfig().setGraveDisplayType(type);
-                var restored = grave.recreateAsync(h.helper, true); h.drain();
-                assertEquals(1, h.regionWork.size()); assertFalse(restored.isDone());
-                graveOwner.set(true); h.regionWork.remove().run(); graveOwner.set(false);
+                var restored = grave.recreateAsync(h.helper, true);
+                FeaturePersistenceTest.await(h.io.barrier()); FeaturePersistenceTest.await(h.io.barrier());
+                assertTrue(h.regionWork.isEmpty()); assertFalse(restored.isDone());
                 assertEquals(1, h.entityWork.size()); assertTrue(grave.getGravesConfig().isDestroyed());
                 verify(h.world, never()).getBlockAt(any(Location.class));
                 actorOwner.set(true); h.entityWork.remove().run(); actorOwner.set(false);
+                assertEquals(1, h.regionWork.size()); assertFalse(restored.isDone());
+                assertTrue(grave.getGravesConfig().isDestroyed());
+                graveOwner.set(true); h.regionWork.remove().run(); graveOwner.set(false);
                 assertTrue(FeaturePersistenceTest.await(restored));
                 assertFalse(grave.getGravesConfig().isDestroyed());
                 verify(h.world, never()).getBlockAt(any(Location.class));
@@ -69,8 +72,9 @@ class GraveRegionOwnershipTest {
         try (var h = new GraveActionsTest.Harness()) {
             when(h.folia.isFolia()).thenReturn(true);
             h.grave.getGravesConfig().setDestroyed(true);
-            var restored = h.grave.recreateAsync(h.helper, true); h.drain();
-            h.regionWork.remove().run(); h.entityWork.remove().run();
+            var restored = h.grave.recreateAsync(h.helper, true);
+            FeaturePersistenceTest.await(h.io.barrier()); FeaturePersistenceTest.await(h.io.barrier());
+            assertTrue(h.regionWork.isEmpty()); h.entityWork.remove().run();
             assertFalse(FeaturePersistenceTest.await(restored));
             assertTrue(h.grave.getGravesConfig().isDestroyed());
             assertTrue(h.regionWork.isEmpty());

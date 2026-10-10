@@ -39,7 +39,7 @@ public final class GraveNavigation {
     }
     private boolean loading() {
         return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().isLoading()
-                || !plugin.getTrustedGraveAccessStore().loaded().isDone() || !plugin.getGraveClaimLedger().loaded().isDone();
+                || !plugin.getTrustedGraveAccessStore().isReady() || !plugin.getGraveClaimLedger().isReady();
     }
     private boolean pending(String identity) {
         return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().hasPending(identity)

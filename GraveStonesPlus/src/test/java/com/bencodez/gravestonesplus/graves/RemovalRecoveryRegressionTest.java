@@ -43,7 +43,7 @@ class RemovalRecoveryRegressionTest {
             doAnswer(call -> { restored.add(call.getArgument(0)); published.countDown(); return null; })
                     .when(h.plugin).restoreBrokenRecord(any());
             var restoration = new GraveRestoration(h.plugin, backend);
-            GraveActionsTest.retryOnOwner(h, restoration); assertTrue(published.await(2, TimeUnit.SECONDS)); h.drain();
+            GraveActionsTest.retryOnOwner(h, restoration); h.drain(); assertTrue(published.await(2, TimeUnit.SECONDS));
             Grave historical = restored.getFirst();
             assertTrue(historical.getGravesConfig().isDestroyed());
             assertFalse(h.plugin.canRecover(historical, h.helper));

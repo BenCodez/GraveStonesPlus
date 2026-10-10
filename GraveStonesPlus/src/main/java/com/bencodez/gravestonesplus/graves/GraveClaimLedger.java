@@ -29,6 +29,7 @@ public final class GraveClaimLedger {
         }).handle((ready, failure) -> { archiveReady = failure == null && Boolean.TRUE.equals(ready); return archiveReady; });
     }
     public CompletableFuture<Boolean> loaded() { return loaded; }
+    public boolean isReady() { return archiveReady && state.isReady(); }
     public synchronized boolean isBlocked(String grave) { return grave == null || !archiveReady || !state.isReady() || recentPaid.containsKey(grave) || pending.contains(grave) || state.snapshot().containsKey(grave); }
     public CompletableFuture<Boolean> canRecreate(String grave) {
         if (isBlocked(grave)) return CompletableFuture.completedFuture(false);

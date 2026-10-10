@@ -115,3 +115,11 @@ record and helper grants remain retained, but navigation and recovery are unavai
 the successor marker and data are untouched. Unloading the chunk again does not
 clear that conflict. Only a loaded region proving the conflict gone can re-admit
 the original record, using its original absolute expiry rather than extending time.
+
+Historical restoration publishes broken records and prepares item snapshots on
+an appropriate Bukkit owner after background archive persistence completes.
+Remote staff recreation checks the actor's current authority on their entity
+owner, then commits marker-related state on the grave's location owner. Graves
+expired during startup admission are never republished as active. Navigation
+refresh pauses whenever helper or claim state is unavailable, including uncertain
+writes after a successful initial load, preserving compass metadata for recovery.

@@ -42,7 +42,7 @@ class MarkerRestorationRegressionTest {
     private GraveRestoration restoration(GraveActionsTest.Harness h, GravesConfig record,
             CompletableFuture<GraveClaimLedger.Restoration> initial, CompletableFuture<GraveClaimLedger.Restoration> chunk) {
         h.active.clear(); when(h.config.isDisableArmorStands()).thenReturn(true); when(h.config.getGraveTimeLimit()).thenReturn("0");
-        var ledger = mock(GraveClaimLedger.class); when(ledger.restoration(any())).thenReturn(initial, chunk);
+        var ledger = mock(GraveClaimLedger.class); when(ledger.restoration(any())).thenReturn(initial, chunk); when(ledger.isReady()).thenReturn(true);
         when(h.plugin.getGraveClaimLedger()).thenReturn(ledger); when(h.plugin.getFeatureIO()).thenReturn(h.io);
         var backend = mock(GraveStorageManager.class); when(backend.loadGraves()).thenReturn(List.of(record)); when(backend.loadBrokenGraves()).thenReturn(List.of());
         doAnswer(i -> { h.active.add(i.getArgument(0)); return null; }).when(h.plugin).restoreActiveRecord(any());
@@ -401,6 +401,7 @@ class MarkerRestorationRegressionTest {
             doAnswer(i->{h.active.add(i.getArgument(0));return null;}).when(h.plugin).restoreActiveRecord(any()); when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());
             var restoration=new GraveRestoration(h.plugin,backend); GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier()); verify(marker.block,never()).getState(); assertTrue(h.active.isEmpty()); assertTrue(h.regionWork.isEmpty());
             admission.complete(decision); FeaturePersistenceTest.await(h.io.barrier()); Runnable task; while((task=h.regionWork.poll())!=null) task.run(); FeaturePersistenceTest.await(h.io.barrier());
+            h.drain();
             if(decision==GraveClaimLedger.Restoration.AVAILABLE) { assertEquals(1,h.active.size()); verify(marker.block,atLeastOnce()).getState(); verify(backend).restorationResolved(any()); }
             else { assertTrue(h.active.isEmpty()); verify(marker.block,never()).setMetadata(anyString(),any()); if(decision!=GraveClaimLedger.Restoration.PAID) verify(backend,never()).restorationResolved(any()); }
             restoration.retire(); cleanup.retire();
@@ -414,13 +415,70 @@ class MarkerRestorationRegressionTest {
             org.mockito.ArgumentCaptor<List<GravesConfig>> written=org.mockito.ArgumentCaptor.forClass(List.class); verify(backend).saveGraves(written.capture()); assertEquals(1,written.getValue().size()); assertEquals(17,written.getValue().getFirst().getExp());
         }
     }
+    @Test void startupExpirationNeverRepublishesRemovedRecordOrAdoptsItsMarker() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); var record = h.grave.getGravesConfig();
+            var time = GravesConfig.class.getDeclaredField("time"); time.setAccessible(true); time.setLong(record, System.currentTimeMillis() - 120_000);
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, record, ready, ready); when(h.config.getGraveTimeLimit()).thenReturn("1m");
+            GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier());
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true); h.regionWork.remove().run();
+            assertTrue(record.isDestroyed()); assertTrue(h.active.isEmpty()); assertFalse(restoration.hasPending(GraveIdentity.of(record)));
+            verify(h.plugin, never()).restoreActiveRecord(any()); verify(marker.block, never()).setMetadata(anyString(), any());
+            verify(h.plugin).removeGrave(any()); restoration.retire();
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest @ValueSource(booleans = {false, true})
+    void historicalPublicationAndSnapshotPreparationWaitForOwnerAfterWorkerCompletion(boolean mysql) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var record = h.grave.getGravesConfig(); record.setDestroyed(true);
+            var cleanup = mock(GraveMarkerCleanup.class); var saved = new CompletableFuture<Boolean>();
+            when(cleanup.retain(record)).thenReturn(saved); when(h.plugin.getMarkerCleanup()).thenReturn(cleanup);
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.PAID);
+            var restoration = restoration(h, record, ready, ready); when(h.config.getBrokenGraveTimeLimit()).thenReturn("7d");
+            var storageField = GraveRestoration.class.getDeclaredField("storage"); storageField.setAccessible(true);
+            var backend = (GraveStorageManager) storageField.get(restoration);
+            when(backend.isMySQL()).thenReturn(mysql);
+            if (mysql) when(backend.loadMySQLForRestoration()).thenReturn(CompletableFuture.completedFuture(new GraveStorageManager.RestorationRecords(List.of(record), List.of())));
+            when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of(h.grave));
+            Thread owner = Thread.currentThread(); var prepares = new java.util.concurrent.atomic.AtomicInteger();
+            doAnswer(call -> { assertSame(owner, Thread.currentThread()); record.getItems().values().forEach(item -> item.clone().serialize()); prepares.incrementAndGet(); return null; })
+                    .when(backend).saveBrokenGravesFromObjects(any());
+            doAnswer(call -> { assertSame(owner, Thread.currentThread()); record.getItems().values().forEach(item -> item.clone().serialize()); prepares.incrementAndGet(); return null; })
+                    .when(backend).updateExistingGrave(any(), eq(true));
+            GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier());
+            FeaturePersistenceTest.await(h.io.submit(() -> { saved.complete(true); return true; }));
+            verify(h.plugin, never()).restoreBrokenRecord(any()); verify(backend, never()).restorationResolved(any()); assertEquals(0, prepares.get());
+            h.drain(); verify(h.plugin).restoreBrokenRecord(any()); verify(backend).restorationResolved(record);
+            assertEquals(1, prepares.get()); assertFalse(restoration.hasPending(GraveIdentity.of(record))); restoration.retire();
+        }
+    }
+
     @Test void historicalOnlyStaffRecreationAndTeleportRecheckActualActorAuthority() throws Exception {
-        for(String permission:List.of("GraveStonesPlus.AllBrokenGraves","GraveStonesPlus.AllBrokenGraves.Player")) try(var h=new GraveActionsTest.Harness()) {
-            h.grave.getGravesConfig().setDestroyed(true); when(h.helper.hasPermission(permission)).thenReturn(true);
-            var recreated=h.grave.recreateAsync(h.helper,false); h.drain(); h.regionWork.remove().run(); h.entityWork.remove().run(); assertTrue(FeaturePersistenceTest.await(recreated));
-            h.grave.teleportHistorical(h.helper); h.entityWork.remove().run(); verify(h.platform).teleportAsync(eq(h.helper),any(Location.class));
-            h.grave.getGravesConfig().setDestroyed(true); var revoked=h.grave.recreateAsync(h.helper,false); h.drain(); h.regionWork.remove().run(); when(h.helper.hasPermission(permission)).thenReturn(false); h.entityWork.remove().run(); assertFalse(FeaturePersistenceTest.await(revoked)); assertTrue(h.grave.getGravesConfig().isDestroyed());
-            clearInvocations(h.platform); h.grave.teleportHistorical(h.helper); h.entityWork.remove().run(); verify(h.platform,never()).teleportAsync(any(),any());
+        for (String permission : List.of("GraveStonesPlus.AllBrokenGraves", "GraveStonesPlus.AllBrokenGraves.Player")) try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); var record = h.grave.getGravesConfig();
+            when(h.helper.hasPermission(permission)).thenReturn(true); record.setDestroyed(true);
+            var recreated = h.grave.recreateAsync(h.helper, true);
+            FeaturePersistenceTest.await(h.io.barrier()); FeaturePersistenceTest.await(h.io.barrier());
+            assertTrue(h.regionWork.isEmpty(), "no marker work before actor authorization");
+            assertEquals(1, h.entityWork.size()); h.entityWork.remove().run();
+            verify(marker.block, never()).setType(any()); assertTrue(record.isDestroyed()); assertFalse(recreated.isDone());
+            clearInvocations(h.helper);
+            h.regionWork.remove().run(); assertTrue(FeaturePersistenceTest.await(recreated));
+            verify(h.helper, never()).hasPermission(anyString()); verify(h.helper, never()).isOnline();
+            when(h.config.isDisableArmorStands()).thenReturn(true);
+            assertEquals(2, h.regionWork.size(), "marker and hologram tasks are location-owned");
+            while (!h.regionWork.isEmpty()) h.regionWork.remove().run();
+            verify(marker.block).setType(Material.PLAYER_HEAD);
+            h.drain();
+            h.grave.teleportHistorical(h.helper); h.entityWork.remove().run();
+            verify(h.platform).teleportAsync(eq(h.helper), any(Location.class));
+            record.setDestroyed(true); var revoked = h.grave.recreateAsync(h.helper, false);
+            FeaturePersistenceTest.await(h.io.barrier()); FeaturePersistenceTest.await(h.io.barrier());
+            when(h.helper.hasPermission(permission)).thenReturn(false); h.entityWork.remove().run();
+            assertFalse(FeaturePersistenceTest.await(revoked)); assertTrue(record.isDestroyed()); assertTrue(h.regionWork.isEmpty());
+            clearInvocations(h.platform); h.grave.teleportHistorical(h.helper); h.entityWork.remove().run();
+            verify(h.platform, never()).teleportAsync(any(), any());
         }
     }
     @Test void archiveAbsenceRejectionReservationPaidAndCorruptionAreDistinctOnActualLedger() throws Exception {
@@ -625,7 +683,7 @@ class MarkerRestorationRegressionTest {
             var marker = new Marker(h); when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(false);
             var ledger = mock(GraveClaimLedger.class);
             when(ledger.restoration(any())).thenReturn(CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE));
-            when(ledger.loaded()).thenReturn(CompletableFuture.completedFuture(true)); when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
+            when(ledger.loaded()).thenReturn(CompletableFuture.completedFuture(true)); when(ledger.isReady()).thenReturn(true); when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
             var backend = mock(GraveStorageManager.class); when(backend.loadGraves()).thenReturn(List.of(h.grave.getGravesConfig())); when(backend.loadBrokenGraves()).thenReturn(List.of());
             when(h.plugin.getFeatureIO()).thenReturn(h.io); doAnswer(i -> { h.active.add(i.getArgument(0)); return null; }).when(h.plugin).restoreActiveRecord(any());
             var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
@@ -654,7 +712,7 @@ class MarkerRestorationRegressionTest {
             var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
             var restoration = restoration(h, h.grave.getGravesConfig(), ready, ready);
             doAnswer(call -> { h.active.remove(call.getArgument(0)); return null; }).when(h.plugin).withholdRestoredRecord(any());
-            var ledger = h.plugin.getGraveClaimLedger(); when(ledger.loaded()).thenReturn(CompletableFuture.completedFuture(true));
+            var ledger = h.plugin.getGraveClaimLedger(); when(ledger.loaded()).thenReturn(CompletableFuture.completedFuture(true)); when(ledger.isReady()).thenReturn(true);
             GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier()); h.regionWork.remove().run();
             var scheduled = new ArrayList<Runnable>();
             var timer = mock(ScheduledExecutorService.class); var expiry = mock(ScheduledFuture.class);
@@ -968,6 +1026,7 @@ class MarkerRestorationRegressionTest {
             verify(h.plugin,never()).restoreBrokenRecord(any());verify(backend,never()).restorationResolved(any());
             h.bukkit.when(()->Bukkit.getWorld(missing)).thenAnswer(call -> { assertSame(ownerThread, Thread.currentThread()); return h.world; });GraveActionsTest.retryOnOwner(h, restoration);
             Objects.requireNonNull(decisions.poll(5,TimeUnit.SECONDS)).complete(status); Objects.requireNonNull(globalTasks.poll(5,TimeUnit.SECONDS)).run(); FeaturePersistenceTest.await(h.io.barrier());
+            Objects.requireNonNull(globalTasks.poll(5,TimeUnit.SECONDS)).run();
             var restored=org.mockito.ArgumentCaptor.forClass(Grave.class);verify(h.plugin).restoreBrokenRecord(restored.capture());
             assertSame(h.world,restored.getValue().getGravesConfig().getLocation().getWorld());assertFalse(restoration.hasPending(GraveIdentity.of(record)));
             verify(h.world,never()).getChunkAt(anyInt(),anyInt());restoration.retire();cleanup.retire();

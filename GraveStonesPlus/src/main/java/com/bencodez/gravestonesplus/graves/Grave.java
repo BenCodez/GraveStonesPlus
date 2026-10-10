@@ -516,6 +516,13 @@ public class Grave {
 	 * @param reason Removal reason
 	 */
     public void removeGrave(final GraveRemoveReason reason) {
+        // Existing Bukkit callers observe the cancellable state transition before
+        // returning. Folia's global thread is not the grave region owner.
+        if (Bukkit.isPrimaryThread() && !plugin.getBukkitScheduler().getFoliaLib().isFolia()) {
+            if (removeState(reason, () -> true))
+                plugin.getBukkitScheduler().runTask(plugin, this::cleanupMarker, gravesConfig.getLocation());
+            return;
+        }
         plugin.getBukkitScheduler().runTask(plugin, () -> removeOwned(reason), gravesConfig.getLocation());
     }
     private void removeOwned(GraveRemoveReason reason) {

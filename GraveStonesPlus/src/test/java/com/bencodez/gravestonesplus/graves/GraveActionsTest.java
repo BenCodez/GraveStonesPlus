@@ -398,6 +398,14 @@ class GraveActionsTest {
     }
     @Test void expirationOverlappingReservationRetriesAfterCancelledPayout() throws Exception {
         try (Harness h = new Harness()) {
+            // Static Bukkit mocks are thread-local. This cancellation continuation
+            // runs on the storage worker, which must report that it is not an owner.
+            var workerBukkit = FeaturePersistenceTest.await(h.io.submit(() -> {
+                var context = mockStatic(Bukkit.class);
+                context.when(Bukkit::isPrimaryThread).thenReturn(false);
+                return context;
+            }));
+            try {
             h.grave.claim(h.owner); h.entityWork.remove().run(); FeaturePersistenceTest.await(h.io.barrier());
             Field deadline = Grave.class.getDeclaredField("expiryDeadline"); deadline.setAccessible(true);
             deadline.setLong(h.grave, System.currentTimeMillis() - 1);
@@ -405,6 +413,44 @@ class GraveActionsTest {
             assertFalse(h.grave.getGravesConfig().isDestroyed()); h.drain();
             assertFalse(h.ledger.isBlocked(h.identity())); verify(h.owner, never()).giveExp(anyInt());
             h.regionWork.remove().run(); assertTrue(h.grave.getGravesConfig().isDestroyed());
+            } finally { FeaturePersistenceTest.await(h.io.submit(() -> { workerBukkit.close(); return null; })); }
+        }
+    }
+
+    @Test void publicRemovalOnBukkitOwnerPublishesStateAndEventBeforeReturning() throws Exception {
+        try (Harness h = new Harness()) {
+            groundWorld(h); h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE);
+            assertTrue(h.grave.isRemove()); assertTrue(h.grave.getGravesConfig().isDestroyed());
+            assertTrue(h.active.isEmpty()); verify(h.events).callEvent(any(GraveRemoveEvent.class));
+            verify(h.plugin).removeGrave(h.grave);
+            // Preserve the native API's deferred marker cleanup independently of state publication.
+            assertEquals(1, h.regionWork.size());
+            verify(h.world.getBlockAt(h.grave.getGravesConfig().getLocation()), never()).setType(any());
+            h.regionWork.remove().run();
+            verify(h.world.getBlockAt(h.grave.getGravesConfig().getLocation())).setType(Material.AIR);
+        }
+    }
+    @Test void publicRemovalOnBukkitOwnerHonorsCancellationBeforeReturning() throws Exception {
+        try (Harness h = new Harness()) {
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            doAnswer(call -> { ((GraveRemoveEvent) call.getArgument(0)).setCancelled(true); return null; })
+                    .when(h.events).callEvent(any(GraveRemoveEvent.class));
+            h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE);
+            assertFalse(h.grave.isRemove()); assertFalse(h.grave.getGravesConfig().isDestroyed());
+            assertTrue(h.regionWork.isEmpty()); verify(h.plugin, never()).removeGrave(any());
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void publicRemovalOnFoliaAlwaysHandsOffToTheMarkerRegion(boolean primary) throws Exception {
+        try (Harness h = new Harness()) {
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(primary); when(h.folia.isFolia()).thenReturn(true);
+            h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE);
+            assertFalse(h.grave.isRemove()); assertEquals(1, h.regionWork.size());
+            verify(h.events, never()).callEvent(any()); verify(h.plugin, never()).removeGrave(any());
+            h.regionWork.remove().run();
+            assertTrue(h.grave.isRemove()); verify(h.events).callEvent(any(GraveRemoveEvent.class));
+            verify(h.plugin).removeGrave(h.grave);
         }
     }
 

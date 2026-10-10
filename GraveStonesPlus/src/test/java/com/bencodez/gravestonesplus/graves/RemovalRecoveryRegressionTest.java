@@ -186,6 +186,13 @@ class RemovalRecoveryRegressionTest {
 
     @Test void expiryDuringDiskReservationOrRemovalEventCannotDropQueuedContents() throws Exception {
         for (boolean expireInEvent : List.of(false, true)) try (var h = new GraveActionsTest.Harness()) {
+            // Cancellation resumes on the storage worker, outside Bukkit ownership.
+            var workerBukkit = FeaturePersistenceTest.await(h.io.submit(() -> {
+                var context = mockStatic(org.bukkit.Bukkit.class);
+                context.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(false);
+                return context;
+            }));
+            try {
             var restoration = GraveActionsTest.limitRestoration(h); GraveActionsTest.groundWorld(h);
             assertTrue(FeaturePersistenceTest.await(h.ledger.queueLimit(h.identity(), h.owner.getUniqueId(),
                     GraveClaimLedger.evidence(GraveStorageManager.snapshot(h.grave.getGravesConfig())))));
@@ -206,6 +213,9 @@ class RemovalRecoveryRegressionTest {
             verify(h.owner, never()).giveExp(anyInt()); assertTrue(h.grave.getGravesConfig().isDestroyed());
             assertNull(h.ledger.status(h.identity())); assertEquals(17, h.grave.getGravesConfig().getExp());
             restoration.retire();
+            } finally {
+                FeaturePersistenceTest.await(h.io.submit(() -> { workerBukkit.close(); return null; }));
+            }
         }
     }
 }

@@ -76,7 +76,7 @@ class HologramCleanupRegressionTest {
             var cleanup = new GraveMarkerCleanup(h.plugin, new DurableFeatureState(h.io, new FeaturePersistenceTest.Disk(), 8192));
             when(h.plugin.getMarkerCleanup()).thenReturn(cleanup); FeaturePersistenceTest.await(cleanup.loaded());
             doAnswer(call -> { ((GraveRemoveEvent) call.getArgument(0)).setCancelled(true); return null; }).when(h.events).callEvent(any());
-            h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE); h.regionWork.remove().run();
+            h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE); assertTrue(h.regionWork.isEmpty());
             assertFalse(h.grave.isRemove()); assertSame(hologram, h.grave.getTopHologram());
             assertEquals(List.of(hologram), registered(h.plugin.getHologramHandler())); verify(stand, never()).remove();
             assertTrue(h.entityWork.isEmpty()); cleanup.retire();
@@ -127,7 +127,7 @@ class HologramCleanupRegressionTest {
             doAnswer(call -> { ((GraveRemoveEvent) call.getArgument(0)).setCancelled(true); return null; }).when(h.events).callEvent(any());
             h.plugin.refreshGraveGlow(h.grave); h.regionWork.remove().run();
             assertSame(hologram, h.grave.getTopHologram()); assertEquals(List.of(hologram), registered(h.plugin.getHologramHandler()));
-            h.regionWork.remove().run(); assertFalse(h.grave.isRemove());
+            assertTrue(h.regionWork.isEmpty()); assertFalse(h.grave.isRemove());
             assertSame(hologram, h.grave.getTopHologram()); assertEquals(List.of(hologram), registered(h.plugin.getHologramHandler()));
             verify(stand, never()).remove(); assertTrue(h.entityWork.isEmpty());
         }

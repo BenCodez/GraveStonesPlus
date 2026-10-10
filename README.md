@@ -39,6 +39,8 @@ NBT routing lists and the configured keep-lore text publish as one immutable rel
 
 ### Integration API compatibility
 
+`Grave.removeGrave(reason)` keeps its cancellable state transition synchronous when called on the Bukkit main thread; marker cleanup remains scheduled. Calls from other threads and all Folia calls hand off to the grave region. Persistence continues through the existing asynchronous storage owners.
+
 `Grave.dropItemsOnGround(Player)` retains its item-only contract: it schedules a snapshot of chance-selected items at the grave location, leaves the grave and stored experience unchanged, and does not reserve or complete a recovery. The player argument remains optional and is not a payout recipient. Integrations using this method still own their removal/claim lifecycle; repeated explicit calls can drop items repeatedly, as before. Normal death/admin grave-limit handling uses the separate `dropAndRemoveForLimit(Player)` operation, whose durable reservation prevents duplicate removal payouts. Neither helper permissions nor player commands expose the item-only API.
 
 ## Storage and operational limits

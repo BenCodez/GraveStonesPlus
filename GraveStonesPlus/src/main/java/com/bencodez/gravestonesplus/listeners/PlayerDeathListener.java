@@ -3,6 +3,9 @@ package com.bencodez.gravestonesplus.listeners;
 import java.util.HashMap;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiConsumer;
 
 import org.bukkit.Location;
@@ -38,10 +41,25 @@ public class PlayerDeathListener implements Listener {
 		this.plugin = plugin;
 	}
 
-	private final HashMap<UUID, HashMap<Integer, ItemStack>> deathItems = new HashMap<UUID, HashMap<Integer, ItemStack>>();
+	// Players in separate Folia regions can die/respawn concurrently. Each value is
+    // one death generation; delayed callbacks must never consume a successor's items.
+    private static final class KeptItems {
+        final Map<Integer, ItemStack> slots;
+        // Carry an undelivered entitlement into the next death without letting an
+        // already queued respawn callback consume it during that newer death.
+        KeptItems(KeptItems previous) { slots = previous.slots; }
+        KeptItems(Map<Integer, ItemStack> source) {
+            HashMap<Integer, ItemStack> snapshot = new HashMap<>();
+            source.forEach((slot, item) -> snapshot.put(slot, item.clone()));
+            slots = Map.copyOf(snapshot);
+        }
+    }
+    private final ConcurrentMap<UUID, KeptItems> deathItems = new ConcurrentHashMap<>();
 
 	@EventHandler(priority = EventPriority.HIGHEST)
 	public void onPlayerDeath(PlayerDeathEvent event) {
+        final UUID playerId = event.getEntity().getUniqueId();
+        deathItems.computeIfPresent(playerId, (id, previous) -> new KeptItems(previous));
 		final Location deathLocation = event.getEntity().getLocation();
 		if (plugin.getConfigFile().getDisabledWorlds().contains(deathLocation.getWorld().getName())) {
 			plugin.debug("Graves in " + deathLocation.getWorld().getName() + " are disabled");
@@ -78,6 +96,7 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		final Player entity = event.getEntity();
+        final String playerName = entity.getName();
 		if (plugin.numberOfGraves(entity.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {
 			Grave oldest = plugin.getOldestGrave(entity.getUniqueId());
 			if (oldest != null) {
@@ -149,7 +168,7 @@ public class PlayerDeathListener implements Listener {
 		processItem.accept(-5, inv.getItemInOffHand()); // Offhand
 
 		if (!keepItems.isEmpty()) {
-			deathItems.put(event.getEntity().getUniqueId(), keepItems);
+			deathItems.put(playerId, new KeptItems(keepItems));
 		}
 
 		final Location emptyBlockFinal = emptyBlock;
@@ -158,7 +177,7 @@ public class PlayerDeathListener implements Listener {
 			@Override
 			public void run() {
 				Grave grave = new Grave(plugin,
-						new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlockFinal, itemsWithSlot,
+						new GravesConfig(playerId, playerName, emptyBlockFinal, itemsWithSlot,
 								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null,
 								plugin.getConfigFile().getGraveDisplayTypeEnum().name()));
 				grave.loadChunk(false);
@@ -178,7 +197,14 @@ public class PlayerDeathListener implements Listener {
 				String msg = MessageAPI.colorize(com.bencodez.advancedcore.api.messages.PlaceholderUtils
 						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
 				if (!msg.isEmpty()) {
-					entity.sendMessage(msg);
+                    try {
+                        plugin.getBukkitScheduler().runTask(plugin, () -> {
+                            if (plugin.isEnabled() && entity.isOnline()) entity.sendMessage(msg);
+                        }, entity);
+                    } catch (RuntimeException rejected) {
+                        // A retired player cannot receive a message; the grave itself is already established.
+                        plugin.getLogger().fine("Skipping grave notification: player scheduler unavailable");
+                    }
 				}
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
@@ -198,11 +224,13 @@ public class PlayerDeathListener implements Listener {
 	public void onRespawn(PlayerRespawnEvent event) {
 		Player player = event.getPlayer();
 		UUID uuid = player.getUniqueId();
-		if (deathItems.containsKey(uuid)) {
-			HashMap<Integer, ItemStack> items = deathItems.remove(uuid);
-			plugin.getBukkitScheduler().runTask(plugin, () -> {
+		KeptItems pending = deathItems.get(uuid);
+        if (pending != null) {
+            try {
+                plugin.getBukkitScheduler().runTask(plugin, () -> {
+                    if (!plugin.isEnabled() || !player.isOnline() || player.isDead() || !deathItems.remove(uuid, pending)) return;
 				PlayerInventory inv = player.getInventory();
-				items.forEach((slot, item) -> {
+				pending.slots.forEach((slot, item) -> {
 					if (item == null || item.getType().isAir())
 						return;
 					if (slot >= 0) {
@@ -245,7 +273,11 @@ public class PlayerDeathListener implements Listener {
 						}
 					}
 				});
-			});
+                }, player);
+            } catch (RuntimeException rejected) {
+                // Keep this generation for a later respawn; never mutate a retired player off-owner.
+                plugin.getLogger().warning("Kept items remain pending: player scheduler unavailable");
+            }
 		}
 
 		if (plugin.getConfigFile().isGiveCompassOnRespawn()) {

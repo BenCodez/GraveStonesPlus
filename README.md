@@ -143,3 +143,14 @@ when the configuration is subsequently saved. Initial startup retains its existi
 migration behavior. Backend selection and arbitrary AdvancedCore runtime side
 effects are not a transactional storage switch; changing database settings still
 requires a restart.
+
+Delayed death notifications and kept-item respawn restoration use the moving
+player's entity scheduler; marker creation stays on the grave's location scheduler.
+Kept items are detached snapshots associated with one player and death generation.
+Repeated or stale respawn callbacks cannot consume a newer generation, and rejected,
+retired, dead or offline player callbacks leave the pending snapshot untouched for a later
+living respawn. A subsequent death fences older scheduled callbacks even when that
+death is ineligible for a grave or captures no kept items; an undelivered snapshot is
+retained rather than discarded solely to invalidate the callback. The existing five-tick compass delay is unchanged. These kept-item snapshots
+remain session-local; this change does not add restart recovery for legacy death
+capture or make its persistence atomic with the death event.

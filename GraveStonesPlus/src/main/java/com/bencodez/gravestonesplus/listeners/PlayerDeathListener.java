@@ -1,6 +1,7 @@
 package com.bencodez.gravestonesplus.listeners;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 import java.util.Map;
@@ -44,16 +45,18 @@ public class PlayerDeathListener implements Listener {
 	// Players in separate Folia regions can die/respawn concurrently. Each value is
     // one death generation; delayed callbacks must never consume a successor's items.
     private static final class KeptItems {
-        final Map<Integer, ItemStack> slots;
-        // Carry an undelivered entitlement into the next death without letting an
-        // already queued respawn callback consume it during that newer death.
-        KeptItems(KeptItems previous) { slots = previous.slots; }
-        KeptItems(Map<Integer, ItemStack> source) {
+        final List<Map<Integer, ItemStack>> batches;
+        // A new identity fences callbacks even when the new death captures no items.
+        KeptItems(KeptItems previous) { batches = previous.batches; }
+        KeptItems(KeptItems previous, Map<Integer, ItemStack> source) {
             HashMap<Integer, ItemStack> snapshot = new HashMap<>();
             source.forEach((slot, item) -> snapshot.put(slot, item.clone()));
-            slots = Map.copyOf(snapshot);
+            List<Map<Integer, ItemStack>> merged = previous == null ? new ArrayList<>() : new ArrayList<>(previous.batches);
+            merged.add(Map.copyOf(snapshot));
+            batches = List.copyOf(merged);
         }
     }
+    private static final int MAX_PENDING_KEPT_SNAPSHOTS = 8;
     private final ConcurrentMap<UUID, KeptItems> deathItems = new ConcurrentHashMap<>();
 
 	@EventHandler(priority = EventPriority.HIGHEST)
@@ -134,12 +137,8 @@ public class PlayerDeathListener implements Listener {
 		// Add any other player-related placeholders you might need here
 
 		final String deathMessage = event.getDeathMessage();
-		if (plugin.getConfigFile().isKeepAllExp()) {
-			event.setDroppedExp(getTotalExperience(event.getEntity()));
-		}
-		final int droppedExp = event.getDroppedExp();
-		event.setDroppedExp(0); // Clear Bukkit's default dropped experience
-		event.getDrops().clear(); // Clear Bukkit's default dropped items
+		final int droppedExp = plugin.getConfigFile().isKeepAllExp()
+				? getTotalExperience(event.getEntity()) : event.getDroppedExp();
 
 		// Store items that will go into the grave and items that will be kept
 		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>(); // Items to be placed in the
@@ -168,8 +167,21 @@ public class PlayerDeathListener implements Listener {
 		processItem.accept(-5, inv.getItemInOffHand()); // Offhand
 
 		if (!keepItems.isEmpty()) {
-			deathItems.put(playerId, new KeptItems(keepItems));
+			boolean[] admitted = { false };
+			deathItems.compute(playerId, (id, pending) -> {
+                if (pending != null && pending.batches.size() >= MAX_PENDING_KEPT_SNAPSHOTS) return pending;
+                KeptItems merged = new KeptItems(pending, keepItems);
+                admitted[0] = true;
+                return merged;
+			});
+			if (!admitted[0]) {
+				plugin.getLogger().warning("Kept items not retained: pending snapshot limit reached");
+				return;
+			}
 		}
+		if (plugin.getConfigFile().isKeepAllExp()) event.setDroppedExp(droppedExp);
+		event.setDroppedExp(0); // Clear Bukkit's default dropped experience
+		event.getDrops().clear(); // Clear Bukkit's default dropped items
 
 		final Location emptyBlockFinal = emptyBlock;
 
@@ -224,55 +236,55 @@ public class PlayerDeathListener implements Listener {
 	public void onRespawn(PlayerRespawnEvent event) {
 		Player player = event.getPlayer();
 		UUID uuid = player.getUniqueId();
-		KeptItems pending = deathItems.get(uuid);
+        KeptItems pending = deathItems.get(uuid);
         if (pending != null) {
             try {
                 plugin.getBukkitScheduler().runTask(plugin, () -> {
                     if (!plugin.isEnabled() || !player.isOnline() || player.isDead() || !deathItems.remove(uuid, pending)) return;
 				PlayerInventory inv = player.getInventory();
-				pending.slots.forEach((slot, item) -> {
+				pending.batches.forEach(batch -> batch.forEach((slot, item) -> {
 					if (item == null || item.getType().isAir())
 						return;
 					if (slot >= 0) {
 						if (inv.getItem(slot) == null)
 							inv.setItem(slot, item);
 						else
-							inv.addItem(item);
+							dropOverflow(player, inv.addItem(item));
 					} else {
 						switch (slot) {
 						case -1:
 							if (isSlotAvailable(inv.getHelmet()))
 								inv.setHelmet(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -2:
 							if (isSlotAvailable(inv.getChestplate()))
 								inv.setChestplate(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -3:
 							if (isSlotAvailable(inv.getLeggings()))
 								inv.setLeggings(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -4:
 							if (isSlotAvailable(inv.getBoots()))
 								inv.setBoots(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -5:
 							if (isSlotAvailable(inv.getItemInOffHand()))
 								inv.setItemInOffHand(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						}
 					}
-				});
+				}));
                 }, player);
             } catch (RuntimeException rejected) {
                 // Keep this generation for a later respawn; never mutate a retired player off-owner.
@@ -295,6 +307,13 @@ public class PlayerDeathListener implements Listener {
             if (folia.isFolia()) folia.getImpl().runAtEntityLater(player, deliverCompass, () -> {}, 5L);
             else folia.getImpl().runLater(deliverCompass, 5L);
 		}
+	}
+
+	private void dropOverflow(Player player, Map<Integer, ItemStack> leftovers) {
+		if (leftovers == null) return;
+		leftovers.values().forEach(item -> {
+			if (item != null && !item.getType().isAir()) player.getWorld().dropItemNaturally(player.getLocation(), item);
+		});
 	}
 
 	/**

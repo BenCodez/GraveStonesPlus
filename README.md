@@ -146,7 +146,12 @@ requires a restart.
 
 Delayed death notifications and kept-item respawn restoration use the moving
 player's entity scheduler; marker creation stays on the grave's location scheduler.
-Kept items are detached snapshots associated with one player and death generation.
+Kept items are detached snapshots associated with one player and death generation;
+successive deaths retain separate entitlements even when their items and slots are
+identical. Pending snapshots are bounded to eight per player. If that bound is
+full, the new death follows the existing no-grave failure policy and its drops and
+experience remain untouched. Inventory insertion leftovers are dropped at the
+owner's world location.
 Repeated or stale respawn callbacks cannot consume a newer generation, and rejected,
 retired, dead or offline player callbacks leave the pending snapshot untouched for a later
 living respawn. A subsequent death fences older scheduled callbacks even when that

@@ -99,10 +99,50 @@ class DeathPlayerOwnershipTest {
             capture(h, listener, h.owner, h.ownerInventory, h.stored);
             respawn(listener, h.owner);
             capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(null, h.cloned);
             h.entityWork.remove().run();
             verify(h.ownerInventory, never()).setItem(anyInt(), any());
             respawn(listener, h.owner); h.drain();
             verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            verify(h.ownerInventory, times(1)).addItem(h.cloned);
+            respawn(listener, h.owner); assertTrue(h.entityWork.isEmpty());
+        }
+    }
+    @Test void successiveDifferentItemsSharingASlotBothSurviveAndFullInventoryDropsOverflow() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            respawn(listener, h.owner);
+            var second = mock(ItemStack.class); var secondClone = mock(ItemStack.class);
+            var material = h.stored.getType();
+            when(second.getType()).thenReturn(material); when(second.clone()).thenReturn(secondClone);
+            when(secondClone.getType()).thenReturn(material);
+            capture(h, listener, h.owner, h.ownerInventory, second);
+            when(h.ownerInventory.getItem(4)).thenReturn(null, h.cloned);
+            when(h.ownerInventory.addItem(secondClone)).thenReturn(new HashMap<>(Map.of(0, secondClone)));
+            h.entityWork.remove().run(); verify(h.ownerInventory, never()).setItem(anyInt(), any());
+            respawn(listener, h.owner); respawn(listener, h.owner); h.drain();
+            verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            verify(h.ownerInventory, times(1)).addItem(secondClone);
+            verify(h.world, times(1)).dropItemNaturally(any(Location.class), eq(secondClone));
+            respawn(listener, h.owner); assertTrue(h.entityWork.isEmpty());
+        }
+    }
+    @Test void snapshotBoundLeavesNewDeathDropsAndExperienceUntouchedAndRetainsEarlierEntitlements() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            for (int i = 0; i < 8; i++) capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            var event = mock(PlayerDeathEvent.class); when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
+            when(event.getDroppedExp()).thenReturn(7);
+            listener.onPlayerDeath(event);
+            assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            when(h.ownerInventory.getItem(4)).thenReturn(null, h.cloned);
+            respawn(listener, h.owner); respawn(listener, h.owner); h.drain();
+            verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            verify(h.ownerInventory, times(7)).addItem(h.cloned);
+            respawn(listener, h.owner); assertTrue(h.entityWork.isEmpty());
         }
     }
     @Test void simultaneousPendingPlayersRestoreTheirOwnSnapshotsOnly() throws Exception {

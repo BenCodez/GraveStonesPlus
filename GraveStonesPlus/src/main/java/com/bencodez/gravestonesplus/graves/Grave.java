@@ -138,6 +138,21 @@ public class Grave {
 	 * @param task If true, run chunk load in a scheduled task
 	 */
 	public void loadChunk(boolean task) {
+        if (plugin.getBukkitScheduler().getFoliaLib().isFolia()) {
+            // Folia's force-loaded flag belongs to the global region, not this
+            // chunk's owner. Its location scheduler holds a chunk ticket while
+            // work is pending; retain the existing six-second window that way
+            // without changing persistent world force-load state.
+            Runnable load = () -> {
+                if (!plugin.isEnabled()) return;
+                gravesConfig.getLocation().getBlock().getChunk().load(false);
+                plugin.getBukkitScheduler().runTaskLater(plugin, () -> {}, 20 * 6,
+                        gravesConfig.getLocation());
+            };
+            if (task) plugin.getBukkitScheduler().runTask(plugin, load, gravesConfig.getLocation());
+            else load.run();
+            return;
+        }
 		if (task) {
 			plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
 

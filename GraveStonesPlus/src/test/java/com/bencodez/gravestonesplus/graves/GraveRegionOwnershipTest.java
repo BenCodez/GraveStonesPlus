@@ -12,6 +12,55 @@ import org.junit.jupiter.api.Test;
 
 /** Exercises the real marker scheduler, including actors in a different region. */
 class GraveRegionOwnershipTest {
+    @Test void foliaChunkLoadUsesRegionTicketWithoutGlobalForceLoadedState() throws Exception {
+        for (boolean deferred : List.of(false, true)) {
+            try (var h = new GraveActionsTest.Harness()) {
+                when(h.folia.isFolia()).thenReturn(true);
+                var owned = new AtomicBoolean();
+                var block = mock(Block.class); var chunk = mock(Chunk.class);
+                when(h.world.getBlockAt(any(Location.class))).thenAnswer(call -> {
+                    assertTrue(owned.get()); return block;
+                });
+                when(block.getChunk()).thenReturn(chunk);
+                when(chunk.load(false)).thenAnswer(call -> { assertTrue(owned.get()); return true; });
+                if (!deferred) owned.set(true);
+                h.grave.loadChunk(deferred);
+                if (deferred) {
+                    verify(chunk, never()).load(false);
+                    assertEquals(1, h.regionWork.size());
+                    owned.set(true); h.regionWork.remove().run();
+                }
+                verify(chunk).load(false);
+                verify(chunk, never()).isForceLoaded(); verify(chunk, never()).setForceLoaded(anyBoolean());
+                verify(h.scheduler).runTaskLater(eq(h.plugin), any(Runnable.class), eq(120L),
+                        eq(h.grave.getGravesConfig().getLocation()));
+                assertTrue(h.ownerWork.isEmpty());
+            }
+        }
+    }
+
+    @Test void disabledFoliaChunkLoadDoesNotTouchWorldOrRetainTicket() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            when(h.folia.isFolia()).thenReturn(true);
+            h.grave.loadChunk(true); when(h.plugin.isEnabled()).thenReturn(false);
+            h.regionWork.remove().run();
+            verify(h.world, never()).getBlockAt(any(Location.class));
+            verify(h.scheduler, never()).runTaskLater(eq(h.plugin), any(Runnable.class), anyLong(), any(Location.class));
+        }
+    }
+
+    @Test void bukkitChunkLoadPreservesExistingForceLoadAndRelease() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var block = mock(Block.class); var chunk = mock(Chunk.class);
+            when(h.world.getBlockAt(any(Location.class))).thenReturn(block); when(block.getChunk()).thenReturn(chunk);
+            h.grave.loadChunk(false);
+            verify(chunk).isForceLoaded(); verify(chunk).setForceLoaded(true); verify(chunk).load(false);
+            var release = org.mockito.ArgumentCaptor.forClass(Runnable.class);
+            verify(h.scheduler).runTaskLater(eq(h.plugin), release.capture(), eq(120L), any(Location.class));
+            release.getValue().run(); verify(chunk).setForceLoaded(false);
+        }
+    }
+
     @Test void remoteActorAuthorizesOnEntityOwnerAndMarkerUsesSavedLocation() throws Exception {
         for (String type : List.of("CHEST", "PLAYER_HEAD", "DISPLAY_ENTITY")) {
             try (var h = new GraveActionsTest.Harness()) {

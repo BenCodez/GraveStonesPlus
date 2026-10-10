@@ -123,3 +123,11 @@ owner, then commits marker-related state on the grave's location owner. Graves
 expired during startup admission are never republished as active. Navigation
 refresh pauses whenever helper or claim state is unavailable, including uncertain
 writes after a successful initial load, preserving compass metadata for recovery.
+
+On Folia, grave chunk preparation loads on the location owner and retains a
+six-second location-scheduler task. Folia owns that task's temporary region ticket;
+the plugin does not read or change the world's persistent force-loaded flag from
+a region thread. This keeps marker creation on its correct owner without leaving
+a persistent force-load behind. Bukkit/Paper retain the existing force-load and
+release behavior. This change does not make every legacy death/respawn path or
+cross-region recovery scenario verified on Folia.

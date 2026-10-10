@@ -17,6 +17,8 @@ public final class GraveRestoration {
     private final Map<String, GravesConfig> pending = new LinkedHashMap<>();
     private final Map<String, Grave> admitted = new HashMap<>();
     private final Set<String> published = new HashSet<>();
+    private final Set<String> displayRepairs = new HashSet<>();
+    private final Set<String> savingDisplays = new HashSet<>();
     private final Set<String> conflicts = ConcurrentHashMap.newKeySet();
     private final Map<ChunkKey, Set<String>> chunks = new HashMap<>();
     // Shares pending record ownership and retention; never scans worlds or publishes a live Grave.
@@ -124,7 +126,7 @@ public final class GraveRestoration {
     private void process(Iterator<String> batch) {
         if (retired || !plugin.isEnabled() || !batch.hasNext()) { running.set(false); return; }
         String key = batch.next(); GravesConfig record;
-        synchronized (this) { record = pending.get(key); }
+        synchronized (this) { record = savingDisplays.contains(key) ? null : pending.get(key); }
         if (record == null) { process(batch); return; }
         plugin.getGraveClaimLedger().restoration(GraveIdentity.of(record)).whenComplete((decision, error) -> {
             if (retired || !plugin.isEnabled()) { running.set(false); return; }
@@ -170,6 +172,7 @@ public final class GraveRestoration {
                     if (retired || !plugin.isEnabled()) return;
                     // Recheck the process-local reservation fence after the asynchronous archive decision.
                     if (decision != GraveClaimLedger.Restoration.QUEUED_LIMIT && plugin.getGraveClaimLedger().isBlocked(GraveIdentity.of(record))) return;
+                    UUID beforeDisplay = record.getDisplayUUID(), beforeInteraction = record.getInteractUUID();
                     Grave grave;
                     synchronized (this) {
                         grave = admitted.get(key);
@@ -239,9 +242,45 @@ public final class GraveRestoration {
                     }
                     if (!loaded) return;
                     grave.loadBlockMeta(loc.getBlock()); grave.removeHologramsAround(); grave.checkBlockDisplayAndFixIfMissing(); grave.createHologram();
-                    resolved(key, record);
+                    synchronized (this) {
+                        if (!Objects.equals(beforeDisplay, record.getDisplayUUID()) || !Objects.equals(beforeInteraction, record.getInteractUUID()))
+                            displayRepairs.add(key);
+                        if (!displayRepairs.contains(key)) { resolved(key, record); return; }
+                        if (!savingDisplays.add(key)) return;
+                    }
+                    // A repaired marker identity must survive a crash, not only graceful shutdown.
+                    // Keep this record indexed until the serial storage owner acknowledges it.
+                    persistDisplayRepair(key, record, loc);
+
                 }).whenComplete((unused, failure) -> process(batch));
             } catch (RuntimeException rejected) { running.set(false); }
+    }
+    private void persistDisplayRepair(String key, GravesConfig record, Location loc) {
+        UUID display = record.getDisplayUUID(), interaction = record.getInteractUUID();
+        CompletableFuture<Boolean> saved;
+        try {
+            saved = storage.isMySQL() ? storage.saveDisplayIdentity(record)
+                    : storage.saveSnapshotFromObjects(plugin.activeGraveSnapshot(), plugin.brokenGraveSnapshot());
+        } catch (RuntimeException failure) {
+            synchronized (this) { savingDisplays.remove(key); }
+            return;
+        }
+        saved.whenComplete((acknowledged, failure) -> {
+            if (failure != null || !Boolean.TRUE.equals(acknowledged) || retired || !plugin.isEnabled()) {
+                synchronized (this) { savingDisplays.remove(key); }
+                return;
+            }
+            try { plugin.getBukkitScheduler().runTask(plugin, () -> {
+                synchronized (this) {
+                    savingDisplays.remove(key);
+                    if (retired || !plugin.isEnabled() || pending.get(key) != record) return;
+                    if (Objects.equals(display, record.getDisplayUUID()) && Objects.equals(interaction, record.getInteractUUID()))
+                        resolved(key, record);
+                }
+            }, loc); } catch (RuntimeException rejected) {
+                synchronized (this) { savingDisplays.remove(key); }
+            }
+        });
     }
     private void persistResolvedRemoval(GravesConfig record) {
         if (storage.isMySQL()) storage.updateExistingGrave(record, true);
@@ -249,6 +288,7 @@ public final class GraveRestoration {
     }
     private synchronized void resolved(String key, GravesConfig record) {
         pending.remove(key); admitted.remove(key); published.remove(key); conflicts.remove(key);
+        displayRepairs.remove(key); savingDisplays.remove(key);
         // The key retains the original position even if an integration moved its mutable record.
         if (key != null && !key.startsWith("unresolved-")) {
             String[] identity = key.split("/", -1);

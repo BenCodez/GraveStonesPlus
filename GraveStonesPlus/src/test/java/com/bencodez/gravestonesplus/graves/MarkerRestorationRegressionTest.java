@@ -235,6 +235,43 @@ class MarkerRestorationRegressionTest {
         }
     }
     @ParameterizedTest @ValueSource(booleans = {false, true})
+    void repairedDisplayIdentityIsAcknowledgedBeforeRestorationResolvesAndRetriesFailure(boolean mysql) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.BARRIER);
+            when(marker.block.getLocation()).thenReturn(h.grave.getGravesConfig().getLocation());
+            var record = h.grave.getGravesConfig(); record.setGraveDisplayType("DISPLAY_ENTITY");
+            UUID oldDisplay = UUID.randomUUID(), replacement = UUID.randomUUID(); record.setDisplayUUID(oldDisplay);
+            var graveKey = new NamespacedKey(h.plugin, "grave"); when(h.plugin.getKey()).thenReturn(graveKey);
+            var display = mock(org.bukkit.entity.ItemDisplay.class); when(display.getUniqueId()).thenReturn(replacement);
+            when(display.getPersistentDataContainer()).thenReturn(mock(PersistentDataContainer.class));
+            var handler = mock(GraveDisplayEntityHandle.class); when(h.plugin.getGraveDisplayEntityHandler()).thenReturn(handler);
+            when(handler.createDisplay(any())).thenReturn(display);
+            var decision = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, record, decision, decision);
+            var field = GraveRestoration.class.getDeclaredField("storage"); field.setAccessible(true);
+            var backend = (GraveStorageManager) field.get(restoration); when(backend.isMySQL()).thenReturn(mysql);
+            when(backend.loadMySQLForRestoration()).thenReturn(CompletableFuture.completedFuture(
+                    new GraveStorageManager.RestorationRecords(List.of(record), List.of())));
+            var first = new CompletableFuture<Boolean>(); var retry = new CompletableFuture<Boolean>();
+            if (mysql) when(backend.saveDisplayIdentity(any())).thenReturn(first, retry);
+            else when(backend.saveSnapshotFromObjects(any(), any())).thenReturn(first, retry);
+            GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier()); h.drain(); h.regionWork.remove().run();
+            assertEquals(replacement, record.getDisplayUUID()); assertTrue(restoration.hasPending(h.identity()));
+            verify(backend, never()).restorationResolved(any());
+            if (mysql) verify(backend).saveDisplayIdentity(record);
+            else verify(backend).saveSnapshotFromObjects(eq(h.active), any());
+            first.completeExceptionally(new IllegalStateException("fixture display write unavailable"));
+            assertTrue(restoration.hasPending(h.identity()));
+            GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier()); h.drain(); h.regionWork.remove().run();
+            verify(handler, times(1)).createDisplay(any()); // retry reuses the repaired display, not another spawn
+            assertTrue(restoration.hasPending(h.identity()));
+            retry.complete(true);
+            verify(backend, never()).restorationResolved(any()); // completion must return to the marker's owner
+            h.regionWork.remove().run(); assertFalse(restoration.hasPending(h.identity())); verify(backend).restorationResolved(record);
+            restoration.retire();
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = {false, true})
     void actualRestorationPreservesAdoptedLegacyAndIdentityTaggedDisplaysAfterDelayedEntityCleanup(boolean alreadyTagged) throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.BARRIER); when(marker.block.getLocation()).thenReturn(h.grave.getGravesConfig().getLocation());

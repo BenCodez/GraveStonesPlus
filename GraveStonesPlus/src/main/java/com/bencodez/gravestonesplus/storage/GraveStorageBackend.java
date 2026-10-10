@@ -45,6 +45,11 @@ public interface GraveStorageBackend {
 		saveGraves(active);
 	}
 
+    /** Acknowledge display metadata only; never recreate or modify contents of a grave. */
+    default void saveDisplayIdentity(GravesConfig grave) {
+        throw new UnsupportedOperationException("Backend cannot acknowledge display identity");
+    }
+
     /** Strict existing-row recreation acknowledgement; unsupported backends fail closed. */
     default void saveRecreatedGrave(GravesConfig grave) {
         throw new UnsupportedOperationException("Backend cannot acknowledge recreation");

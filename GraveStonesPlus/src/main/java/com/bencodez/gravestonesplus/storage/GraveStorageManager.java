@@ -229,6 +229,14 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		}
 	}
 
+    /** Capture on the marker owner, acknowledge metadata on the serial storage worker. */
+    public synchronized java.util.concurrent.CompletableFuture<Boolean> saveDisplayIdentity(GravesConfig grave) {
+        if (backend == null || !isMySQL()) return java.util.concurrent.CompletableFuture.failedFuture(
+                new IllegalStateException("MySQL grave backend unavailable"));
+        GravesConfig captured = snapshot(grave);
+        return enqueueFuture(() -> { backend.saveDisplayIdentity(captured); return true; });
+    }
+
     /** Acknowledge this exact existing SQL row without rewriting or serializing its contents. */
     public synchronized java.util.concurrent.CompletableFuture<Boolean> saveRecreatedGrave(GravesConfig grave) {
         if (backend == null || !isMySQL()) return java.util.concurrent.CompletableFuture.failedFuture(

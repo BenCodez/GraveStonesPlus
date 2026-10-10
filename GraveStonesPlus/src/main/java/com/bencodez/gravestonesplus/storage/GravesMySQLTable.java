@@ -204,6 +204,28 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		}
 	}
 
+    /** Update only display identities on this exact still-active record. */
+    public void saveDisplayIdentity(GravesConfig grave) {
+        if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null)
+            throw new IllegalArgumentException("Display repair requires an existing grave identity");
+        String sql = "UPDATE " + qi(tableName) + " SET " + qi("display_uuid") + "=?, "
+                + qi("interact_uuid") + "=? WHERE " + qi("player_uuid") + "=? AND "
+                + qi("world_uuid") + "=? AND " + qi("x") + "=? AND " + qi("y") + "=? AND "
+                + qi("z") + "=? AND " + qi("time") + "=? AND " + qi("broken") + "=0 AND " + qi("destroyed") + "=0;";
+        try (Connection connection = mysql.getConnectionManager().getConnection();
+                PreparedStatement statement = connection.prepareStatement(sql)) {
+            if (!connection.getAutoCommit()) throw new SQLException("Display repair requires an auto-commit connection");
+            statement.setString(1, grave.getDisplayUUID() == null ? null : grave.getDisplayUUID().toString());
+            statement.setString(2, grave.getInteractUUID() == null ? null : grave.getInteractUUID().toString());
+            statement.setString(3, grave.getUuid().toString()); statement.setString(4, grave.getWorldId().toString());
+            statement.setInt(5, grave.getLocation().getBlockX()); statement.setInt(6, grave.getLocation().getBlockY());
+            statement.setInt(7, grave.getLocation().getBlockZ()); statement.setLong(8, grave.getTime());
+            if (statement.executeUpdate() != 1) throw new SQLException("Active grave display identity was not acknowledged");
+        } catch (SQLException failure) {
+            throw new IllegalStateException("Failed to persist grave display identity", failure);
+        }
+    }
+
     /** Restore existing metadata with one checked statement; contents/XP are unchanged. */
     public void saveRecreatedGrave(GravesConfig grave) {
         if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null)

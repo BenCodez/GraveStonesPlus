@@ -45,7 +45,7 @@ class MySQLRestorationOwnershipTest {
         final GraveStonesPlus plugin = mock(GraveStonesPlus.class);
         final BukkitScheduler scheduler = mock(BukkitScheduler.class);
         final Queue<Runnable> ownerTasks = new ConcurrentLinkedQueue<>();
-        final GravesMySQLTable table = mock(GravesMySQLTable.class);
+        final GravesMySQLTable table = mock(GravesMySQLTable.class, CALLS_REAL_METHODS);
         final Connection connection = mock(Connection.class);
         final PreparedStatement statement = mock(PreparedStatement.class);
         final ResultSet rows = mock(ResultSet.class);
@@ -100,6 +100,26 @@ class MySQLRestorationOwnershipTest {
         doCallRealMethod().when(h.table).saveRecreatedGrave(any());
         doCallRealMethod().when(h.backend).saveRecreatedGrave(any());
         when(h.connection.getAutoCommit()).thenReturn(true);
+    }
+    @Test void displayRepairUpdatesOnlyExactActiveMetadataAndRequiresAcknowledgement() throws Exception {
+        for (int affected : List.of(0, 1, 2)) try (var h = new Fixture()) {
+            recreation(h);
+            doCallRealMethod().when(h.table).saveDisplayIdentity(any());
+            doCallRealMethod().when(h.backend).saveDisplayIdentity(any());
+            when(h.statement.executeUpdate()).thenReturn(affected);
+            var grave = recreated(h); UUID display = UUID.randomUUID(); when(grave.getDisplayUUID()).thenReturn(display);
+            var saved = h.storage.saveDisplayIdentity(grave);
+            if (affected == 1) assertTrue(saved.get(3, TimeUnit.SECONDS));
+            else assertThrows(ExecutionException.class, () -> saved.get(3, TimeUnit.SECONDS));
+            verify(h.statement).setString(1, display.toString()); verify(h.statement).setString(3, h.player.toString());
+            verify(h.statement).setString(4, h.world.toString()); verify(h.statement).setLong(8, 42L);
+            var sql = org.mockito.ArgumentCaptor.forClass(String.class); verify(h.connection).prepareStatement(sql.capture());
+            assertTrue(sql.getValue().replace("`", "").replace("\"", "").contains("broken=0 AND destroyed=0"), sql.getValue());
+            String assignments = sql.getValue().split(" WHERE ")[0];
+            assertFalse(assignments.contains("items_encoded")); assertFalse(assignments.contains("`exp`"));
+            assertFalse(assignments.contains("`broken`")); assertFalse(assignments.contains("`destroyed`"));
+            verify(h.statement).close(); verify(h.connection).close();
+        }
     }
     @Test void recreationWaitsForTheExactExistingRowWriteAndPreservesContents() throws Exception {
         try (var h = new Fixture()) {

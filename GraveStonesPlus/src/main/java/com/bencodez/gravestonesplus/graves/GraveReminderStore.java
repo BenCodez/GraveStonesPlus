@@ -17,6 +17,7 @@ public final class GraveReminderStore {
     public GraveReminderStore(DurableFeatureState state) { this(state, message -> { }); }
     public GraveReminderStore(DurableFeatureState state, java.util.function.Consumer<String> warning) { this.state = state; this.warning = warning; }
     public CompletableFuture<Boolean> loaded() { return state.loaded(); }
+    public boolean isReady() { return state.isReady(); }
     /** Must be called on the recipient entity owner. Sender returns true only after send. */
     public synchronized List<Notice> deliver(List<Notice> candidates, long now,
             java.util.function.Predicate<List<Notice>> sender) {

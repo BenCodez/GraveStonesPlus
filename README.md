@@ -165,3 +165,11 @@ Graves.yml records before deferred Folia item preparation runs. This early index
 neither exposes claims nor resolves worlds, clones items, or scans blocks. Chunk
 admission waits for owner preparation and retained storage snapshots. MySQL still
 requires its initial asynchronous record read before exact positions are known.
+
+Startup display repairs remain in the restoration index until the replacement
+display/interaction identity is acknowledged by storage. Failed writes reuse the
+existing repaired entities and retry through the bounded restoration pass. MySQL
+repair updates only metadata for the exact active row, preserving contents and XP.
+Login summaries defer while reminder/access/claim stores or grave record loading
+are unavailable, and retry on the existing periodic player-owner pass. Disconnect
+and listener shutdown discard the pending login request.

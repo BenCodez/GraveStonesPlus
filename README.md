@@ -229,3 +229,5 @@ Callback handlers must schedule mutable access to a distant claimant through
 their entity scheduler. Ordinary Bukkit callers already on the primary thread
 retain synchronous cancellable callbacks; durable storage and payout completion
 remain asynchronous. No public claim method waits for another region.
+
+Grave menus, location messages and deadline reminders label an unavailable world with its stored UUID and retain the coordinates. They do not resolve or load that world to render the message. Navigation and recovery still require an available world; a reminder never grants access or changes the deadline.

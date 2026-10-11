@@ -113,6 +113,6 @@ public final class GraveReminderListener implements Listener {
         String key = player.getUniqueId() + "/" + GraveIdentity.of(grave.getGravesConfig()) + "/" + kind + "/" + deadline;
         String label = kind.equals("expiry") ? "expires" : "protection ends";
         notices.add(new GraveReminderStore.Notice(key, deadline,
-                grave.getGravesConfig().getLocation().getWorld().getName() + " (" + grave.getGravesConfig().getLocation().getBlockX() + "," + grave.getGravesConfig().getLocation().getBlockY() + "," + grave.getGravesConfig().getLocation().getBlockZ() + ") " + label + " in " + Math.max(1, (deadline - now + 59_999) / 60_000) + "m"));
+                grave.getLocationDescription() + " " + label + " in " + Math.max(1, (deadline - now + 59_999) / 60_000) + "m"));
     }
 }

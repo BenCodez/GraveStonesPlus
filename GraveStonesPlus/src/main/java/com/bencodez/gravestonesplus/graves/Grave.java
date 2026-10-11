@@ -502,11 +502,19 @@ public class Grave {
 		}
 	}
 
-	public String getGraveMessage() {
-		Location loc = gravesConfig.getLocation();
-		return "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + "," + loc.getBlockY() + ","
-				+ loc.getBlockZ() + ") Time of death: " + new Date(gravesConfig.getTime());
-	}
+    /** Describe retained positions without resolving or loading an unavailable world. */
+    public String getLocationDescription() {
+        Location loc = gravesConfig.getLocation();
+        if (loc == null) return "location unavailable";
+        org.bukkit.World world = loc.getWorld();
+        String name = world == null ? "world unavailable"
+                + (gravesConfig.getWorldId() == null ? "" : " [" + gravesConfig.getWorldId() + "]") : world.getName();
+        return name + " (" + loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ() + ")";
+    }
+
+    public String getGraveMessage() {
+        return "Location: " + getLocationDescription() + " Time of death: " + new Date(gravesConfig.getTime());
+    }
 
 	public String getNavigationMessage(Player player) {
 		Location target = gravesConfig.getLocation();
@@ -756,12 +764,10 @@ public class Grave {
     public BInventoryButton getNavigationGUIItem(Player viewer) { return guiItem(true, viewer); }
     public BInventoryButton getGUIItem() { return guiItem(false, null); }
     private BInventoryButton guiItem(boolean navigation, Player menuViewer) {
-		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(
 				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
 						.setName("&3&l" + gravesConfig.getPlayerName())
-						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
-								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+						.addLoreLine("&3Location: " + getLocationDescription())
 						.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
 						.addLoreLine(navigation ? "&bClick to select compass; right click to recover nearby" : "&bClick to Teleport").addLoreLine("&4Shift right click to remove")
 						.addLoreLine("&cShift left click to view items")
@@ -817,12 +823,10 @@ public class Grave {
 	}
 
 	public BInventoryButton getGUIItemBroken() {
-		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(
 				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
 						.setName("&3&l" + gravesConfig.getPlayerName())
-						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
-								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
+						.addLoreLine("&3Location: " + getLocationDescription())
 						.addLoreLine("&3" + "Time of death: " + new Date(gravesConfig.getTime()))
 						.addLoreLine("&b" + "Click to Teleport").addLoreLine("&4Shift right click to create")
 						.addLoreLine("&cShift left click to view items")
@@ -857,12 +861,9 @@ public class Grave {
 		return b;
 	}
 
-	public String getAllGraveMessage() {
-		Location loc = gravesConfig.getLocation();
-		return "Player: " + gravesConfig.getPlayerName() + ", Location: " + loc.getWorld().getName() + " ("
-				+ loc.getBlockX() + "," + loc.getBlockY() + "," + loc.getBlockZ() + ") Time of death: "
-				+ new Date(gravesConfig.getTime());
-	}
+    public String getAllGraveMessage() {
+        return "Player: " + gravesConfig.getPlayerName() + ", " + getGraveMessage();
+    }
 
     /** Caller owns the player; one location snapshot keeps world and distance consistent. */
     public double getDistance(Player p) {

@@ -43,6 +43,14 @@ public class GravesConfig implements ConfigurationSerializable {
         catch (IOException failure) { throw new java.io.UncheckedIOException("Could not encode grave items", failure); }
     }
 
+    Map<String, Object> preparedRecordForStorage() {
+        if (preparationFailure != null) throw preparationFailure;
+        if (preparedItems == null) throw new IllegalStateException("Grave items were not owner-prepared");
+        Map<String, Object> record = new java.util.LinkedHashMap<>(serialize());
+        record.put("==", GravesConfig.class.getName());
+        return record;
+    }
+
 	@Getter
 	private int exp;
 

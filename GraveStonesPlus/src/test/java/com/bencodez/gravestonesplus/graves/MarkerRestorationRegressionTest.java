@@ -576,6 +576,41 @@ class MarkerRestorationRegressionTest {
         }
     }
 
+    @Test void shutdownDuringInitialRestorationPreservesNewDeathAndExistingBackendRecords() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            when(h.plugin.getFeatureIO()).thenReturn(h.io);
+            var original = h.grave.getGravesConfig();
+            var locations = mock(GraveLocations.class);
+            var graveFile = directory.resolve("Graves.yml");
+            when(locations.getdFile()).thenReturn(graveFile.toFile());
+            var oldRecord = original.serialize();
+            Files.writeString(graveFile, new org.yaml.snakeyaml.Yaml().dump(
+                Map.of("graves", List.of(oldRecord), "brokengraves", List.of())));
+            var backend = spy(new FlatFileGraveStorageBackend(locations));
+            when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());
+            var manager = new GraveStorageManager(h.plugin);
+            var field = GraveStorageManager.class.getDeclaredField("backend"); field.setAccessible(true); field.set(manager, backend);
+            manager.beginRestoration();
+            var newlyCaptured = new com.bencodez.gravestonesplus.storage.GravesConfig(original.getUuid(), "Owner",
+                original.getLocation().clone(), new java.util.HashMap<>(original.getItems()), 7, "second death",
+                original.getTime() + 1, false, 0, null, null, "PLAYER_HEAD");
+            var fresh = new Grave(h.plugin, newlyCaptured);
+            h.active.clear(); h.active.add(fresh);
+            manager.saveGravesFromObjects(h.active);
+            manager.close(); FeaturePersistenceTest.await(h.io.barrier());
+            Map<?, ?> stored = new org.yaml.snakeyaml.Yaml().load(Files.readString(graveFile));
+            var records = (List<Map<String, Object>>) stored.get("graves");
+            assertEquals(2, records.size(), "shutdown must preserve old and newly captured graves");
+            assertTrue(records.contains(new org.yaml.snakeyaml.Yaml().load(new org.yaml.snakeyaml.Yaml().dump(oldRecord))));
+            assertTrue(records.stream().anyMatch(record ->
+                ((Number) record.get("Time")).longValue() == newlyCaptured.getTime()
+                && ((Number) record.get("EXP")).intValue() == 7));
+            var order = inOrder(backend);
+            order.verify(backend).saveStartupSnapshot(any(), any()); order.verify(backend).close();
+            verify(locations, never()).loadGraves();
+        }
+    }
+
     @Test void unavailableStartupArchiveStillLoadsAndPreservesBackendRecordsBeforeShutdown() throws Exception {
         try(var h=new GraveActionsTest.Harness()) {
             h.active.clear(); when(h.plugin.getFeatureIO()).thenReturn(h.io);when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());

@@ -345,14 +345,13 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
             synchronized (this) {
                 if (backendClosed) return;
                 loading = restorationLoading;
-                recovery = loading ? null : retained;
-                if (!loading) retained = null;
+                recovery = loading && !closeRequested ? null : retained;
+                if (!loading || closeRequested) retained = null;
                 recovering = recovery != null;
                 if (recovery != null) recovery = new Recovery(preserving(recovery.active(), false), preserving(recovery.broken(), true));
             }
-            if (loading) {
-                // Shutdown during restoration must not publish an incomplete grave index.
-                closeBackendIfRequested(true);
+            if (loading && recovery == null) {
+                closeBackendIfRequested();
                 return;
             }
             if (recovery == null) {
@@ -365,7 +364,8 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                     for (GravesConfig grave : recovery.active()) backend.upsertGrave(grave, false);
                     for (GravesConfig grave : recovery.broken()) backend.upsertGrave(grave, true);
                 } else {
-                    backend.saveSnapshot(recovery.active(), recovery.broken());
+                    if (loading) backend.saveStartupSnapshot(recovery.active(), recovery.broken());
+                    else backend.saveSnapshot(recovery.active(), recovery.broken());
                 }
             } catch (RuntimeException failure) {
                 synchronized (this) { if (retained == null) retained = recovery; }

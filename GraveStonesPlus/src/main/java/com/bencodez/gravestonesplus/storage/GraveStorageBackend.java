@@ -45,6 +45,11 @@ public interface GraveStorageBackend {
 		saveGraves(active);
 	}
 
+    /** Merge captures with the persisted baseline when shutdown interrupts initial restoration. */
+    default void saveStartupSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+        throw new UnsupportedOperationException("Backend cannot preserve incomplete startup state");
+    }
+
     /** Acknowledge display metadata only; never recreate or modify contents of a grave. */
     default void saveDisplayIdentity(GravesConfig grave) {
         throw new UnsupportedOperationException("Backend cannot acknowledge display identity");

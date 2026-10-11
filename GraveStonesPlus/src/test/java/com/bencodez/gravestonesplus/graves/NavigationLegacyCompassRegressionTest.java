@@ -13,6 +13,46 @@ import org.junit.jupiter.api.Test;
 
 /** Regression coverage for legacy compasses during asynchronous restoration admission. */
 class NavigationLegacyCompassRegressionTest {
+    @Test void rejectedPlayerRefreshDoesNotInterruptRemovalOrOtherPlayers() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.grant(TrustedGraveAccess.Kind.TRACK);
+            assertTrue(h.navigation.select(h.owner, h.grave));
+            h.bukkit.when(org.bukkit.Bukkit::getOnlinePlayers).thenReturn(java.util.List.of(h.owner, h.helper));
+            doThrow(new java.util.concurrent.RejectedExecutionException("retired player"))
+                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class), eq(h.owner));
+
+            h.grave.removeGrave(com.bencodez.gravestonesplus.events.GraveRemoveReason.MANUAL_REMOVE);
+            assertDoesNotThrow(() -> h.regionWork.remove().run());
+            h.drain();
+
+            assertTrue(h.grave.isRemove());
+            assertTrue(h.grave.getGravesConfig().isDestroyed());
+            assertFalse(h.active.contains(h.grave));
+            assertTrue(h.access.list(h.identity()).isEmpty(), "removal still revokes helper grants");
+            assertNull(h.navigation.target(h.owner));
+            verify(h.scheduler).runTask(eq(h.plugin), any(Runnable.class), eq(h.helper));
+            verify(h.plugin).removeGrave(h.grave);
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void refreshFailureCannotAbortIdentityInvalidation(boolean inline) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            assertTrue(h.navigation.select(h.owner, h.grave));
+            h.bukkit.when(org.bukkit.Bukkit::getOnlinePlayers).thenReturn(java.util.List.of(h.owner, h.helper));
+            when(h.ownerInventory.getContents()).thenThrow(new IllegalStateException("retired inventory"));
+            if (inline) doAnswer(call -> { ((Runnable) call.getArgument(1)).run(); return null; })
+                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class), any(org.bukkit.entity.Entity.class));
+
+            assertDoesNotThrow(() -> h.navigation.invalidate(h.identity()));
+            if (!inline) while (!h.entityWork.isEmpty()) assertDoesNotThrow(h.entityWork.remove()::run);
+
+            assertNull(h.navigation.target(h.owner));
+            verify(h.helperInventory).getContents();
+        }
+    }
+
     @Test void exactPendingLegacyCompassSurvivesAfterBackendLoadingCompletes() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             h.active.clear();

@@ -35,7 +35,19 @@ public final class GraveNavigation {
         if (identity == null) return;
         selected.values().removeIf(identity::equals);
         // Inventory changes belong to each player's entity owner, not the grave region.
-        for (Player player : Bukkit.getOnlinePlayers()) plugin.getBukkitScheduler().runTask(plugin, () -> refresh(player), player);
+        for (Player player : Bukkit.getOnlinePlayers()) {
+            try {
+                plugin.getBukkitScheduler().runTask(plugin, () -> {
+                    try { refresh(player); }
+                    catch (RuntimeException failure) { reportRefreshFailure(); }
+                }, player);
+            } catch (RuntimeException failure) { reportRefreshFailure(); }
+        }
+    }
+    private void reportRefreshFailure() {
+        // Disconnect/shutdown can reject an owner task. Compass maintenance must
+        // never interrupt the authoritative removal or another player's refresh.
+        plugin.getLogger().fine("Grave compass refresh unavailable; deferred to the next player refresh");
     }
     private boolean loading() {
         return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().isLoading()

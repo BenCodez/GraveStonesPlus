@@ -43,7 +43,14 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	public GravesMySQLTable(AdvancedCorePlugin plugin, String tableName, ConfigurationSection databaseSection) {
 		super(tableName, new MysqlConfigSpigot(databaseSection), plugin.getOptions().getDebug().isDebug(), true);
 		this.plugin = plugin;
-		try { init(); }
+		try {
+            // Legacy SimpleAPI constructors can return after a failed open. Never
+            // publish that wrapper or retry queries against an uninitialized pool.
+            if (mysql.getConnectionManager().isClosed()) {
+                throw new IllegalStateException("Grave SQL connection pool did not initialize; check the preceding database error");
+            }
+            init();
+        }
         catch (RuntimeException | Error failure) {
             // A failed constructor cannot publish this table to the backend owner.
             try { closeOwnedPool(); }
@@ -59,7 +66,10 @@ public class GravesMySQLTable extends AbstractSqlTable {
         catch (RuntimeException | Error failure) {
             // Older SimpleAPI versions skip worker retirement if pool close throws.
             // Keep this table safe without requiring a synchronized dependency upgrade.
-            try { if (mysql.getThreadPool() != null) mysql.getThreadPool().shutdown(); }
+            try {
+                var worker = mysql.getThreadPool();
+                if (worker != null && !worker.isShutdown()) worker.shutdown();
+            }
             catch (RuntimeException | Error cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
             throw failure;
         }
@@ -106,24 +116,32 @@ public class GravesMySQLTable extends AbstractSqlTable {
 		return sb.toString();
 	}
 
+    private java.util.logging.Logger constructionSafeLogger() {
+        // Older SimpleAPI may dispatch logging from super(), before this.plugin
+        // can be assigned. Its bootstrap diagnostics cannot depend on this field.
+        return plugin == null ? java.util.logging.Logger.getLogger("GraveStonesPlus") : plugin.getLogger();
+    }
+
 	@Override
 	public void logSevere(String msg) {
-		plugin.getLogger().severe(msg);
+		constructionSafeLogger().severe(msg);
 	}
 
 	@Override
 	public void logInfo(String msg) {
-		plugin.getLogger().info(msg);
+		constructionSafeLogger().info(msg);
 	}
 
 	@Override
 	public void debug(Throwable t) {
-		plugin.debug(t);
+		if (plugin != null) plugin.debug(t);
+        else constructionSafeLogger().log(java.util.logging.Level.FINE, "SQL initialization diagnostic", t);
 	}
 
 	@Override
 	public void debug(String msg) {
-		plugin.debug(msg);
+		if (plugin != null) plugin.debug(msg);
+        else constructionSafeLogger().fine(msg);
 	}
 
 	/**

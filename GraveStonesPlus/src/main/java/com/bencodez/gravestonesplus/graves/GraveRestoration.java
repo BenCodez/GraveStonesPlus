@@ -49,6 +49,15 @@ public final class GraveRestoration {
         if (retired || identity == null || creating.size() >= MAX_CREATIONS || pending.containsKey(identity))
             throw new java.util.concurrent.RejectedExecutionException("Grave creation capacity unavailable");
         int prior = plugin.numberOfGraves(record.getUuid());
+        // A successfully admitted asynchronous eviction may temporarily retain one extra
+        // grave. Do not admit another replacement until that overflow has settled.
+        if (plugin.getConfigFile().isDropItemsOnGraveRemoval()
+                && (prior > plugin.getConfigFile().getGraveLimit()
+                    || creationReplacements.keySet().stream().anyMatch(id -> {
+                        GravesConfig pendingCreation = pending.get(id);
+                        return pendingCreation != null && record.getUuid().equals(pendingCreation.getUuid());
+                    })))
+            throw new java.util.concurrent.RejectedExecutionException("Previous grave-limit eviction is pending");
         Grave replacement = prior >= plugin.getConfigFile().getGraveLimit() ? plugin.getOldestGrave(record.getUuid()) : null;
         if (replacement != null) creationReplacements.put(identity, GraveIdentity.of(replacement.getGravesConfig()));
         pending.put(identity, record); activeRecords.add(identity); creating.add(identity);
@@ -83,6 +92,7 @@ public final class GraveRestoration {
     public synchronized void retainLimit(Grave grave) {
         GravesConfig record = grave.getGravesConfig(); String identity = GraveIdentity.of(record);
         if (retired) return;
+        limitRequests.putIfAbsent(identity, true);
         pending.put(identity, record); admitted.put(identity, grave); activeRecords.add(identity);
         if (plugin.isLiveGrave(grave)) published.add(identity);
         index(identity, record);
@@ -101,6 +111,14 @@ public final class GraveRestoration {
             if (!grave.isRemove()) result.add(grave);
         }
         return result;
+    }
+    public synchronized boolean canQueuePendingLimit(Grave grave) {
+        if (retired || grave == null) return false;
+        String identity = GraveIdentity.of(grave.getGravesConfig());
+        return activeRecords.contains(identity) && pending.get(identity) == grave.getGravesConfig()
+                && admitted.get(identity) == grave && !published.contains(identity)
+                && (creating.contains(identity) || limitRequests.containsKey(identity))
+                && !grave.isRemove() && !grave.getGravesConfig().isDestroyed();
     }
     public synchronized boolean requestLimitRemoval(Grave grave, boolean drop) {
         if (retired || grave == null) return false;

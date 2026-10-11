@@ -284,11 +284,11 @@ class MarkerRestorationRegressionTest {
                 assertFalse(restoration.hasPendingLimitRemoval(impostor));
                 assertFalse(restoration.requestLimitRemoval(impostor, true));
                 impostor.queuePendingLimitPayout();
-                verify(h.plugin.getGraveClaimLedger(), never()).queueLimit(any(), any(), any());
+                verify(h.plugin.getGraveClaimLedger(), never()).admitLimit(any(), any(), any());
                 restoration.retire();
                 assertFalse(restoration.hasPendingLimitRemoval(pending));
                 pending.queuePendingLimitPayout();
-                verify(h.plugin.getGraveClaimLedger(), never()).queueLimit(any(), any(), any());
+                verify(h.plugin.getGraveClaimLedger(), never()).admitLimit(any(), any(), any());
             } finally { restoration.retire(); }
         }
     }
@@ -299,7 +299,7 @@ class MarkerRestorationRegressionTest {
             var restoration = restoration(h, h.grave.getGravesConfig(), held, held);
             when(h.plugin.getOldestGrave(any())).thenCallRealMethod();
             var ledger = h.plugin.getGraveClaimLedger();
-            when(ledger.queueLimit(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(false));
+            when(ledger.admitLimit(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(false));
             doAnswer(call -> { if (call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveRemoveEvent event)
                 event.setCancelled(true); return null; }).when(h.events).callEvent(any());
             h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
@@ -309,17 +309,17 @@ class MarkerRestorationRegressionTest {
                 assertTrue(restoration.requestLimitRemoval(pending, drop));
                 assertTrue(restoration.requestLimitRemoval(pending, !drop));
                 assertNull(h.plugin.getOldestGrave(h.owner.getUniqueId()), "An admitted replacement is not selected twice");
-                verify(ledger, never()).queueLimit(any(), any(), any()); verify(h.events, never()).callEvent(any());
+                verify(ledger, never()).admitLimit(any(), any(), any()); verify(h.events, never()).callEvent(any());
                 assertTrue(h.active.isEmpty());
                 held.complete(GraveClaimLedger.Restoration.AVAILABLE);
                 Runnable task; while ((task = h.regionWork.poll()) != null) task.run();
                 if (drop) {
                     String identity = h.identity();
                     UUID ownerId = h.owner.getUniqueId();
-                    verify(ledger).queueLimit(eq(identity), eq(ownerId), anyString());
+                    verify(ledger).admitLimit(eq(identity), eq(ownerId), anyString());
                     verify(h.events, never()).callEvent(any());
                 } else {
-                    verify(ledger, never()).queueLimit(any(), any(), any());
+                    verify(ledger, never()).admitLimit(any(), any(), any());
                     verify(h.events).callEvent(any(com.bencodez.gravestonesplus.events.GraveRemoveEvent.class));
                 }
                 assertFalse(pending.isRemove()); assertFalse(h.grave.getGravesConfig().isDestroyed());
@@ -339,7 +339,7 @@ class MarkerRestorationRegressionTest {
                 Grave pending = restoration.pendingActiveForLimits().getFirst();
                 assertTrue(restoration.requestLimitRemoval(pending, true)); held.complete(decision);
                 Runnable task; while ((task = h.regionWork.poll()) != null) task.run();
-                assertTrue(h.active.isEmpty()); verify(ledger, never()).queueLimit(any(), any(), any());
+                assertTrue(h.active.isEmpty()); verify(ledger, never()).admitLimit(any(), any(), any());
                 verify(h.events, never()).callEvent(any()); assertFalse(pending.isRemove());
             } finally { restoration.retire(); }
         }

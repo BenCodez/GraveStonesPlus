@@ -1169,25 +1169,35 @@ public class Grave {
                 && plugin.getGraveRestoration().requestLimitRemoval(this, true)) return;
         queueLimitPayout(recipient, false);
     }
+    /** Capture callers must obtain worker admission before consuming replacement contents.
+     * A deferred grave also queues its payout now; its marker still waits for restoration. */
+    public boolean admitLimitRemoval(Player recipient) {
+        boolean pending = !plugin.isLiveGrave(this);
+        if (pending && (plugin.getGraveRestoration() == null
+                || !plugin.getGraveRestoration().canQueuePendingLimit(this))) return false;
+        return queueLimitPayout(recipient, pending);
+    }
     /** Restoration invokes this only after AVAILABLE archive admission on the marker owner. */
     void queuePendingLimitPayout() { queueLimitPayout(null, true); }
     void removePendingForLimit() { removeOwned(GraveRemoveReason.LIMIT_REACHED); }
-    private void queueLimitPayout(Player recipient, boolean pendingRecord) {
+    private boolean queueLimitPayout(Player recipient, boolean pendingRecord) {
         String identity = GraveIdentity.of(gravesConfig);
         // Do not acquire restoration ownership while holding the grave monitor:
         // restoration can check expiry while it owns its own record map.
-        boolean pendingAdmission = pendingRecord && plugin.getGraveRestoration().hasPendingLimitRemoval(this);
+        boolean pendingAdmission = pendingRecord && plugin.getGraveRestoration().canQueuePendingLimit(this);
         synchronized (this) {
             if (remove || claimInProgress || limitPayoutPending
                     || (!plugin.isLiveGrave(this) && !pendingAdmission)
-                    || plugin.getGraveClaimLedger().isBlocked(identity)) return;
+                    || plugin.getGraveClaimLedger().isBlocked(identity)) return false;
             claimInProgress = true;
             limitRecipient = new java.lang.ref.WeakReference<>(recipient);
         }
         final String evidence;
         try { evidence = GraveClaimLedger.evidence(com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig)); }
-        catch (RuntimeException invalid) { releaseClaim(); return; }
-        plugin.getGraveClaimLedger().queueLimit(identity, gravesConfig.getUuid(), evidence).whenComplete((saved, failure) -> {
+        catch (RuntimeException invalid) { releaseClaim(); return false; }
+        var admitted = plugin.getGraveClaimLedger().admitLimit(identity, gravesConfig.getUuid(), evidence);
+        if (admitted == null) { releaseClaim(); return false; }
+        admitted.whenComplete((saved, failure) -> {
             if (failure == null && Boolean.TRUE.equals(saved)) {
                 limitPayoutPending = true;
                 plugin.getGraveRestoration().retainLimit(this);
@@ -1195,6 +1205,7 @@ public class Grave {
             releaseClaim();
             if (limitPayoutPending) plugin.getGraveRestoration().retry();
         });
+        return true;
     }
     void markLimitPayoutPending() { limitPayoutPending = true; }
     /** Invoked by restoration only on a loaded chunk's owning scheduler. */

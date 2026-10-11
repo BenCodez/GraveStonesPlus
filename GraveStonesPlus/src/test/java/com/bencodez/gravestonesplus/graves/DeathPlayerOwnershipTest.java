@@ -56,6 +56,27 @@ class DeathPlayerOwnershipTest {
         PlayerRespawnEvent event = mock(PlayerRespawnEvent.class); when(event.getPlayer()).thenReturn(player);
         listener.onRespawn(event);
     }
+    @Test void rejectedLimitAdmissionLeavesDeathDropsXpAndExistingGraveUntouched() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            when(h.config.getGraveLimit()).thenReturn(1);
+            when(h.config.isDropItemsOnGraveRemoval()).thenReturn(true);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(1);
+            when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(h.grave);
+            GraveActionsTest.limitRestoration(h);
+            h.io.close(); // Actual persistence owner rejects the new limit request.
+            var event = mock(PlayerDeathEvent.class); when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
+            when(event.getDroppedExp()).thenReturn(7);
+            listener.onPlayerDeath(event);
+            assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            assertFalse(h.grave.isRemove()); assertFalse(h.grave.getGravesConfig().isDestroyed());
+            verify(h.plugin, never()).removeGrave(any());
+            assertEquals(1, h.regionWork.size(), "Only the earlier accepted death remains scheduled");
+        }
+    }
     @Test void keptItemsUseMovingPlayerOwnerAndRepeatedCallbacksDeliverOnlyOnce() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             var listener = new PlayerDeathListener(h.plugin);
@@ -203,10 +224,11 @@ class DeathPlayerOwnershipTest {
             when(event.getEntity()).thenReturn(h.owner);
             var drops = new ArrayList<>(List.of(h.stored));
             when(event.getDrops()).thenReturn(drops);
+            if (dropOldContents) when(oldest.admitLimitRemoval(h.owner)).thenReturn(true);
             listener.onPlayerDeath(event);
             assertTrue(drops.isEmpty()); verify(event).setDroppedExp(0);
             if (dropOldContents) {
-                verify(oldest, times(1)).dropAndRemoveForLimit(h.owner);
+                verify(oldest, times(1)).admitLimitRemoval(h.owner);
                 verify(oldest, never()).removeGrave(any());
             } else {
                 verify(oldest, times(1)).removeGrave(com.bencodez.gravestonesplus.events.GraveRemoveReason.LIMIT_REACHED);
@@ -232,7 +254,7 @@ class DeathPlayerOwnershipTest {
                 verify(h.ownerInventory, never()).setItem(anyInt(), any());
                 throw new IllegalStateException("limit removal rejected");
             };
-            if (dropOldContents) doAnswer(fail).when(oldest).dropAndRemoveForLimit(any());
+            if (dropOldContents) doAnswer(fail).when(oldest).admitLimitRemoval(any());
             else doAnswer(fail).when(oldest).removeGrave(any());
             var event = mock(PlayerDeathEvent.class);
             when(event.getEntity()).thenReturn(h.owner);

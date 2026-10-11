@@ -69,11 +69,19 @@ public final class GraveClaimLedger {
         });
     }
     /** A queued ground payout has not performed any gameplay side effect and may resume. */
-    public synchronized CompletableFuture<Boolean> queueLimit(String grave, UUID recipient, String evidence) {
+    public CompletableFuture<Boolean> queueLimit(String grave, UUID recipient, String evidence) {
+        CompletableFuture<Boolean> admitted = admitLimit(grave, recipient, evidence);
+        return admitted == null ? CompletableFuture.completedFuture(false) : admitted;
+    }
+    /** Null means immediate rejection; a returned future owns a reserved persistence slot.
+     * Admission is not a durable acknowledgement: callers must retain contents on later failure. */
+    public synchronized CompletableFuture<Boolean> admitLimit(String grave, UUID recipient, String evidence) {
         if (recipient == null || evidence == null || evidence.length() > 350_000 || isBlocked(grave) || pending.size() >= 128)
-            return CompletableFuture.completedFuture(false);
+            return null;
+        FeatureIO.Admission admission = state.admit();
+        if (admission == null) return null;
         pending.add(grave);
-        return state.update(next -> {
+        return state.update(admission, next -> {
             if (next.containsKey(grave) || archived(grave)) return false;
             next.put(grave, "QUEUED_LIMIT:" + recipient + ":" + evidence); return true;
         }).thenApply(saved -> {

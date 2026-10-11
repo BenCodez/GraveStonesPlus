@@ -45,6 +45,20 @@ class AdminCreationAdmissionTest {
                 "Accepted creation must reserve capacity before another request can observe it");
         }
     }
+    @Test void rejectedLimitWorkerAdmissionCancelsOnlyReplacement() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            Grave oldest = mock(Grave.class); Location target = prepare(h, oldest, true);
+            var task = mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
+            Runnable[] work = { null };
+            when(h.platform.runAtLocationTimer(eq(target), any(Runnable.class), eq(2L), eq(1L), eq(TimeUnit.SECONDS)))
+                .thenAnswer(call -> { work[0] = call.getArgument(1); return task; });
+            new CommandLoader(h.plugin).createTestGrave(h.owner.getUniqueId(), "Owner", target,
+                new HashMap<>(Map.of(4, h.stored)), 7, "test", h.owner);
+            work[0].run(); verify(task).cancel(); verify(h.plugin, never()).addGrave(any());
+            verify(oldest).admitLimitRemoval(null); verify(oldest, never()).removeGrave(any());
+            verify(h.owner).sendMessage("Grave creation declined: limit payout admission unavailable");
+        }
+    }
     @ParameterizedTest @ValueSource(booleans = { false, true })
     void rejectedCreationKeepsExistingGraveAndNeverPublishesReplacement(boolean drop) throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
@@ -69,7 +83,7 @@ class AdminCreationAdmissionTest {
             var task = mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
             when(h.platform.runAtLocationTimer(eq(target), any(Runnable.class), eq(2L), eq(1L), eq(TimeUnit.SECONDS)))
                 .thenAnswer(call -> { work[0] = call.getArgument(1); work[0].run(); return task; });
-            if (drop) doThrow(new IllegalStateException("limit unavailable")).when(oldest).dropAndRemoveForLimit(null);
+            if (drop) doThrow(new IllegalStateException("limit unavailable")).when(oldest).admitLimitRemoval(null);
             else doThrow(new IllegalStateException("limit unavailable")).when(oldest).removeGrave(any());
             assertThrows(IllegalStateException.class, () -> new CommandLoader(h.plugin).createTestGrave(
                 h.owner.getUniqueId(), "Owner", target, new HashMap<>(Map.of(4, h.stored)), 7, "test", h.owner));
@@ -89,10 +103,11 @@ class AdminCreationAdmissionTest {
                     work[0] = call.getArgument(1); work[0].run();
                     verify(h.plugin, never()).addGrave(any()); return task;
                 });
+            if (drop) when(oldest.admitLimitRemoval(null)).thenReturn(true);
             new CommandLoader(h.plugin).createTestGrave(h.owner.getUniqueId(), "Owner", target,
                 new HashMap<>(Map.of(4, h.stored)), 7, "test", h.owner);
             if (drop) {
-                verify(oldest).dropAndRemoveForLimit(null); verify(oldest, never()).removeGrave(any());
+                verify(oldest).admitLimitRemoval(null); verify(oldest, never()).removeGrave(any());
             } else {
                 verify(oldest).removeGrave(com.bencodez.gravestonesplus.events.GraveRemoveReason.LIMIT_REACHED);
                 verify(oldest, never()).dropAndRemoveForLimit(any());

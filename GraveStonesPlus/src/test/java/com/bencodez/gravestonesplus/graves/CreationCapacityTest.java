@@ -41,6 +41,42 @@ class CreationCapacityTest {
             assertEquals(1, h.plugin.numberOfGraves(h.owner.getUniqueId()));
         }
     }
+    @Test void dropReplacementRejectsFurtherAdmissionsBeforeAndAfterFailedSave() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var restoration = restoration(h);
+            when(h.config.isDropItemsOnGraveRemoval()).thenReturn(true);
+            h.active.add(h.grave);
+            var next = record(h, h.grave.getGravesConfig().getTime() + 1);
+            var later = record(h, next.getTime() + 1);
+            var selected = restoration.reserveCreation(next);
+            assertSame(h.grave, selected.replacement());
+            assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> restoration.reserveCreation(later));
+            h.claimDisk.fail = true;
+            assertTrue(h.grave.admitLimitRemoval(h.owner), "Admission reserves work, not a successful save");
+            Grave created = restoration.creationGrave(next); h.active.add(created); restoration.completeCreation(next);
+            h.drain();
+            assertEquals(2, h.plugin.numberOfGraves(h.owner.getUniqueId()));
+            assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> restoration.reserveCreation(later));
+            assertFalse(h.grave.getGravesConfig().isDestroyed()); assertFalse(next.isDestroyed());
+            verify(h.world, never()).dropItem(any(), any());
+        }
+    }
+    @Test void fullPersistenceWorkerRejectsLimitAdmissionWithoutBlockingOrRemovingContents() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.limitRestoration(h);
+            var tickets = new ArrayList<FeatureIO.Admission>();
+            try {
+                FeatureIO.Admission ticket;
+                while ((ticket = h.io.admit()) != null) tickets.add(ticket);
+                assertFalse(h.grave.admitLimitRemoval(h.owner));
+                assertFalse(h.grave.getGravesConfig().isDestroyed());
+                assertNull(h.ledger.status(h.identity()));
+                verify(h.world, never()).dropItem(any(), any());
+            } finally { tickets.forEach(FeatureIO.Admission::close); }
+            assertTrue(h.grave.admitLimitRemoval(h.owner)); h.drain();
+            assertTrue(h.ledger.status(h.identity()).startsWith("QUEUED_LIMIT:"));
+        }
+    }
     @Test void schedulerRejectionReleasesNewAdmissionAndLeavesExistingGraveSelectable() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             var restoration = restoration(h); h.active.add(h.grave);

@@ -572,7 +572,10 @@ public class CommandLoader {
                 Grave oldest = creation.replacement();
                 if (oldest != null) {
                     if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-                        oldest.dropAndRemoveForLimit(null);
+                        if (!oldest.admitLimitRemoval(null)) {
+                            sender.sendMessage("Grave creation declined: limit payout admission unavailable");
+                            return;
+                        }
                     } else oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
                 }
             }

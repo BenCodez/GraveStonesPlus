@@ -238,7 +238,10 @@ public class PlayerDeathListener implements Listener {
                 Grave oldest = handoff.replacement();
                 if (oldest != null) {
                     if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-                        oldest.dropAndRemoveForLimit(entity);
+                        if (!oldest.admitLimitRemoval(entity)) {
+                            plugin.getLogger().warning("Grave creation declined: limit payout admission unavailable; death drops retained");
+                            return;
+                        }
                     } else {
                         oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
                         entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));

@@ -231,3 +231,14 @@ retain synchronous cancellable callbacks; durable storage and payout completion
 remain asynchronous. No public claim method waits for another region.
 
 Grave menus, location messages and deadline reminders label an unavailable world with its stored UUID and retain the coordinates. They do not resolve or load that world to render the message. Navigation and recovery still require an available world; a reminder never grants access or changes the deadline.
+
+When `DropItemsOnGraveRemoval` is enabled, creation at `GraveLimit` first reserves
+capacity for the old grave's asynchronous payout record. If that admission is
+unavailable, the new death keeps its normal drops and experience; an admin test
+creation is declined. No storage wait runs on the gameplay thread. One replacement
+may temporarily coexist with the old grave until its payout/removal completes.
+Further replacements for that owner are declined while creation is pending or
+failed/cancelled eviction leaves the owner above the limit. A durably queued old
+grave remains retiring under the existing logical-limit policy. Both
+records are retained on uncertain storage failure; resolve that failure rather than
+retrying a payout whose outcome is unknown. Other owners remain independent.

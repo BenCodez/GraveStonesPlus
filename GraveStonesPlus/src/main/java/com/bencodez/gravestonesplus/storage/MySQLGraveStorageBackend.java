@@ -99,7 +99,11 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
 	}
 
 	@Override
-	public void close() {
-		// keep pool for plugin lifetime; handled by AdvancedCore/plugin lifecycle
+	public synchronized void close() {
+        // This table creates its own SimpleAPI pool; AdvancedCore's user-storage
+        // cleanup does not own it. The manager calls us after its serial writes drain.
+        GravesMySQLTable closing = table;
+        table = null;
+        if (closing != null) closing.close();
 	}
 }

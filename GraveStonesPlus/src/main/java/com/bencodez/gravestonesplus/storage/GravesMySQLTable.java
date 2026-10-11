@@ -43,8 +43,27 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	public GravesMySQLTable(AdvancedCorePlugin plugin, String tableName, ConfigurationSection databaseSection) {
 		super(tableName, new MysqlConfigSpigot(databaseSection), plugin.getOptions().getDebug().isDebug(), true);
 		this.plugin = plugin;
-		init();
+		try { init(); }
+        catch (RuntimeException | Error failure) {
+            // A failed constructor cannot publish this table to the backend owner.
+            try { closeOwnedPool(); }
+            catch (RuntimeException | Error cleanup) { failure.addSuppressed(cleanup); }
+            throw failure;
+        }
 	}
+
+    @Override public void close() { closeOwnedPool(); }
+
+    private void closeOwnedPool() {
+        try { super.close(); }
+        catch (RuntimeException | Error failure) {
+            // Older SimpleAPI versions skip worker retirement if pool close throws.
+            // Keep this table safe without requiring a synchronized dependency upgrade.
+            try { if (mysql.getThreadPool() != null) mysql.getThreadPool().shutdown(); }
+            catch (RuntimeException | Error cleanup) { if (cleanup != failure) failure.addSuppressed(cleanup); }
+            throw failure;
+        }
+    }
 
 	@Override
 	public String getPrimaryKeyColumn() {

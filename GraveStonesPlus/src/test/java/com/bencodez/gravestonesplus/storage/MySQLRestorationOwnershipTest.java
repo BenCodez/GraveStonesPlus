@@ -156,6 +156,39 @@ class MySQLRestorationOwnershipTest {
             assertTrue(manager.loadMySQLForRestoration().isCompletedExceptionally());
         }
     }
+    @Test void shutdownDrainsAcceptedSqlBeforeClosingItsOwnPoolOnce() throws Exception {
+        try (var h = new Fixture()) {
+            when(h.plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
+            doCallRealMethod().when(h.backend).close();
+            doCallRealMethod().when(h.backend).upsertGrave(any(), anyBoolean());
+            var mysqlField = AbstractSqlTable.class.getDeclaredField("mysql"); mysqlField.setAccessible(true);
+            var mysql = (MySQL) mysqlField.get(h.table);
+            var writes = new java.util.concurrent.atomic.AtomicInteger();
+            doAnswer(call -> {
+                assertTrue(Thread.currentThread().getName().startsWith("gsp-feature-io"));
+                assertEquals(1, writes.get(), "accepted SQL must finish before pool retirement");
+                return null;
+            }).when(mysql).disconnect();
+            h.io.submit(() -> { writes.incrementAndGet(); return null; });
+            h.storage.close(); h.storage.close();
+            h.io.barrier().get(3, TimeUnit.SECONDS);
+            verify(mysql, times(1)).disconnect();
+            h.backend.close();
+            verify(mysql, times(1)).disconnect();
+            assertThrows(IllegalStateException.class, () -> h.backend.upsertGrave(recreated(h), false));
+        }
+    }
+    @Test void partialInitializationCloseIsSafeAndDoesNotCloseAnUnrelatedPool() throws Exception {
+        try (var h = new Fixture()) {
+            doCallRealMethod().when(h.backend).close();
+            var mysqlField = AbstractSqlTable.class.getDeclaredField("mysql"); mysqlField.setAccessible(true);
+            var mysql = (MySQL) mysqlField.get(h.table);
+            field(h.backend, MySQLGraveStorageBackend.class, "table", null);
+            h.backend.close(); h.backend.close();
+            verify(mysql, never()).disconnect();
+        }
+    }
+
     private static void field(Object target, Class<?> type, String name, Object value) throws Exception {
         var field = type.getDeclaredField(name); field.setAccessible(true); field.set(target, value);
     }

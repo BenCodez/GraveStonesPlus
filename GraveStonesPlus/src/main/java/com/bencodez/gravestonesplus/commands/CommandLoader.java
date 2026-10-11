@@ -32,6 +32,7 @@ import com.bencodez.simpleapi.command.TabCompleteHandler;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.graves.GraveCreationTask;
 import com.bencodez.gravestonesplus.graves.TrustedGraveAccess;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 
@@ -549,19 +550,9 @@ public class CommandLoader {
 			sender.sendMessage("Failed to find air block for grave");
 			return;
 		}
-
-		if (plugin.numberOfGraves(uuid) >= plugin.getConfigFile().getGraveLimit()) {
-			Grave oldest = plugin.getOldestGrave(uuid);
-			if (oldest != null) {
-				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-					oldest.dropAndRemoveForLimit(null);
-				} else oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
-			}
-		}
-
 		final Location emptyBlockFinal = emptyBlock;
 
-		plugin.getBukkitScheduler().runTaskLater(plugin, () -> {
+		GraveCreationTask creation = new GraveCreationTask(plugin, () -> {
 			Grave grave = new Grave(plugin,
 					new GravesConfig(uuid, name, emptyBlockFinal, itemsWithSlot, droppedExp, deathMessage,
 							System.currentTimeMillis(), false, 0, null, null,
@@ -576,7 +567,23 @@ public class CommandLoader {
 
 			sender.sendMessage("Generated grave for " + name + " at " + emptyBlockFinal.getBlockX() + ", "
 					+ emptyBlockFinal.getBlockY() + ", " + emptyBlockFinal.getBlockZ());
-		}, 2L, emptyBlockFinal);
+		});
+        creation.schedule(emptyBlockFinal);
+        boolean accepted = false;
+        try {
+            if (plugin.numberOfGraves(uuid) >= plugin.getConfigFile().getGraveLimit()) {
+                Grave oldest = plugin.getOldestGrave(uuid);
+                if (oldest != null) {
+                    if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
+                        oldest.dropAndRemoveForLimit(null);
+                    } else oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
+                }
+            }
+            creation.accept();
+            accepted = true;
+        } finally {
+            if (!accepted) creation.cancel();
+        }
 	}
 
 	private HashMap<Integer, ItemStack> generateRandomItems() {

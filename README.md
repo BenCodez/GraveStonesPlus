@@ -167,11 +167,12 @@ preserves native death drops and XP. A kept-item reservation cannot be paid by a
 respawn callback before those drops are consumed. If limit preflight throws, only
 that death's reservation is withdrawn; older and successor entitlements remain.
 Successful replacement still uses the existing oldest-grave removal policy.
-The death handler obtains a cancellable location task before removing an old grave
-or consuming drops. Rejected scheduling preserves the native drops and XP and
+Death and administrative test-grave creation obtain a cancellable location task
+before removing an old grave. The death handler also admits that task before
+consuming drops. Rejected scheduling preserves the native drops and XP and
 withdraws only the new kept-item reservation. A callback on a faster Folia region
-waits until the death handler accepts the capture, then creates once and cancels
-its task. Failed limit preflight also cancels that callback. The existing two-second
+waits until its caller accepts creation, then creates once and cancels its task.
+Failed limit preflight also cancels that callback in both entry points. The existing two-second
 creation delay is preserved; the task repeats only while capture is being prepared.
 This preflight change does not yet count unpublished/restoring graves toward the
 limit or add durable creation intents: failure or shutdown after death capture

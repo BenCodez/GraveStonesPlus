@@ -116,7 +116,17 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param broken whether grave is broken
 	 */
 	public void upsertGrave(GravesConfig grave, boolean broken) {
+        upsertGrave(grave, broken, false);
+    }
+
+    /** Internal backend acknowledgement; legacy direct callers retain logging-only failures. */
+    void upsertGraveChecked(GravesConfig grave, boolean broken) {
+        upsertGrave(grave, broken, true);
+    }
+
+    private void upsertGrave(GravesConfig grave, boolean broken, boolean checked) {
 		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
+            if (checked) throw new IllegalArgumentException("Grave write requires a complete identity");
 			return;
 		}
 
@@ -137,11 +147,13 @@ public class GravesMySQLTable extends AbstractSqlTable {
 
 		try (Connection conn = mysql.getConnectionManager().getConnection();
 				PreparedStatement ps = conn.prepareStatement(sql)) {
+            if (checked && !conn.getAutoCommit()) throw new SQLException("Grave write requires an auto-commit connection");
 
 			bindInsert(ps, grave, broken);
 			ps.executeUpdate();
 
 		} catch (SQLException e) {
+            if (checked) throw new IllegalStateException("Grave SQL write was not acknowledged", e);
 			debug(e);
 		}
 	}
@@ -154,7 +166,17 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param broken whether grave is broken
 	 */
 	public void updateExistingGrave(GravesConfig grave, boolean broken) {
+        updateExistingGrave(grave, broken, false);
+    }
+
+    /** Internal backend acknowledgement; legacy direct callers retain logging-only failures. */
+    void updateExistingGraveChecked(GravesConfig grave, boolean broken) {
+        updateExistingGrave(grave, broken, true);
+    }
+
+    private void updateExistingGrave(GravesConfig grave, boolean broken, boolean checked) {
 		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
+            if (checked) throw new IllegalArgumentException("Grave write requires a complete identity");
 			return;
 		}
 
@@ -178,6 +200,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 
 		try (Connection conn = mysql.getConnectionManager().getConnection();
 				PreparedStatement ps = conn.prepareStatement(sql)) {
+            if (checked && !conn.getAutoCommit()) throw new SQLException("Grave write requires an auto-commit connection");
 
 			ps.setInt(1, broken ? 1 : 0);
 			ps.setString(2, safeString(grave.getPlayerName()));
@@ -200,6 +223,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 			ps.executeUpdate();
 
 		} catch (SQLException e) {
+            if (checked) throw new IllegalStateException("Grave SQL write was not acknowledged", e);
 			debug(e);
 		}
 	}
@@ -264,7 +288,17 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param broken new broken flag
 	 */
 	public void setBroken(GravesConfig grave, boolean broken) {
+        setBroken(grave, broken, false);
+    }
+
+    /** Internal backend acknowledgement; legacy direct callers retain logging-only failures. */
+    void setBrokenChecked(GravesConfig grave, boolean broken) {
+        setBroken(grave, broken, true);
+    }
+
+    private void setBroken(GravesConfig grave, boolean broken, boolean checked) {
 		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
+            if (checked) throw new IllegalArgumentException("Grave write requires a complete identity");
 			return;
 		}
 
@@ -278,6 +312,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 
 		try (Connection conn = mysql.getConnectionManager().getConnection();
 				PreparedStatement ps = conn.prepareStatement(sql)) {
+            if (checked && !conn.getAutoCommit()) throw new SQLException("Grave write requires an auto-commit connection");
 
 			ps.setInt(1, broken ? 1 : 0);
 			ps.setString(2, grave.getUuid().toString());
@@ -290,6 +325,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 			ps.executeUpdate();
 
 		} catch (SQLException e) {
+            if (checked) throw new IllegalStateException("Grave SQL write was not acknowledged", e);
 			debug(e);
 		}
 	}
@@ -300,7 +336,17 @@ public class GravesMySQLTable extends AbstractSqlTable {
 	 * @param grave grave config
 	 */
 	public void deleteGrave(GravesConfig grave) {
+        deleteGrave(grave, false);
+    }
+
+    /** Internal backend acknowledgement; legacy direct callers retain logging-only failures. */
+    void deleteGraveChecked(GravesConfig grave) {
+        deleteGrave(grave, true);
+    }
+
+    private void deleteGrave(GravesConfig grave, boolean checked) {
 		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
+            if (checked) throw new IllegalArgumentException("Grave write requires a complete identity");
 			return;
 		}
 
@@ -314,6 +360,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 
 		try (Connection conn = mysql.getConnectionManager().getConnection();
 				PreparedStatement ps = conn.prepareStatement(sql)) {
+            if (checked && !conn.getAutoCommit()) throw new SQLException("Grave write requires an auto-commit connection");
 
 			ps.setString(1, grave.getUuid().toString());
 			ps.setString(2, grave.getWorldId().toString());
@@ -325,6 +372,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
 			ps.executeUpdate();
 
 		} catch (SQLException e) {
+            if (checked) throw new IllegalStateException("Grave SQL write was not acknowledged", e);
 			debug(e);
 		}
 	}

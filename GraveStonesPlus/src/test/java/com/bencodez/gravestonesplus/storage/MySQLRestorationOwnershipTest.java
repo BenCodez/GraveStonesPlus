@@ -16,6 +16,125 @@ import com.bencodez.simpleapi.scheduler.BukkitScheduler;
 import com.bencodez.simpleapi.sql.mysql.*;
 
 class MySQLRestorationOwnershipTest {
+    enum Write {
+        UPSERT, UPDATE, BROKEN, DELETE;
+        void backend(MySQLGraveStorageBackend backend, GravesConfig grave) {
+            switch (this) {
+                case UPSERT -> backend.upsertGrave(grave, false);
+                case UPDATE -> backend.updateExistingGrave(grave, true);
+                case BROKEN -> backend.setBroken(grave, true);
+                case DELETE -> backend.deleteGrave(grave);
+            }
+        }
+        void legacy(GravesMySQLTable table, GravesConfig grave) {
+            switch (this) {
+                case UPSERT -> table.upsertGrave(grave, false);
+                case UPDATE -> table.updateExistingGrave(grave, true);
+                case BROKEN -> table.setBroken(grave, true);
+                case DELETE -> table.deleteGrave(grave);
+            }
+        }
+    }
+    private static void checkedBackend(Fixture h) throws Exception {
+        recreation(h);
+        doNothing().when(h.table).debug(any(Throwable.class));
+        doCallRealMethod().when(h.backend).upsertGrave(any(), anyBoolean());
+        doCallRealMethod().when(h.backend).updateExistingGrave(any(), anyBoolean());
+        doCallRealMethod().when(h.backend).setBroken(any(), anyBoolean());
+        doCallRealMethod().when(h.backend).deleteGrave(any());
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(Write.class)
+    void checkedBackendReportsSqlFailureWithoutChangingLegacyTableContract(Write write) throws Exception {
+        try (var h = new Fixture()) {
+            checkedBackend(h);
+            when(h.statement.executeUpdate()).thenThrow(new SQLException("fixture write failure"));
+            var grave = recreated(h);
+            assertThrows(ExecutionException.class, () -> h.io.submit(() -> { write.backend(h.backend, grave); return true; }).get(3, TimeUnit.SECONDS));
+            assertTrue(h.io.submit(() -> { write.legacy(h.table, grave); return true; }).get(3, TimeUnit.SECONDS));
+            verify(h.table).debug(any(Throwable.class));
+            verify(h.statement, times(2)).close(); verify(h.connection, times(2)).close();
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(Write.class)
+    void checkedBackendRejectsUncommittedConnectionsBeforeExecuting(Write write) throws Exception {
+        try (var h = new Fixture()) {
+            checkedBackend(h); when(h.connection.getAutoCommit()).thenReturn(false);
+            assertThrows(ExecutionException.class, () -> h.io.submit(() -> { write.backend(h.backend, recreated(h)); return true; }).get(3, TimeUnit.SECONDS));
+            verify(h.statement, never()).executeUpdate();
+            verify(h.connection, never()).commit(); verify(h.connection, never()).rollback();
+            verify(h.statement).close(); verify(h.connection).close();
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(Write.class)
+    void idempotentZeroAffectedRowsStillAcknowledgesSuccessfulSql(Write write) throws Exception {
+        try (var h = new Fixture()) {
+            checkedBackend(h); when(h.statement.executeUpdate()).thenReturn(0);
+            assertTrue(h.io.submit(() -> { write.backend(h.backend, recreated(h)); return true; }).get(3, TimeUnit.SECONDS));
+            verify(h.statement).executeUpdate(); verify(h.statement).close(); verify(h.connection).close();
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(Write.class)
+    void statementCleanupFailureIsNotAcknowledgedAsAConfirmedWrite(Write write) throws Exception {
+        try (var h = new Fixture()) {
+            checkedBackend(h); when(h.statement.executeUpdate()).thenReturn(1);
+            doThrow(new SQLException("fixture cleanup failure")).when(h.statement).close();
+            assertThrows(ExecutionException.class, () -> h.io.submit(() -> { write.backend(h.backend, recreated(h)); return true; }).get(3, TimeUnit.SECONDS));
+            verify(h.statement).executeUpdate(); verify(h.statement).close(); verify(h.connection).close();
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.EnumSource(Write.class)
+    void uninitializedBackendCannotReportAWriteAsSuccessful(Write write) throws Exception {
+        try (var h = new Fixture()) {
+            checkedBackend(h); field(h.backend, MySQLGraveStorageBackend.class, "table", null);
+            assertThrows(IllegalStateException.class, () -> write.backend(h.backend, recreated(h)));
+            verify(h.connection, never()).prepareStatement(anyString());
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void failedIncrementalSqlWriteRetainsCapturedStateUntilConfirmedRetry(boolean update) throws Exception {
+        try (var h = new Fixture()) {
+            recreation(h);
+            doNothing().when(h.table).debug(any(Throwable.class));
+            doCallRealMethod().when(h.backend).upsertGrave(any(), anyBoolean());
+            doCallRealMethod().when(h.backend).updateExistingGrave(any(), anyBoolean());
+            var config = recreated(h);
+            var grave = mock(com.bencodez.gravestonesplus.graves.Grave.class);
+            when(grave.getGravesConfig()).thenReturn(config);
+            var owner = Thread.currentThread();
+            when(config.isDestroyed()).thenReturn(update);
+            when(h.plugin.activeGraveSnapshot()).thenAnswer(call -> {
+                assertSame(owner, Thread.currentThread(), "recovery must not rescan gameplay state on the disk worker");
+                return update ? List.of() : List.of(grave);
+            });
+            when(h.plugin.brokenGraveSnapshot()).thenReturn(update ? List.of(grave) : List.of());
+            when(h.statement.executeUpdate()).thenThrow(new SQLException("fixture unavailable"));
+
+            if (update) h.storage.updateExistingGrave(config, true);
+            else h.storage.upsertGrave(config, false);
+            h.io.barrier().get(3, TimeUnit.SECONDS);
+
+            var retained = GraveStorageManager.class.getDeclaredField("retained"); retained.setAccessible(true);
+            synchronized (h.storage) { assertNotNull(retained.get(h.storage), "failed SQL must retain the captured grave"); }
+            verify(h.statement, atLeastOnce()).close(); verify(h.connection, atLeastOnce()).close();
+            doReturn(1).when(h.statement).executeUpdate();
+            h.io.barrier().get(3, TimeUnit.SECONDS);
+            synchronized (h.storage) { assertNull(retained.get(h.storage), "confirmed same-identity recovery can retire the snapshot"); }
+            verify(h.statement, atLeast(2)).executeUpdate();
+            var replay = org.mockito.ArgumentCaptor.forClass(GravesConfig.class);
+            verify(h.table, atLeastOnce()).upsertGraveChecked(replay.capture(), eq(update));
+            for (var captured : replay.getAllValues()) {
+                assertEquals(config.getUuid(), captured.getUuid()); assertEquals(42L, captured.getTime());
+                assertEquals(update, captured.isDestroyed(), "recovery must not revive a broken transition");
+            }
+        }
+    }
+
     @Test void missingDatabaseFallsBackToFlatFileForAllLaterOperations() throws Exception {
         var active = mock(GravesConfig.class); var broken = mock(GravesConfig.class);
         try (var io = new FeatureIO(); var files = mockConstruction(GraveLocations.class, (file, context) -> {

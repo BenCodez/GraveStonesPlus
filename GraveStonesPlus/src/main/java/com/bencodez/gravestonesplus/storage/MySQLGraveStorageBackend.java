@@ -66,9 +66,8 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
 
 	@Override
 	public void upsertGrave(GravesConfig grave, boolean broken) {
-		if (table != null) {
-			table.upsertGrave(grave, broken);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.upsertGraveChecked(grave, broken);
 	}
 
     @Override public void saveDisplayIdentity(GravesConfig grave) {
@@ -83,23 +82,20 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
 
 	@Override
 	public void setBroken(GravesConfig grave, boolean broken) {
-		if (table != null) {
-			table.setBroken(grave, broken);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.setBrokenChecked(grave, broken);
 	}
 
 	@Override
 	public void updateExistingGrave(GravesConfig grave, boolean broken) {
-		if (table != null) {
-			table.updateExistingGrave(grave, broken);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.updateExistingGraveChecked(grave, broken);
 	}
 
 	@Override
 	public void deleteGrave(GravesConfig grave) {
-		if (table != null) {
-			table.deleteGrave(grave);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.deleteGraveChecked(grave);
 	}
 
 	@Override

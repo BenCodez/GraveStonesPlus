@@ -91,13 +91,17 @@ class PreparedStorageSnapshotTest {
             } finally { release.countDown(); }
         }
     }
-    @Test void encodingFailureRemainsAcknowledgedAndRetainedThroughWorkerRecovery() throws Exception {
+    @Test void failureOfBothBinaryAndLegacyEncodingRemainsRetainedThroughWorkerRecovery() throws Exception {
         var plugin = mock(GraveStonesPlus.class);
         try (var io = new FeatureIO(); var encoding = mockStatic(InventorySerializer.class)) {
             encoding.when(() -> InventorySerializer.encode(any())).thenThrow(new java.io.IOException("fixture"));
             when(plugin.getFeatureIO()).thenReturn(io);
             when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
-            var grave = mock(Grave.class); when(grave.getGravesConfig()).thenReturn(source());
+            var unsupported = source();
+            var item = mock(ItemStack.class); when(item.clone()).thenReturn(item);
+            when(item.serialize()).thenReturn(Map.of("unsupported", new Object()));
+            unsupported.getItems().put(0, item);
+            var grave = mock(Grave.class); when(grave.getGravesConfig()).thenReturn(unsupported);
             when(plugin.activeGraveSnapshot()).thenReturn(List.of(grave));
             when(plugin.brokenGraveSnapshot()).thenReturn(List.of());
             var backend = mock(GraveStorageBackend.class);

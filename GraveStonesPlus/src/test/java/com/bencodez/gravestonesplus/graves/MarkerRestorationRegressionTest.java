@@ -14,6 +14,7 @@ import org.junit.jupiter.api.io.TempDir;
 import com.bencodez.gravestonesplus.storage.*;
 import com.bencodez.gravestonesplus.listeners.GraveCleanupListener;
 import com.bencodez.gravestonesplus.listeners.GraveClaimListener;
+import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.listeners.GraveBlockProtectionListener;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
@@ -37,6 +38,48 @@ class MarkerRestorationRegressionTest {
             when(chunkData.get(any(),eq(PersistentDataType.STRING))).thenAnswer(i->values.get(i.getArgument(0)));
             doAnswer(i->{values.put(i.getArgument(0),i.getArgument(2));return null;}).when(chunkData).set(any(),eq(PersistentDataType.STRING),anyString());
             doAnswer(i->{values.remove(i.getArgument(0));return null;}).when(chunkData).remove(any());
+        }
+    }
+    @Test void paidClaimRetainsCleanupWhenRegionHandoffIsRejected() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h);
+            GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity());
+            var disk = new FeaturePersistenceTest.Disk();
+            var state = new DurableFeatureState(h.io, disk, 8192);
+            var cleanup = cleanup(h, state);
+            try {
+            doThrow(new IllegalStateException("region retired")).when(h.scheduler)
+                    .runTask(eq(h.plugin), any(Runnable.class), any(Location.class));
+            h.grave.claim(h.owner); h.drain();
+            verify(h.ownerInventory).setItem(4, h.cloned); verify(h.owner).giveExp(17);
+            assertTrue(h.grave.isRemove()); assertTrue(h.grave.getGravesConfig().isDestroyed());
+            assertTrue(h.ledger.isBlocked(h.identity()));
+            assertEquals("PLAYER_HEAD", state.snapshot().get(h.identity()), "paid marker cleanup must survive scheduler rejection");
+            assertEquals("PLAYER_HEAD", disk.values.get(h.identity()));
+            verify(marker.block, never()).setType(any());
+            // A repeated player request cannot repeat payout while cleanup is waiting.
+            h.grave.claim(h.owner); h.drain();
+            verify(h.owner, times(1)).giveExp(17); verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            doAnswer(call -> { h.regionWork.add(call.getArgument(1)); return null; }).when(h.scheduler)
+                    .runTask(eq(h.plugin), any(Runnable.class), any(Location.class));
+            cleanup.onChunk(h.world, 0, 0); h.regionWork.remove().run(); FeaturePersistenceTest.await(h.io.barrier());
+            verify(marker.block).setType(Material.AIR); assertTrue(state.snapshot().isEmpty());
+            } finally { cleanup.retire(); }
+        }
+    }
+    @Test void committedBukkitRemovalRetainsCleanupWhenRegionHandoffIsRejected() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var state = new DurableFeatureState(h.io, new FeaturePersistenceTest.Disk(), 8192);
+            var cleanup = cleanup(h, state);
+            try {
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true); when(h.folia.isFolia()).thenReturn(false);
+            doThrow(new IllegalStateException("region retired")).when(h.scheduler)
+                    .runTask(eq(h.plugin), any(Runnable.class), any(Location.class));
+            assertDoesNotThrow(() -> h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE));
+            FeaturePersistenceTest.await(h.io.barrier());
+            assertTrue(h.grave.isRemove()); assertEquals("PLAYER_HEAD", state.snapshot().get(h.identity()));
+            verify(h.owner, never()).giveExp(anyInt());
+            } finally { cleanup.retire(); }
         }
     }
     private GraveRestoration restoration(GraveActionsTest.Harness h, GravesConfig record,

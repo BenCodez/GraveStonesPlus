@@ -541,7 +541,7 @@ public class Grave {
         // returning. Folia's global thread is not the grave region owner.
         if (Bukkit.isPrimaryThread() && !plugin.getBukkitScheduler().getFoliaLib().isFolia()) {
             if (removeState(reason, () -> true))
-                plugin.getBukkitScheduler().runTask(plugin, this::cleanupMarker, gravesConfig.getLocation());
+                scheduleMarkerCleanup();
             return;
         }
         plugin.getBukkitScheduler().runTask(plugin, () -> removeOwned(reason), gravesConfig.getLocation());
@@ -1494,12 +1494,24 @@ public class Grave {
             plugin.removeGrave(this);
             plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
             plugin.getGraveNavigation().invalidate(identity); removeTimer();
-            plugin.getBukkitScheduler().runTask(plugin, this::cleanupMarker, gravesConfig.getLocation());
+            scheduleMarkerCleanup();
             if (isOwner(player) || plugin.getConfigFile().isBreakOtherGravesSendMessage()) player.sendMessage(MessageAPI.colorize(isOwner(player)
                     ? plugin.getConfigFile().getFormatGraveBroke()
                     : MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBrokeOther(), "player", gravesConfig.getPlayerName())));
             if (displaced) player.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatItemsNotInGrave()));
         } finally { releaseClaim(); }
+    }
+    /** Removal is committed already; region rejection must not abandon its admitted journal slot. */
+    private void scheduleMarkerCleanup() {
+        try { plugin.getBukkitScheduler().runTask(plugin, this::cleanupMarker, gravesConfig.getLocation()); }
+        catch (RuntimeException rejected) {
+            // Persist only the captured intent here. World/entity cleanup remains region-owned.
+            synchronized (this) {
+                GraveMarkerCleanup.Ticket ticket = cleanupTicket;
+                if (ticket != null) { cleanupTicket = null; ticket.commit(); }
+            }
+            plugin.getLogger().warning("Grave removal completed; marker cleanup is retained while its region scheduler is unavailable.");
+        }
     }
     private synchronized boolean prepareCleanup() {
         GraveMarkerCleanup cleanup = plugin.getMarkerCleanup();

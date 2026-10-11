@@ -28,14 +28,23 @@ public class GravesConfig implements ConfigurationSerializable {
     // Set only on detached owner-prepared storage snapshots. Never serialized as a new field.
     private transient String preparedItems;
     private transient RuntimeException preparationFailure;
+    private transient RuntimeException binaryPreparationFailure;
+    private transient Map<Integer, Object> preparedLegacyItems;
 
     void prepareItemsForStorage() {
         try { preparedItems = InventorySerializer.encode(items); }
-        catch (IOException failure) { preparationFailure = new java.io.UncheckedIOException("Could not prepare grave items", failure); }
+        catch (IOException failure) {
+            binaryPreparationFailure = new java.io.UncheckedIOException("Could not prepare grave items", failure);
+            try { preparedLegacyItems = PreparedLegacyItems.capture(items); }
+            catch (RuntimeException legacyFailure) {
+                binaryPreparationFailure.addSuppressed(legacyFailure); preparationFailure = binaryPreparationFailure;
+            }
+        }
         catch (RuntimeException failure) { preparationFailure = failure; }
     }
 
     String encodedItemsForStorage() {
+        if (binaryPreparationFailure != null) throw binaryPreparationFailure;
         if (preparationFailure != null) throw preparationFailure;
         if (preparedItems != null) return preparedItems;
         // Compatibility for direct owner-context users of the legacy backend API.
@@ -45,7 +54,7 @@ public class GravesConfig implements ConfigurationSerializable {
 
     Map<String, Object> preparedRecordForStorage() {
         if (preparationFailure != null) throw preparationFailure;
-        if (preparedItems == null) throw new IllegalStateException("Grave items were not owner-prepared");
+        if (preparedItems == null && preparedLegacyItems == null) throw new IllegalStateException("Grave items were not owner-prepared");
         Map<String, Object> record = new java.util.LinkedHashMap<>(serialize());
         record.put("==", GravesConfig.class.getName());
         return record;
@@ -160,7 +169,11 @@ public class GravesConfig implements ConfigurationSerializable {
 		// New: store the display type used for this grave
 		serialized.put("GraveDisplayType", graveDisplayType);
 
-		// New primary format
+		// Prepared fallback contains no Bukkit objects; disk workers only emit plain YAML values.
+        if (preparedLegacyItems != null) {
+            serialized.put("Items", preparedLegacyItems); return serialized;
+        }
+        // New primary format
 		try {
 			serialized.put("ItemsEncoded", preparedItems != null ? preparedItems : InventorySerializer.encode(items));
 		} catch (IOException e) {

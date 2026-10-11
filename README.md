@@ -194,3 +194,18 @@ repair updates only metadata for the exact active row, preserving contents and X
 Login summaries defer while reminder/access/claim stores or grave record loading
 are unavailable, and retry on the existing periodic player-owner pass. Disconnect
 and listener shutdown discard the pending login request.
+
+Detached flat-file snapshots preserve the existing `Items` YAML fallback when
+binary inventory encoding fails. Item and nested metadata serialization happen
+on the owning thread; disk workers receive plain captured values. Mutating live
+items later does not change that snapshot. Cyclic, unsupported, or more than
+64-level nested fallback data fails explicitly and retains the failed snapshot
+for reconciliation instead of writing an empty inventory. MySQL continues to
+require binary inventory encoding and reports that failure rather than storing
+YAML in its existing item column. No grave-file migration is required.
+
+After an acknowledged claim or removal, a rejected marker-region handoff commits
+the already-reserved cleanup journal intent. Loaded-chunk cleanup can retry
+without repeating item/XP payout or accessing the marker from the player's
+thread. This retains the existing conservative behavior for untagged markers
+and markers replaced by another grave.

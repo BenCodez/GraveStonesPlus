@@ -12,6 +12,91 @@ import org.junit.jupiter.api.Test;
 
 /** Exercises the real marker scheduler, including actors in a different region. */
 class GraveRegionOwnershipTest {
+    @Test void remoteClaimCallbacksBelongToTheGraveRegion() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            when(h.folia.isFolia()).thenReturn(true);
+            var graveOwner = new AtomicBoolean();
+            doAnswer(call -> {
+                assertTrue(graveOwner.get(), "claim callbacks must run on the grave owner, not the distant player owner");
+                if (call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveClaimEvent event)
+                    event.setCancelled(true);
+                return null;
+            }).when(h.events).callEvent(any());
+            h.grave.claim(h.owner);
+            assertEquals(1, h.entityWork.size());
+            h.entityWork.remove().run();
+            verify(h.events, never()).callEvent(any());
+            assertEquals(1, h.regionWork.size());
+            graveOwner.set(true); h.regionWork.remove().run(); graveOwner.set(false);
+            verify(h.events).callEvent(any(com.bencodez.gravestonesplus.events.GraveClaimEvent.class));
+            verify(h.ownerInventory, never()).setItem(anyInt(), any());
+            verify(h.owner, never()).giveExp(anyInt());
+        }
+    }
+    @Test void bukkitClaimCallbacksRemainSynchronousOnPrimaryThread() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.bukkit.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(true);
+            doAnswer(call -> { if (call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveClaimEvent event)
+                event.setCancelled(true); return null;
+            }).when(h.events).callEvent(any());
+            h.grave.claim(h.owner);
+            verify(h.events).callEvent(any(com.bencodez.gravestonesplus.events.GraveClaimEvent.class));
+            assertTrue(h.entityWork.isEmpty()); assertTrue(h.regionWork.isEmpty());
+            assertFalse(h.ledger.isBlocked(h.identity()));
+        }
+    }
+    @Test void foliaClaimCapturesCallbackChangesAndAdmitsOnlyOnePayout() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            when(h.folia.isFolia()).thenReturn(true);
+            var actor = new AtomicBoolean(); var marker = new AtomicBoolean();
+            when(h.owner.isOnline()).thenAnswer(call -> { assertTrue(actor.get()); assertFalse(marker.get()); return true; });
+            when(h.stored.clone()).thenAnswer(call -> { assertTrue(marker.get()); return h.cloned; });
+            doAnswer(call -> {
+                assertTrue(marker.get()); assertFalse(actor.get());
+                if (call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveClaimEvent) {
+                    var exp = com.bencodez.gravestonesplus.storage.GravesConfig.class.getDeclaredField("exp");
+                    exp.setAccessible(true); exp.setInt(h.grave.getGravesConfig(), 31);
+                }
+                return null;
+            }).when(h.events).callEvent(any());
+            h.grave.claim(h.owner); h.grave.claim(h.owner);
+            actor.set(true); while (!h.entityWork.isEmpty()) h.entityWork.remove().run(); actor.set(false);
+            assertEquals(2, h.regionWork.size());
+            marker.set(true); while (!h.regionWork.isEmpty()) h.regionWork.remove().run(); marker.set(false);
+            verify(h.events, times(1)).callEvent(any(com.bencodez.gravestonesplus.events.GraveClaimEvent.class));
+            assertEquals(1, h.entityWork.size());
+            actor.set(true); h.entityWork.remove().run(); actor.set(false);
+            FeaturePersistenceTest.await(h.io.barrier());
+            actor.set(true); while (!h.entityWork.isEmpty()) h.entityWork.remove().run(); actor.set(false);
+            FeaturePersistenceTest.await(h.io.barrier());
+            verify(h.owner, times(1)).giveExp(31);
+            verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+        }
+    }
+    @Test void rejectedClaimRegionAdmissionLeavesTheGraveClaimable() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            when(h.folia.isFolia()).thenReturn(true);
+            doThrow(new java.util.concurrent.RejectedExecutionException("fixture retired region"))
+                .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class), any(Location.class));
+            h.grave.claim(h.owner); h.entityWork.remove().run();
+            verify(h.events, never()).callEvent(any()); assertFalse(h.ledger.isBlocked(h.identity()));
+            var inProgress = Grave.class.getDeclaredField("claimInProgress"); inProgress.setAccessible(true);
+            assertFalse(inProgress.getBoolean(h.grave)); verify(h.owner, never()).giveExp(anyInt());
+        }
+    }
+    @Test void retiredActorAfterClaimCallbacksReleasesUnreservedAdmission() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            when(h.folia.isFolia()).thenReturn(true);
+            doAnswer(call -> { ((Runnable) call.getArgument(2)).run();
+                return java.util.concurrent.CompletableFuture.completedFuture(
+                    com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS);
+            }).when(h.platform).runAtEntityWithFallback(any(org.bukkit.entity.Entity.class), any(), any(Runnable.class));
+            h.grave.claim(h.owner); h.entityWork.remove().run(); h.regionWork.remove().run();
+            assertFalse(h.ledger.isBlocked(h.identity()));
+            var inProgress = Grave.class.getDeclaredField("claimInProgress"); inProgress.setAccessible(true);
+            assertFalse(inProgress.getBoolean(h.grave)); verify(h.owner, never()).giveExp(anyInt());
+        }
+    }
     @Test void foliaChunkLoadUsesRegionTicketWithoutGlobalForceLoadedState() throws Exception {
         for (boolean deferred : List.of(false, true)) {
             try (var h = new GraveActionsTest.Harness()) {

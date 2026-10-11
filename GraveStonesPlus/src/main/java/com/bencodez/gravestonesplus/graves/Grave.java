@@ -1369,11 +1369,11 @@ public class Grave {
 
     public void claim(final Player player) {
         if (player == null) return;
-        plugin.getBukkitScheduler().runTask(plugin, () -> beginClaim(player, null, false), player);
+        dispatchClaim(player, null, false);
     }
     /** Menu/command recovery retains its permission and nearby requirement through payout. */
     public void claimNearby(final Player player) {
-        if (player != null) plugin.getBukkitScheduler().runTask(plugin, () -> beginClaim(player, null, true), player);
+        if (player != null) dispatchClaim(player, null, true);
     }
     private boolean nearbyClaimAllowed(Player player) {
         if (!player.hasPermission("GraveStonesPlus.ClaimGrave")) return false;
@@ -1381,25 +1381,46 @@ public class Grave {
         return distance >= 0 && distance < plugin.getConfigFile().getGraveClaimDistance();
     }
     public void claimAfterTimedBreak(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof) {
-        if (player != null && proof != null) plugin.getBukkitScheduler().runTask(plugin, () -> beginClaim(player, proof, false), player);
+        if (player != null && proof != null) dispatchClaim(player, proof, false);
     }
     private boolean claimAllowed(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof) {
         return plugin.canRecover(this, player) || legacyClaimAllowed(player) || (proof != null && proof.allows(player, this));
     }
+    private void dispatchClaim(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof, boolean nearby) {
+        Runnable admission = () -> beginClaim(player, proof, nearby);
+        // Preserve the synchronous cancellable callback boundary for callers
+        // already on ordinary Bukkit's owner thread.
+        if (!plugin.getBukkitScheduler().getFoliaLib().isFolia() && Bukkit.isPrimaryThread()) admission.run();
+        else plugin.getBukkitScheduler().runTask(plugin, admission, player);
+    }
     private void beginClaim(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof, boolean nearby) {
-        final String identity = GraveIdentity.of(gravesConfig);
+        if (!player.isOnline() || !plugin.isEnabled() || !plugin.isLiveGrave(this)
+                || !claimAllowed(player, proof) || nearby && !nearbyClaimAllowed(player)) return;
+        String identity = GraveIdentity.of(gravesConfig);
+        if (plugin.getGraveClaimLedger().isBlocked(identity)) {
+            player.sendMessage("\u00a7cThis grave has a pending or completed recovery record; it cannot be paid again."); return;
+        }
+        boolean owner = isOwner(player);
+        java.util.UUID recipient = player.getUniqueId();
+        Runnable capture = () -> captureClaim(player, proof, nearby, identity, owner, recipient);
+        if (!plugin.getBukkitScheduler().getFoliaLib().isFolia()) capture.run();
+        else try { plugin.getBukkitScheduler().runTask(plugin, capture, gravesConfig.getLocation()); }
+        catch (RuntimeException rejected) {
+            plugin.getLogger().warning("Grave claim region admission failed; no reservation or payout was made.");
+        }
+    }
+    private void captureClaim(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof,
+            boolean nearby, String identity, boolean owner, java.util.UUID recipient) {
         synchronized (this) {
-            if (claimInProgress || !player.isOnline() || !plugin.isLiveGrave(this)
-                    || (!claimAllowed(player, proof) || (nearby && !nearbyClaimAllowed(player)))) return;
-            if (plugin.getGraveClaimLedger().isBlocked(identity)) {
-                player.sendMessage("\u00a7cThis grave has a pending or completed recovery record; it cannot be paid again."); return;
-            }
+            if (claimInProgress || !plugin.isEnabled() || !plugin.isLiveGrave(this)
+                    || !java.util.Objects.equals(identity, GraveIdentity.of(gravesConfig))
+                    || plugin.getGraveClaimLedger().isBlocked(identity)) return;
             if (!prepareCleanup()) return;
             claimInProgress = true;
         }
         // Events are part of the admission boundary: handlers may amend the live
         // grave contents or XP, so capture only after both callbacks have run.
-        GraveClaimEvent claimEvent = new GraveClaimEvent(this, player, isOwner(player));
+        GraveClaimEvent claimEvent = new GraveClaimEvent(this, player, owner);
         GraveRemoveEvent removeEvent = new GraveRemoveEvent(this, GraveRemoveReason.CLAIMED);
         try {
             Bukkit.getPluginManager().callEvent(claimEvent);
@@ -1409,8 +1430,8 @@ public class Grave {
             plugin.getLogger().warning("Grave claim callback failed; claim remains available without payout.");
             return;
         }
-        if (claimEvent.isCancelled() || removeEvent.isCancelled() || !player.isOnline()
-                || !plugin.isEnabled() || !plugin.isLiveGrave(this) || (!claimAllowed(player, proof) || (nearby && !nearbyClaimAllowed(player)))) {
+        if (claimEvent.isCancelled() || removeEvent.isCancelled()
+                || !plugin.isEnabled() || !plugin.isLiveGrave(this)) {
             releaseClaim(); return;
         }
         final com.bencodez.gravestonesplus.storage.GravesConfig captured;
@@ -1420,9 +1441,30 @@ public class Grave {
             evidence = GraveClaimLedger.evidence(captured);
         } catch (RuntimeException invalid) {
             releaseClaim();
-            player.sendMessage("\u00a7cGrave recovery evidence could not be captured. No payout was made."); return;
+            plugin.getLogger().warning("Grave recovery evidence could not be captured; no payout was made."); return;
         }
-        plugin.getGraveClaimLedger().reserve(identity, player.getUniqueId(), evidence).whenComplete((saved, failure) -> {
+        Runnable reserve = () -> {
+            if (!player.isOnline() || !plugin.isEnabled() || !plugin.isLiveGrave(this)
+                    || !claimAllowed(player, proof) || nearby && !nearbyClaimAllowed(player)) { releaseClaim(); return; }
+            reserveClaim(player, proof, nearby, identity, recipient, captured, evidence);
+        };
+        if (!plugin.getBukkitScheduler().getFoliaLib().isFolia()) reserve.run();
+        else {
+            var started = new java.util.concurrent.atomic.AtomicBoolean();
+            Runnable retired = () -> { if (started.compareAndSet(false, true)) releaseClaim(); };
+            try {
+                plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtEntityWithFallback(player, task -> {
+                    if (started.compareAndSet(false, true)) reserve.run();
+                }, retired).whenComplete((result, failure) -> {
+                    if (failure != null || result != com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS) retired.run();
+                });
+            } catch (RuntimeException rejected) { retired.run(); }
+        }
+    }
+    private void reserveClaim(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof,
+            boolean nearby, String identity, java.util.UUID recipient,
+            com.bencodez.gravestonesplus.storage.GravesConfig captured, String evidence) {
+        plugin.getGraveClaimLedger().reserve(identity, recipient, evidence).whenComplete((saved, failure) -> {
             java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
             Runnable retired = () -> {
                 if (started.compareAndSet(false, true)) {

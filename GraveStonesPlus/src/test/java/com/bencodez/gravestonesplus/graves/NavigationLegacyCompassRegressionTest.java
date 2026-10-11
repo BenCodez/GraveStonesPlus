@@ -30,26 +30,55 @@ class NavigationLegacyCompassRegressionTest {
             assertFalse(h.active.contains(h.grave));
             assertTrue(h.access.list(h.identity()).isEmpty(), "removal still revokes helper grants");
             assertNull(h.navigation.target(h.owner));
-            verify(h.scheduler).runTask(eq(h.plugin), any(Runnable.class), eq(h.helper));
+            verify(h.scheduler, never()).runTask(eq(h.plugin), any(Runnable.class), any(org.bukkit.entity.Entity.class));
             verify(h.plugin).removeGrave(h.grave);
         }
     }
 
-    @org.junit.jupiter.params.ParameterizedTest
-    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
-    void refreshFailureCannotAbortIdentityInvalidation(boolean inline) throws Exception {
+    @Test void invalidationDoesNotFanOutOwnerTasks() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             assertTrue(h.navigation.select(h.owner, h.grave));
             h.bukkit.when(org.bukkit.Bukkit::getOnlinePlayers).thenReturn(java.util.List.of(h.owner, h.helper));
-            when(h.ownerInventory.getContents()).thenThrow(new IllegalStateException("retired inventory"));
-            if (inline) doAnswer(call -> { ((Runnable) call.getArgument(1)).run(); return null; })
-                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class), any(org.bukkit.entity.Entity.class));
 
             assertDoesNotThrow(() -> h.navigation.invalidate(h.identity()));
-            if (!inline) while (!h.entityWork.isEmpty()) assertDoesNotThrow(h.entityWork.remove()::run);
 
             assertNull(h.navigation.target(h.owner));
-            verify(h.helperInventory).getContents();
+            verify(h.scheduler, never()).runTask(eq(h.plugin), any(Runnable.class), any(org.bukkit.entity.Entity.class));
+        }
+    }
+
+    @Test void repeatedInvalidationDoesNotIncreaseRefreshFanout() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.navigation.invalidate(h.identity());
+            h.navigation.invalidate(h.identity());
+            verify(h.scheduler, never()).runTask(eq(h.plugin), any(Runnable.class), any(org.bukkit.entity.Entity.class));
+        }
+    }
+
+    @Test void boundedLoginRefreshClearsRemovedCompassEvenWhenReminderStoreFailed() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            assertTrue(h.navigation.select(h.owner, h.grave));
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), h.grave.getGravesConfig().getLocation());
+            when(h.ownerInventory.getContents()).thenReturn(new ItemStack[] { compass.item });
+            var disk = new FeaturePersistenceTest.Disk();
+            var state = new DurableFeatureState(h.io, disk, 8192);
+            var reminders = new GraveReminderStore(state);
+            assertTrue(FeaturePersistenceTest.await(reminders.loaded()));
+            disk.fail = true;
+            assertFalse(FeaturePersistenceTest.await(state.update(next -> { next.put("fixture", "value"); return true; })));
+            assertFalse(reminders.isReady());
+            when(h.plugin.getGraveReminderStore()).thenReturn(reminders);
+            var listener = new com.bencodez.gravestonesplus.listeners.GraveReminderListener(h.plugin);
+            listener.start();
+            h.active.clear();
+            h.navigation.invalidate(h.identity());
+            verify(compass.item, never()).setItemMeta(any());
+            listener.onJoin(new org.bukkit.event.player.PlayerJoinEvent(h.owner, ""));
+            h.drain();
+            verify(compass.meta).setLodestone(null);
+            verify(compass.item).setItemMeta(compass.meta);
+            verify(h.owner, never()).sendMessage(anyString());
+            listener.stop();
         }
     }
 

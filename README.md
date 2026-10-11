@@ -31,6 +31,8 @@ Optional `Reminders.ProtectionMinutes` and `Reminders.ExpiryMinutes` default to 
 
 Login sends one useful summary; eligible protection/expiry warnings are combined in that message. Periodic checks batch at most 16 online players per five-second pass, 256 owner graves per player pass (rotating through larger collections), and 64 new deadline warnings per summary. Delivered warnings are suppressed by recipient/grave/kind/deadline across restart. Players are checked and messaged on their entity owner; offline players are never marked. Publication capacity is reserved before sending, and suppression is persisted only after send acceptance. If persistence fails after delivery, local repeats are suppressed and storage warnings are logged; a restart can repeat that message because chat delivery and disk persistence are not atomic.
 
+Grave removal clears the selected navigation identity immediately; compass inventory cleanup is handled by the same bounded periodic or login refresh, so bursts of removals cannot fan out one owner task per grave.
+
 ## Held-item inspection
 
 `/gravestonesplus inspectitem` requires `GraveStonesPlus.InspectItem` (default false). It clones the held item and calls the same ordered evaluator as death capture: Ignore NBT, Slimefun soulbound, player-placeholder-expanded exact lore, Keep NBT, Grave NBT, Curse of Vanishing, then the default grave rule. It lists available NBT matches and metadata; NBT stages stay inactive when NBTAPI is absent. It describes later recovery/drop chance without sampling RNG. It does not mutate inventory, item metadata, drops, experience or a death event.

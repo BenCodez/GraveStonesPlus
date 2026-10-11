@@ -68,9 +68,11 @@ public final class GraveReminderListener implements Listener {
     }
     public void checkPlayer(Player player) {
         if (!running || !player.isOnline()) return;
+        // Navigation has its own grave/access readiness guards. A failed
+        // reminder file must not prevent bounded cleanup of stale compasses.
+        plugin.getGraveNavigation().refresh(player);
         if (!readyForLoginSummary()) return;
         boolean loginSummary = graveCursors.getOrDefault(player.getUniqueId(), 0) == LOGIN_PENDING;
-        plugin.getGraveNavigation().refresh(player);
         long now = System.currentTimeMillis();
         List<GraveReminderStore.Notice> notices = new ArrayList<>();
         List<Grave> owned = plugin.getGraves(player);

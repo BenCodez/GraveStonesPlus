@@ -552,12 +552,9 @@ public class CommandLoader {
 		}
 		final Location emptyBlockFinal = emptyBlock;
 
-		GraveCreationTask creation = new GraveCreationTask(plugin, () -> {
-			Grave grave = new Grave(plugin,
-					new GravesConfig(uuid, name, emptyBlockFinal, itemsWithSlot, droppedExp, deathMessage,
-							System.currentTimeMillis(), false, 0, null, null,
-							plugin.getConfigFile().getGraveDisplayTypeEnum().name()));
-
+        GravesConfig record = new GravesConfig(uuid, name, emptyBlockFinal, itemsWithSlot, droppedExp, deathMessage,
+                System.currentTimeMillis(), false, 0, null, null, plugin.getConfigFile().getGraveDisplayTypeEnum().name());
+        GraveCreationTask creation = new GraveCreationTask(plugin, record, grave -> {
 			grave.loadChunk(false);
 			grave.createGrave();
 			grave.createHologram();
@@ -571,8 +568,8 @@ public class CommandLoader {
         creation.schedule(emptyBlockFinal);
         boolean accepted = false;
         try {
-            if (plugin.numberOfGraves(uuid) >= plugin.getConfigFile().getGraveLimit()) {
-                Grave oldest = plugin.getOldestGrave(uuid);
+            if (creation.priorGraves() >= plugin.getConfigFile().getGraveLimit()) {
+                Grave oldest = creation.replacement();
                 if (oldest != null) {
                     if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
                         oldest.dropAndRemoveForLimit(null);

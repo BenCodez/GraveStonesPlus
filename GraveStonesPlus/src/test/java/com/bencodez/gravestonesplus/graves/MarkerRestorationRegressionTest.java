@@ -135,6 +135,136 @@ class MarkerRestorationRegressionTest {
             assertTrue(owners.isEmpty()); restoration.retire();
         }
     }
+    @Test void pendingStoredActiveGraveStillCountsTowardTheOwnerLimit() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var held = new CompletableFuture<GraveClaimLedger.Restoration>();
+            var restoration = restoration(h, h.grave.getGravesConfig(), held, held);
+            when(h.plugin.numberOfGraves(any())).thenCallRealMethod();
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            try { restoration.start(); }
+            finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+            try {
+                assertTrue(h.active.isEmpty(), "The held archive decision must withhold gameplay admission");
+                assertEquals(1, h.plugin.numberOfGraves(h.grave.getGravesConfig().getUuid()),
+                        "Stored active graves must not disappear from limit accounting during restoration");
+                verify(h.world, never()).getChunkAt(anyInt(), anyInt());
+                verify(h.events, never()).callEvent(any());
+            } finally { restoration.retire(); }
+        }
+    }
+
+    @Test void limitAccountingDeduplicatesPublishedIdentityWithoutAdmittingPendingClaims() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var held = new CompletableFuture<GraveClaimLedger.Restoration>();
+            var restoration = restoration(h, h.grave.getGravesConfig(), held, held);
+            when(h.plugin.numberOfGraves(any())).thenCallRealMethod();
+            when(h.plugin.getOldestGrave(any())).thenCallRealMethod();
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            try { restoration.start(); } finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+            try {
+                Grave pending = h.plugin.getOldestGrave(h.owner.getUniqueId());
+                assertNotNull(pending); assertSame(h.grave.getGravesConfig(), pending.getGravesConfig());
+                assertFalse(h.plugin.isLiveGrave(pending));
+                pending.claim(h.owner); h.drain();
+                verify(h.owner, never()).giveExp(anyInt()); verify(h.ownerInventory, never()).setItem(anyInt(), any());
+                h.active.add(pending);
+                assertEquals(1, h.plugin.numberOfGraves(h.owner.getUniqueId()));
+                assertEquals(0, h.plugin.numberOfGraves(h.helper.getUniqueId()));
+            } finally { restoration.retire(); }
+        }
+    }
+    @Test void brokenRecordsDoNotReserveActiveLimitCapacity() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.active.clear(); when(h.plugin.numberOfGraves(any())).thenCallRealMethod();
+            var backend = mock(GraveStorageManager.class);
+            when(backend.loadGraves()).thenReturn(List.of());
+            // The legacy broken section, not merely the destroyed flag, defines history.
+            when(backend.loadBrokenGraves()).thenReturn(List.of(h.grave.getGravesConfig()));
+            var ledger = mock(GraveClaimLedger.class);
+            when(ledger.restoration(any())).thenReturn(new CompletableFuture<>());
+            when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
+            var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            try { restoration.start(); } finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+            try { assertEquals(0, h.plugin.numberOfGraves(h.owner.getUniqueId())); }
+            finally { restoration.retire(); }
+        }
+    }
+    @Test void pendingLimitAdmissionRejectsDifferentWrapperAndRetiredRestoration() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var held = new CompletableFuture<GraveClaimLedger.Restoration>();
+            var restoration = restoration(h, h.grave.getGravesConfig(), held, held);
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            try { restoration.start(); } finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+            try {
+                Grave pending = restoration.pendingActiveForLimits().getFirst();
+                assertTrue(restoration.requestLimitRemoval(pending, true));
+                assertTrue(restoration.hasPendingLimitRemoval(pending));
+                Grave impostor = new Grave(h.plugin, pending.getGravesConfig());
+                assertFalse(restoration.hasPendingLimitRemoval(impostor));
+                assertFalse(restoration.requestLimitRemoval(impostor, true));
+                impostor.queuePendingLimitPayout();
+                verify(h.plugin.getGraveClaimLedger(), never()).queueLimit(any(), any(), any());
+                restoration.retire();
+                assertFalse(restoration.hasPendingLimitRemoval(pending));
+                pending.queuePendingLimitPayout();
+                verify(h.plugin.getGraveClaimLedger(), never()).queueLimit(any(), any(), any());
+            } finally { restoration.retire(); }
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = { false, true })
+    void pendingLimitIntentWaitsForArchiveAndFirstRequestWins(boolean drop) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var held = new CompletableFuture<GraveClaimLedger.Restoration>();
+            var restoration = restoration(h, h.grave.getGravesConfig(), held, held);
+            when(h.plugin.getOldestGrave(any())).thenCallRealMethod();
+            var ledger = h.plugin.getGraveClaimLedger();
+            when(ledger.queueLimit(any(), any(), any())).thenReturn(CompletableFuture.completedFuture(false));
+            doAnswer(call -> { if (call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveRemoveEvent event)
+                event.setCancelled(true); return null; }).when(h.events).callEvent(any());
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            try { restoration.start(); } finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+            try {
+                Grave pending = h.plugin.getOldestGrave(h.owner.getUniqueId()); assertNotNull(pending);
+                assertTrue(restoration.requestLimitRemoval(pending, drop));
+                assertTrue(restoration.requestLimitRemoval(pending, !drop));
+                assertNull(h.plugin.getOldestGrave(h.owner.getUniqueId()), "An admitted replacement is not selected twice");
+                verify(ledger, never()).queueLimit(any(), any(), any()); verify(h.events, never()).callEvent(any());
+                assertTrue(h.active.isEmpty());
+                held.complete(GraveClaimLedger.Restoration.AVAILABLE);
+                Runnable task; while ((task = h.regionWork.poll()) != null) task.run();
+                if (drop) {
+                    String identity = h.identity();
+                    UUID ownerId = h.owner.getUniqueId();
+                    verify(ledger).queueLimit(eq(identity), eq(ownerId), anyString());
+                    verify(h.events, never()).callEvent(any());
+                } else {
+                    verify(ledger, never()).queueLimit(any(), any(), any());
+                    verify(h.events).callEvent(any(com.bencodez.gravestonesplus.events.GraveRemoveEvent.class));
+                }
+                assertFalse(pending.isRemove()); assertFalse(h.grave.getGravesConfig().isDestroyed());
+                verify(h.world, never()).getChunkAt(anyInt(), anyInt());
+            } finally { restoration.retire(); }
+        }
+    }
+    @ParameterizedTest @EnumSource(value = GraveClaimLedger.Restoration.class, names = {"RESERVED", "UNAVAILABLE"})
+    void reservedOrUnavailableArchiveCannotExecutePendingLimitIntent(GraveClaimLedger.Restoration decision) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var held = new CompletableFuture<GraveClaimLedger.Restoration>();
+            var restoration = restoration(h, h.grave.getGravesConfig(), held, held);
+            var ledger = h.plugin.getGraveClaimLedger();
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+            try { restoration.start(); } finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+            try {
+                Grave pending = restoration.pendingActiveForLimits().getFirst();
+                assertTrue(restoration.requestLimitRemoval(pending, true)); held.complete(decision);
+                Runnable task; while ((task = h.regionWork.poll()) != null) task.run();
+                assertTrue(h.active.isEmpty()); verify(ledger, never()).queueLimit(any(), any(), any());
+                verify(h.events, never()).callEvent(any()); assertFalse(pending.isRemove());
+            } finally { restoration.retire(); }
+        }
+    }
+
     @Test void lateOwnerAcceptanceCannotPublishRecordsAfterRetirement() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false);

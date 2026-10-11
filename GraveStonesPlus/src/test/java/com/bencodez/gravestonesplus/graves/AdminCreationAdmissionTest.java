@@ -7,6 +7,7 @@ import java.util.concurrent.TimeUnit;
 import org.bukkit.Location;
 import org.bukkit.block.Block;
 import org.bukkit.inventory.ItemStack;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import com.bencodez.gravestonesplus.commands.CommandLoader;
@@ -25,6 +26,24 @@ class AdminCreationAdmissionTest {
         when(h.world.getBlockAt(anyInt(), anyInt(), anyInt())).thenReturn(block);
         when(h.world.getBlockAt(any(Location.class))).thenReturn(block);
         return new Location(h.world, 2, 64, 2);
+    }
+    @Test void acceptedDelayedCreationReservesCapacityBeforeItsLocationCallback() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            Location target = prepare(h, mock(Grave.class), false);
+            h.active.clear();
+            GraveActionsTest.limitRestoration(h);
+            UUID ownerId = h.owner.getUniqueId();
+            when(h.plugin.numberOfGraves(ownerId)).thenCallRealMethod();
+            when(h.plugin.getOldestGrave(ownerId)).thenCallRealMethod();
+            var task = mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
+            when(h.platform.runAtLocationTimer(eq(target), any(Runnable.class), eq(2L), eq(1L), eq(TimeUnit.SECONDS)))
+                .thenReturn(task); // Hold the actual delayed callback, as during rapid repeated requests.
+            new CommandLoader(h.plugin).createTestGrave(ownerId, "Owner", target,
+                new HashMap<>(Map.of(4, h.stored)), 7, "test", h.owner);
+            verify(h.plugin, never()).addGrave(any());
+            assertEquals(1, h.plugin.numberOfGraves(ownerId),
+                "Accepted creation must reserve capacity before another request can observe it");
+        }
     }
     @ParameterizedTest @ValueSource(booleans = { false, true })
     void rejectedCreationKeepsExistingGraveAndNeverPublishesReplacement(boolean drop) throws Exception {

@@ -12,13 +12,37 @@ public final class GraveCreationTask implements Runnable {
     private static final int PREPARING = 0, ACCEPTED = 1, RUNNING = 2, FINISHED = 3;
     private final GraveStonesPlus plugin;
     private final Runnable creation;
+    private final com.bencodez.gravestonesplus.storage.GravesConfig record;
+    private final GraveRestoration restoration;
+    private int priorGraves;
+    private Grave replacement;
     private final java.util.concurrent.atomic.AtomicInteger phase = new java.util.concurrent.atomic.AtomicInteger();
     private final java.util.concurrent.atomic.AtomicReference<com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask> task = new java.util.concurrent.atomic.AtomicReference<>();
     public GraveCreationTask(GraveStonesPlus plugin, Runnable creation) {
-        this.plugin = plugin; this.creation = creation;
+        this.plugin = plugin; this.creation = creation; this.record = null; this.restoration = null;
     }
+    public GraveCreationTask(GraveStonesPlus plugin,
+            com.bencodez.gravestonesplus.storage.GravesConfig record, java.util.function.Consumer<Grave> creation) {
+        this.plugin = plugin; this.record = record; this.restoration = plugin.getGraveRestoration();
+        this.creation = () -> {
+            Grave grave = restoration == null ? new Grave(plugin, record) : restoration.creationGrave(record);
+            creation.accept(grave);
+            if (restoration != null) restoration.completeCreation(record);
+        };
+    }
+    public int priorGraves() { return priorGraves; }
+    public Grave replacement() { return replacement; }
     public void schedule(Location location) {
         try {
+            if (record != null) {
+                if (restoration == null) {
+                    priorGraves = plugin.numberOfGraves(record.getUuid());
+                    replacement = priorGraves >= plugin.getConfigFile().getGraveLimit() ? plugin.getOldestGrave(record.getUuid()) : null;
+                } else {
+                    var admission = restoration.reserveCreation(record);
+                    priorGraves = admission.priorGraves(); replacement = admission.replacement();
+                }
+            }
             // The legacy location overload interpreted its delay in seconds.
             // Preserve that delay explicitly while obtaining a cancellable handle.
             var scheduled = plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocationTimer(
@@ -32,6 +56,7 @@ public final class GraveCreationTask implements Runnable {
     public void accept() { phase.compareAndSet(PREPARING, ACCEPTED); }
     public void cancel() {
         phase.set(FINISHED);
+        if (restoration != null) restoration.releaseCreation(record);
         var current = task.getAndSet(null);
         if (current != null) try { current.cancel(); }
         catch (RuntimeException unavailable) {

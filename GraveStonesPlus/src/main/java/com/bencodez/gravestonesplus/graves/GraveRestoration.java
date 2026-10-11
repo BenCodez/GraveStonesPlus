@@ -17,6 +17,8 @@ public final class GraveRestoration {
     private final Map<String, GravesConfig> pending = new LinkedHashMap<>();
     private final Map<String, Grave> admitted = new HashMap<>();
     private final Set<String> published = new HashSet<>();
+    private final Set<String> activeRecords = new HashSet<>();
+    private final Map<String, Boolean> limitRequests = new HashMap<>();
     private final Set<String> displayRepairs = new HashSet<>();
     private final Set<String> savingDisplays = new HashSet<>();
     private final Set<String> conflicts = ConcurrentHashMap.newKeySet();
@@ -33,11 +35,90 @@ public final class GraveRestoration {
     private int cursor;
     private com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask timer;
     public GraveRestoration(GraveStonesPlus plugin, GraveStorageManager storage) { this.plugin = plugin; this.storage = storage; }
+    // Unpublished creation reservations share logical capacity but never enter marker restoration.
+    private final Set<String> creating = new HashSet<>();
+    private static final int MAX_CREATIONS = 4096;
+    private final Map<String, String> creationReplacements = new HashMap<>();
+    public record CreationAdmission(int priorGraves, Grave replacement) { }
+    public synchronized boolean isCreationReplacement(Grave grave) {
+        return grave != null && creationReplacements.containsValue(GraveIdentity.of(grave.getGravesConfig()));
+    }
+    /** Called on the capture owner before scheduler admission. Returns the prior logical count. */
+    public synchronized CreationAdmission reserveCreation(GravesConfig record) {
+        String identity = GraveIdentity.of(record);
+        if (retired || identity == null || creating.size() >= MAX_CREATIONS || pending.containsKey(identity))
+            throw new java.util.concurrent.RejectedExecutionException("Grave creation capacity unavailable");
+        int prior = plugin.numberOfGraves(record.getUuid());
+        Grave replacement = prior >= plugin.getConfigFile().getGraveLimit() ? plugin.getOldestGrave(record.getUuid()) : null;
+        if (replacement != null) creationReplacements.put(identity, GraveIdentity.of(replacement.getGravesConfig()));
+        pending.put(identity, record); activeRecords.add(identity); creating.add(identity);
+        return new CreationAdmission(prior, replacement);
+    }
+    /** Preserve the wrapper selected by an intervening limit request. Constructor has no world access. */
+    public synchronized Grave creationGrave(GravesConfig record) {
+        String identity = GraveIdentity.of(record);
+        if (retired || !creating.contains(identity) || pending.get(identity) != record)
+            throw new java.util.concurrent.RejectedExecutionException("Grave creation admission retired");
+        return admitted.computeIfAbsent(identity, ignored -> new Grave(plugin, record));
+    }
+    /** Publication transfers the same identity; only deferred replacement intents remain in restoration. */
+    public synchronized void completeCreation(GravesConfig record) {
+        String identity = GraveIdentity.of(record);
+        if (!creating.remove(identity) || pending.get(identity) != record) return;
+        creationReplacements.remove(identity);
+        if (limitRequests.containsKey(identity)) {
+            index(identity, record);
+        } else {
+            pending.remove(identity); admitted.remove(identity); activeRecords.remove(identity);
+        }
+    }
+    /** Cancelling an unpublished reservation cannot retire any persisted grave or history. */
+    public synchronized void releaseCreation(GravesConfig record) {
+        String identity = GraveIdentity.of(record);
+        if (!creating.contains(identity) || pending.get(identity) != record) return;
+        creating.remove(identity); creationReplacements.remove(identity); pending.remove(identity); admitted.remove(identity);
+        activeRecords.remove(identity); limitRequests.remove(identity);
+    }
     /** Coalesce a durable limit request into the existing bounded restoration/chunk retry lane. */
     public synchronized void retainLimit(Grave grave) {
         GravesConfig record = grave.getGravesConfig(); String identity = GraveIdentity.of(record);
-        pending.put(identity, record); admitted.put(identity, grave); published.add(identity);
+        if (retired) return;
+        pending.put(identity, record); admitted.put(identity, grave); activeRecords.add(identity);
+        if (plugin.isLiveGrave(grave)) published.add(identity);
         index(identity, record);
+    }
+    /** Logical capacity only: never publishes marker metadata or claim eligibility. */
+    public synchronized List<Grave> pendingActiveForLimits() {
+        if (retired) return List.of();
+        List<Grave> result = new ArrayList<>();
+        for (String identity : activeRecords) {
+            GravesConfig record = pending.get(identity);
+            if (record == null || record.isDestroyed()) continue;
+            Grave grave = admitted.get(identity);
+            if (grave == null || grave.getGravesConfig() != record) {
+                grave = new Grave(plugin, record); admitted.put(identity, grave);
+            }
+            if (!grave.isRemove()) result.add(grave);
+        }
+        return result;
+    }
+    public synchronized boolean requestLimitRemoval(Grave grave, boolean drop) {
+        if (retired || grave == null) return false;
+        String identity = GraveIdentity.of(grave.getGravesConfig());
+        if (!activeRecords.contains(identity) || pending.get(identity) != grave.getGravesConfig()
+                || admitted.get(identity) != grave || published.contains(identity)
+                || grave.isRemove() || grave.getGravesConfig().isDestroyed()) return false;
+        // The first admitted intent wins, just like an already queued durable payout.
+        // Reloads or duplicate callbacks cannot change that intent. One entry per record.
+        limitRequests.putIfAbsent(identity, drop);
+        return true;
+    }
+    public synchronized boolean hasPendingLimitRemoval(Grave grave) {
+        if (retired || grave == null) return false;
+        String identity = GraveIdentity.of(grave.getGravesConfig());
+        return activeRecords.contains(identity) && pending.get(identity) == grave.getGravesConfig()
+                && admitted.get(identity) == grave && limitRequests.containsKey(identity)
+                && !grave.isRemove() && !grave.getGravesConfig().isDestroyed();
     }
     public void start() {
         storage.beginRestoration();
@@ -95,6 +176,10 @@ public final class GraveRestoration {
     private synchronized void indexCachedRecords(GraveStorageManager.RestorationRecords records) {
         // Borrow already-loaded records only until owner preparation. Do not construct
         // GravesConfig, resolve worlds, serialize inventories or publish live Graves here.
+        for (GravesConfig grave : records.active()) {
+            String identity = GraveIdentity.of(grave);
+            if (identity != null && !grave.isDestroyed()) activeRecords.add(identity);
+        }
         for (GravesConfig grave : concat(records.active(), records.broken())) {
             String identity = GraveIdentity.of(grave);
             if (identity != null) { pending.put(identity, grave); index(identity, grave); }
@@ -105,6 +190,10 @@ public final class GraveRestoration {
         storage.retainRestoration(active, broken);
         synchronized (this) {
             int invalid = 0;
+            for (GravesConfig grave : active) {
+                String identity = GraveIdentity.of(grave);
+                if (identity != null && !grave.isDestroyed()) activeRecords.add(identity);
+            }
             for (GravesConfig grave : concat(active, broken)) {
                 String identity = GraveIdentity.of(grave); String key = identity == null ? "unresolved-" + invalid++ : identity;
                 pending.put(key, grave);
@@ -126,7 +215,7 @@ public final class GraveRestoration {
     private void process(Iterator<String> batch) {
         if (retired || !plugin.isEnabled() || !batch.hasNext()) { running.set(false); return; }
         String key = batch.next(); GravesConfig record;
-        synchronized (this) { record = savingDisplays.contains(key) ? null : pending.get(key); }
+        synchronized (this) { record = savingDisplays.contains(key) || creating.contains(key) ? null : pending.get(key); }
         if (record == null) { process(batch); return; }
         plugin.getGraveClaimLedger().restoration(GraveIdentity.of(record)).whenComplete((decision, error) -> {
             if (retired || !plugin.isEnabled()) { running.set(false); return; }
@@ -176,11 +265,24 @@ public final class GraveRestoration {
                     Grave grave;
                     synchronized (this) {
                         grave = admitted.get(key);
-                        if (grave == null) {
+                        if (grave == null || grave.getGravesConfig() != record) {
                             grave = new Grave(plugin, record); admitted.put(key, grave);
                         }
                     }
                     if (grave.isRemove() || record.isDestroyed()) { resolved(key, record); return; }
+                    Boolean limitRequest;
+                    synchronized (this) { limitRequest = limitRequests.get(key); }
+                    if (limitRequest != null && decision == GraveClaimLedger.Restoration.AVAILABLE) {
+                        // Archive checks precede the request. A PAID/RESERVED record
+                        // must never become a fresh limit payout or claimable grave.
+                        if (limitRequest) grave.queuePendingLimitPayout();
+                        else {
+                            grave.removePendingForLimit();
+                            synchronized (this) { limitRequests.remove(key); }
+                            if (grave.isRemove() || record.isDestroyed()) resolved(key, record);
+                        }
+                        return;
+                    }
                     boolean loaded = loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4);
                     // Material alone cannot prove ownership: a newer grave may occupy this position.
                     // Keep the old record pending without publishing it or changing the successor.
@@ -288,6 +390,7 @@ public final class GraveRestoration {
     }
     private synchronized void resolved(String key, GravesConfig record) {
         pending.remove(key); admitted.remove(key); published.remove(key); conflicts.remove(key);
+        activeRecords.remove(key); limitRequests.remove(key);
         displayRepairs.remove(key); savingDisplays.remove(key);
         // The key retains the original position even if an integration moved its mutable record.
         if (key != null && !key.startsWith("unresolved-")) {

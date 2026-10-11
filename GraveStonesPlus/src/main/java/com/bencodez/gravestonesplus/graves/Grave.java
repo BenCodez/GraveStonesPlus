@@ -531,6 +531,12 @@ public class Grave {
 	 * @param reason Removal reason
 	 */
     public void removeGrave(final GraveRemoveReason reason) {
+        if (reason == GraveRemoveReason.LIMIT_REACHED && !plugin.isLiveGrave(this)
+                && plugin.getGraveRestoration() != null
+                && plugin.getGraveRestoration().hasPending(GraveIdentity.of(gravesConfig))) {
+            plugin.getGraveRestoration().requestLimitRemoval(this, false);
+            return;
+        }
         // Existing Bukkit callers observe the cancellable state transition before
         // returning. Folia's global thread is not the grave region owner.
         if (Bukkit.isPrimaryThread() && !plugin.getBukkitScheduler().getFoliaLib().isFolia()) {
@@ -1158,9 +1164,22 @@ public class Grave {
 
     /** Limit-removal payout shares the claim ledger, so queued drops cannot race recovery. */
     public void dropAndRemoveForLimit(Player recipient) {
+        if (!plugin.isLiveGrave(this) && plugin.getGraveRestoration() != null
+                && plugin.getGraveRestoration().requestLimitRemoval(this, true)) return;
+        queueLimitPayout(recipient, false);
+    }
+    /** Restoration invokes this only after AVAILABLE archive admission on the marker owner. */
+    void queuePendingLimitPayout() { queueLimitPayout(null, true); }
+    void removePendingForLimit() { removeOwned(GraveRemoveReason.LIMIT_REACHED); }
+    private void queueLimitPayout(Player recipient, boolean pendingRecord) {
         String identity = GraveIdentity.of(gravesConfig);
+        // Do not acquire restoration ownership while holding the grave monitor:
+        // restoration can check expiry while it owns its own record map.
+        boolean pendingAdmission = pendingRecord && plugin.getGraveRestoration().hasPendingLimitRemoval(this);
         synchronized (this) {
-            if (remove || claimInProgress || limitPayoutPending || !plugin.isLiveGrave(this) || plugin.getGraveClaimLedger().isBlocked(identity)) return;
+            if (remove || claimInProgress || limitPayoutPending
+                    || (!plugin.isLiveGrave(this) && !pendingAdmission)
+                    || plugin.getGraveClaimLedger().isBlocked(identity)) return;
             claimInProgress = true;
             limitRecipient = new java.lang.ref.WeakReference<>(recipient);
         }

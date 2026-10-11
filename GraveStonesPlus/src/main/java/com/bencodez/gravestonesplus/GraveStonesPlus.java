@@ -513,9 +513,23 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
         return current == null ? gravesConfig : current.graves();
     }
 
+    private List<Grave> limitGraveSnapshot() {
+        List<Grave> result = activeGraveSnapshot();
+        if (getGraveRestoration() == null) return result;
+        java.util.Set<String> identities = new java.util.HashSet<>();
+        for (Grave grave : result) identities.add(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()));
+        for (Grave grave : getGraveRestoration().pendingActiveForLimits()) {
+            String identity = com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig());
+            if (identities.add(identity)) result.add(grave);
+        }
+        return result;
+    }
 	public int numberOfGraves(UUID uuid) {
 		int num = 0;
-		for (Grave grave : activeGraveSnapshot()) {
+		for (Grave grave : limitGraveSnapshot()) {
+            if (grave.isRemove() || grave.getGravesConfig().isDestroyed() || grave.isLimitPayoutPending()
+                    || (getGraveRestoration() != null && (getGraveRestoration().hasPendingLimitRemoval(grave)
+                        || getGraveRestoration().isCreationReplacement(grave)))) continue;
 			if (grave.getGravesConfig().getUuid().equals(uuid)) {
 				num++;
 			}
@@ -525,8 +539,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	public Grave getOldestGrave(UUID uuid) {
 		Grave oldest = null;
-		for (Grave grave : activeGraveSnapshot()) {
-            if (grave.isLimitPayoutPending()) continue;
+		for (Grave grave : limitGraveSnapshot()) {
+            if (grave.isRemove() || grave.getGravesConfig().isDestroyed() || grave.isLimitPayoutPending()
+                    || (getGraveRestoration() != null && (getGraveRestoration().hasPendingLimitRemoval(grave)
+                        || getGraveRestoration().isCreationReplacement(grave)))) continue;
 			if (grave.getGravesConfig().getUuid().equals(uuid)) {
 				if (oldest == null) {
 					oldest = grave;

@@ -185,13 +185,16 @@ public class PlayerDeathListener implements Listener {
 		final Location emptyBlockFinal = emptyBlock;
 
 
-		GraveCreationTask handoff = new GraveCreationTask(plugin, new Runnable() {
-			@Override
-			public void run() {
-				Grave grave = new Grave(plugin,
-						new GravesConfig(playerId, playerName, emptyBlockFinal, itemsWithSlot,
-								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null,
-								plugin.getConfigFile().getGraveDisplayTypeEnum().name()));
+        final GravesConfig record;
+        try {
+            record = new GravesConfig(playerId, playerName, emptyBlockFinal, itemsWithSlot,
+                    droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null,
+                    plugin.getConfigFile().getGraveDisplayTypeEnum().name());
+        } catch (RuntimeException rejected) {
+            if (admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+            throw rejected;
+        }
+        GraveCreationTask handoff = new GraveCreationTask(plugin, record, grave -> {
 				grave.loadChunk(false);
 
 				grave.createGrave();
@@ -220,7 +223,6 @@ public class PlayerDeathListener implements Listener {
 				}
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
-			}
 		});
         boolean scheduled = false;
         try {
@@ -232,8 +234,8 @@ public class PlayerDeathListener implements Listener {
 
         boolean accepted = false;
         try {
-            if (plugin.numberOfGraves(playerId) >= plugin.getConfigFile().getGraveLimit()) {
-                Grave oldest = plugin.getOldestGrave(playerId);
+            if (handoff.priorGraves() >= plugin.getConfigFile().getGraveLimit()) {
+                Grave oldest = handoff.replacement();
                 if (oldest != null) {
                     if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
                         oldest.dropAndRemoveForLimit(entity);

@@ -490,6 +490,48 @@ class GraveActionsTest {
             assertFalse(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.RECOVER));
         }
     }
+    @Test void distantPlayerRemovalRunsTheEventAndMutationOnlyOnTheGraveOwner() throws Exception {
+        try (Harness h = new Harness()) {
+            var region = new java.util.concurrent.atomic.AtomicBoolean();
+            doAnswer(call -> {
+                if (call.getArgument(0) instanceof GraveRemoveEvent)
+                    assertTrue(region.get(), "Grave listeners must run on the marker region");
+                return null;
+            }).when(h.events).callEvent(any());
+            h.grave.removeByPlayer(h.owner, GraveRemoveReason.MANUAL_REMOVE);
+            h.entityWork.remove().run();
+            verify(h.events, never()).callEvent(any());
+            assertFalse(h.grave.isRemove()); assertEquals(1, h.regionWork.size());
+            // Player APIs are forbidden on the marker's distant region.
+            when(h.owner.isOnline()).thenAnswer(call -> {
+                assertFalse(region.get(), "Player online checks belong to the actor owner"); return true;
+            });
+            when(h.owner.getUniqueId()).thenAnswer(call -> {
+                assertFalse(region.get(), "Player identity access belongs to the actor owner");
+                return h.grave.getGravesConfig().getUuid();
+            });
+            region.set(true);
+            try { h.regionWork.remove().run(); }
+            finally { region.set(false); }
+            assertTrue(h.grave.isRemove()); verify(h.owner, never()).sendMessage(any(String.class));
+            h.drain(); verify(h.owner).sendMessage(any(String.class));
+            verify(h.plugin).removeGrave(h.grave);
+        }
+    }
+
+    @Test void retiredOrReplacedGraveCannotBeRemovedByAnAdmittedPlayerCallback() throws Exception {
+        for (boolean disabled : List.of(false, true)) try (Harness h = new Harness()) {
+            h.grave.removeByPlayer(h.owner, GraveRemoveReason.MANUAL_REMOVE);
+            h.entityWork.remove().run();
+            if (disabled) when(h.plugin.isEnabled()).thenReturn(false);
+            else h.active.clear();
+            h.drain();
+            verify(h.events, never()).callEvent(any());
+            verify(h.owner, never()).sendMessage(any(String.class));
+            assertFalse(h.grave.isRemove());
+        }
+    }
+
     @Test void playerRemovalRechecksPermissionAndCancellationBeforeAdvertisingSuccess() throws Exception {
         try (Harness h = new Harness()) {
             when(h.helper.hasPermission("GraveStonesPlus.Admin")).thenReturn(true);

@@ -543,15 +543,27 @@ public class Grave {
     private void removeOwned(GraveRemoveReason reason) {
         if (removeState(reason, () -> true)) cleanupMarker();
     }
-    /** Player actions recheck permission and online state on the entity owner. */
+    /** Admit player authority on the actor owner; dispatch grave events on the marker owner. */
     public void removeByPlayer(Player player, GraveRemoveReason reason) {
         if (player == null) return;
         plugin.getBukkitScheduler().runTask(plugin, () -> {
-            if (removeState(reason, () -> player.isOnline() && plugin.isLiveGrave(this)
-                    && (isOwner(player) || canAdminister(player)))) {
-                plugin.getBukkitScheduler().runTask(plugin, this::cleanupMarker, gravesConfig.getLocation());
-                player.sendMessage(MessageAPI.colorize("&cGrave removed"));
-            }
+            if (!plugin.isEnabled() || !player.isOnline() || !plugin.isLiveGrave(this)
+                    || (!isOwner(player) && !canAdminister(player))) return;
+            // Like recreation, player authority is admitted immediately before
+            // the region handoff. Do not read a distant Player from that region.
+            plugin.getBukkitScheduler().runTask(plugin, () -> {
+                if (!removeState(reason, () -> plugin.isEnabled() && plugin.isLiveGrave(this))) return;
+                cleanupMarker();
+                try {
+                    plugin.getBukkitScheduler().runTask(plugin, () -> {
+                        if (plugin.isEnabled() && player.isOnline())
+                            player.sendMessage(MessageAPI.colorize("&cGrave removed"));
+                    }, player);
+                } catch (RuntimeException retired) {
+                    // Removal already completed. Retiring feedback cannot undo it.
+                    plugin.debug("Grave removal feedback could not be scheduled.");
+                }
+            }, gravesConfig.getLocation());
         }, player);
     }
     private synchronized boolean removeState(GraveRemoveReason reason, java.util.function.BooleanSupplier authorized) {

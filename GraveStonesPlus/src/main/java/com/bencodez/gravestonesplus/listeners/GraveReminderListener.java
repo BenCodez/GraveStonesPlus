@@ -17,7 +17,7 @@ public final class GraveReminderListener implements Listener {
     private int cursor;
     private com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask task;
     private final Map<UUID, Integer> graveCursors = new java.util.concurrent.ConcurrentHashMap<>();
-    private final Set<UUID> scheduled = java.util.concurrent.ConcurrentHashMap.newKeySet();
+    private final java.util.concurrent.ConcurrentMap<UUID, Object> scheduled = new java.util.concurrent.ConcurrentHashMap<>();
     private static final int LOGIN_PENDING = Integer.MIN_VALUE;
     public GraveReminderListener(GraveStonesPlus plugin) { this.plugin = plugin; }
     public void start() {
@@ -40,11 +40,27 @@ public final class GraveReminderListener implements Listener {
         schedule(event.getPlayer(), generation);
     }
     private void schedule(Player player, long expected) {
-        if (scheduled.size() >= 128 || !scheduled.add(player.getUniqueId())) return;
-        plugin.getBukkitScheduler().runTask(plugin, () -> {
-            try { if (running && generation == expected && player.isOnline()) checkPlayer(player); }
-            finally { scheduled.remove(player.getUniqueId()); }
-        }, player);
+        UUID id = player.getUniqueId();
+        Object admission = new Object();
+        synchronized (scheduled) {
+            if (!running || generation != expected || scheduled.size() >= 128
+                    || scheduled.putIfAbsent(id, admission) != null) return;
+        }
+        var started = new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable release = () -> scheduled.remove(id, admission);
+        Runnable retired = () -> { if (started.compareAndSet(false, true)) release.run(); };
+        try {
+            plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtEntityWithFallback(player, ignored -> {
+                if (!started.compareAndSet(false, true)) return;
+                try {
+                    if (running && generation == expected && scheduled.get(id) == admission && player.isOnline())
+                        checkPlayer(player);
+                } finally { release.run(); }
+            }, retired).whenComplete((result, failure) -> {
+                if (failure != null || result != com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS)
+                    retired.run();
+            });
+        } catch (RuntimeException rejected) { retired.run(); }
     }
         @EventHandler public void onQuit(org.bukkit.event.player.PlayerQuitEvent event) {
         scheduled.remove(event.getPlayer().getUniqueId()); graveCursors.remove(event.getPlayer().getUniqueId());

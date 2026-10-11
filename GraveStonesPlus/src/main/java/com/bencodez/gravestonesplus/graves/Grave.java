@@ -640,15 +640,15 @@ public class Grave {
 			return;
 		}
 
-		if (expirationTask != null && !expirationTask.isDone()) {
-			expirationTask.cancel(false);
-		}
-
 		final long durationMillis = duration.getMillis();
 		long deathTime = gravesConfig.getTime();
 		long expireTime = GraveDeadlines.deadline(deathTime, durationMillis);
+        if (expireTime <= 0) {
+            plugin.debug("Invalid grave expiry deadline; retaining the existing expiry schedule.");
+            return;
+        }
         expiryDeadline = expireTime;
-        if (expireTime <= 0) return;
+        if (expirationTask != null && !expirationTask.isDone()) expirationTask.cancel(false);
 		long delay = expireTime - System.currentTimeMillis();
 
 		if (delay <= 0) {
@@ -719,6 +719,10 @@ public class Grave {
 
 		long deathTime = gravesConfig.getTime();
 		long expireTime = GraveDeadlines.deadline(deathTime, durationMillis);
+        if (expireTime <= 0) {
+            plugin.debug("Invalid grave expiry deadline; retaining the existing expiry schedule.");
+            return;
+        }
         expiryDeadline = expireTime;
 
 		if (expireTime > 0 && expireTime <= System.currentTimeMillis()) {

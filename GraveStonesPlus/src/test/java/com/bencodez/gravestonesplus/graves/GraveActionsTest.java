@@ -318,7 +318,7 @@ class GraveActionsTest {
                 Field taskField = Grave.class.getDeclaredField("expirationTask"); taskField.setAccessible(true);
                 var original = (java.util.concurrent.ScheduledFuture<?>) taskField.get(h.grave);
                 assertNotNull(original);
-                for (String invalid : List.of("tomorrow", "999999999999999999999999", "9223372036854775807m")) {
+                for (String invalid : List.of("tomorrow", "999999999999999999999999", "9223372036854775807m", "9223372036854775807ms")) {
                     h.grave.checkTimeLimit(invalid);
                     assertEquals(deadline, h.grave.getExpiryDeadline());
                     assertSame(original, taskField.get(h.grave)); assertFalse(original.isCancelled());

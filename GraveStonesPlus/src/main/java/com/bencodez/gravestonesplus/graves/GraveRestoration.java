@@ -457,6 +457,7 @@ public final class GraveRestoration {
         if (retired || block == null || !plugin.isEnabled()) return null;
         PositionKey position = new PositionKey(block.getWorld().getUID(), block.getX(), block.getY(), block.getZ());
         Set<String> candidates = positions.get(position);
+        if (candidates == null && !recordsLoaded) return startupTaggedIdentity(block, expected, position);
         if (candidates == null || !block.getWorld().isChunkLoaded(position.x() >> 4, position.z() >> 4)) return null;
         for (String identity : candidates) {
             GravesConfig record = pending.get(identity); Grave grave = admitted.get(identity);
@@ -465,7 +466,49 @@ public final class GraveRestoration {
                     || GraveMarkerCleanup.hasConflictingIdentity(plugin, block, identity)) continue;
             return identity;
         }
-        return null;
+        // A prior batch may have indexed an older grave at this position while
+        // the tagged successor still awaits its own record-admission batch.
+        return recordsLoaded ? null : startupTaggedIdentity(block, expected, position);
+    }
+    /**
+     * MySQL records are decoded asynchronously. Until that completes, use only
+     * the exact marker tag written at creation time; this protects events without
+     * admitting a claim or scanning the world. Legacy untagged markers remain
+     * intentionally outside this fallback.
+     */
+    private String startupTaggedIdentity(Block block, Material expected, PositionKey position) {
+        if (!block.getWorld().isChunkLoaded(position.x() >> 4, position.z() >> 4)
+                || !Set.of(Material.CHEST, Material.PLAYER_HEAD, Material.BARRIER).contains(expected)
+                || block.getType() != expected && block.getType() != Material.AIR) return null;
+        var chunk = block.getChunk();
+        if (chunk == null) return null;
+        String chunkId = chunk.getPersistentDataContainer().get(
+                GraveMarkerCleanup.positionKey(plugin, block), org.bukkit.persistence.PersistentDataType.STRING);
+        String tileId = null;
+        var state = block.getState();
+        if (state instanceof org.bukkit.block.TileState tile) {
+            tileId = tile.getPersistentDataContainer().get(GraveMarkerCleanup.identityKey(plugin),
+                    org.bukkit.persistence.PersistentDataType.STRING);
+        }
+        // Metadata already identifies a live or removed owner. Cleanup can be
+        // withheld during startup; its tags must not become a fresh pending marker.
+        for (var value : block.getMetadata("Grave")) {
+            if (value.getOwningPlugin() == plugin && value.value() instanceof Grave) return null;
+        }
+        if (block.getType() != Material.AIR && expected != Material.BARRIER && tileId == null) return null;
+        if (chunkId == null && tileId == null || chunkId != null && tileId != null && !chunkId.equals(tileId)) return null;
+        String identity = chunkId != null ? chunkId : tileId;
+        String[] parts = identity.split("/", -1);
+        try {
+            if (parts.length != 6 || Long.parseLong(parts[1]) < 0 || !position.world().toString().equals(parts[2])
+                    || Integer.parseInt(parts[3]) != position.x() || Integer.parseInt(parts[4]) != position.y()
+                    || Integer.parseInt(parts[5]) != position.z()) return null;
+            UUID.fromString(parts[0]); UUID.fromString(parts[2]);
+        } catch (RuntimeException invalid) { return null; }
+        GravesConfig record = pending.get(identity); Grave grave = admitted.get(identity);
+        if (record != null && (record.isDestroyed() || !identity.equals(GraveIdentity.of(record))
+                    || markerMaterial(record) != expected) || grave != null && grave.isRemove()) return null;
+        return GraveMarkerCleanup.hasConflictingIdentity(plugin, block, identity) ? null : identity;
     }
     private Material markerMaterial(GravesConfig record) {
         GraveDisplayType type;

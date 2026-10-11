@@ -18,6 +18,7 @@ import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.listeners.GraveBlockProtectionListener;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 class MarkerRestorationRegressionTest {
@@ -38,6 +39,18 @@ class MarkerRestorationRegressionTest {
             when(chunkData.get(any(),eq(PersistentDataType.STRING))).thenAnswer(i->values.get(i.getArgument(0)));
             doAnswer(i->{values.put(i.getArgument(0),i.getArgument(2));return null;}).when(chunkData).set(any(),eq(PersistentDataType.STRING),anyString());
             doAnswer(i->{values.remove(i.getArgument(0));return null;}).when(chunkData).remove(any());
+        }
+        void removeForPhysicsRepair(Material expected) {
+            tileValues.clear();
+            when(block.getType()).thenReturn(Material.AIR);
+            when(block.getState()).thenReturn(mock(BlockState.class));
+            doAnswer(call -> {
+                TileState replacement = mock(TileState.class);
+                when(replacement.getPersistentDataContainer()).thenReturn(tileData);
+                when(block.getState()).thenReturn(replacement);
+                when(block.getType()).thenReturn(expected);
+                return null;
+            }).when(block).setType(expected, false);
         }
     }
     @Test void paidClaimRetainsCleanupWhenRegionHandoffIsRejected() throws Exception {
@@ -94,6 +107,165 @@ class MarkerRestorationRegressionTest {
     private static Block neighbor(GraveActionsTest.Harness h, Material type, int x) {
         var block = mock(Block.class); when(block.getWorld()).thenReturn(h.world); when(block.getType()).thenReturn(type);
         when(block.getX()).thenReturn(x); when(block.getY()).thenReturn(64); when(block.getZ()).thenReturn(1); return block;
+    }
+    @Test void startupPdcFallbackProtectsExactTaggedPositionUntilRecordsLoad() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity());
+            var backend = mock(GraveStorageManager.class); when(backend.isMySQL()).thenReturn(true);
+            when(backend.loadMySQLForRestoration()).thenReturn(new CompletableFuture<>());
+            var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            restoration.start();
+            assertTrue(restoration.isLoading()); assertTrue(restoration.protectsPendingMarker(marker.block));
+            when(marker.block.getMetadata("Grave")).thenReturn(List.of(new org.bukkit.metadata.FixedMetadataValue(h.plugin, h.grave)));
+            assertFalse(restoration.protectsPendingMarker(marker.block));
+            when(marker.block.getMetadata("Grave")).thenReturn(List.of());
+            when(marker.block.getType()).thenReturn(Material.AIR);
+            assertEquals(h.identity(), restoration.pendingMarkerIdentity(marker.block, Material.PLAYER_HEAD));
+            when(marker.block.getType()).thenReturn(Material.PLAYER_HEAD); marker.tileValues.clear();
+            assertNull(restoration.pendingMarkerIdentity(marker.block, Material.PLAYER_HEAD));
+            GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity());
+            when(marker.block.getType()).thenReturn(Material.DIRT); assertFalse(restoration.protectsPendingMarker(marker.block));
+            when(marker.block.getType()).thenReturn(Material.PLAYER_HEAD);
+            String[] successorParts = h.identity().split("/", -1); successorParts[1] = Long.toString(Long.parseLong(successorParts[1]) + 1);
+            GraveMarkerCleanup.tag(h.plugin, marker.block, String.join("/", successorParts));
+            assertNotEquals(h.identity(), restoration.pendingMarkerIdentity(marker.block, Material.PLAYER_HEAD));
+            restoration.retire();
+        }
+    }
+    @ParameterizedTest @CsvSource({"PLAYER_HEAD,false", "PLAYER_HEAD,true", "CHEST,false", "CHEST,true"})
+    void startupPhysicsCallbackRepairsOnlyTheCapturedTaggedMarker(Material type, boolean replaced) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h);
+            when(marker.block.getType()).thenReturn(type);
+            when(marker.block.getLocation()).thenReturn(h.grave.getGravesConfig().getLocation());
+            GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity());
+            var backend = mock(GraveStorageManager.class); when(backend.isMySQL()).thenReturn(true);
+            var read = new CompletableFuture<GraveStorageManager.RestorationRecords>();
+            when(backend.loadMySQLForRestoration()).thenReturn(read);
+            var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            restoration.start();
+            var physics = mock(org.bukkit.event.block.BlockPhysicsEvent.class); when(physics.getBlock()).thenReturn(marker.block);
+            new GraveBlockProtectionListener(h.plugin).onPhysics(physics); verify(physics).setCancelled(true);
+            if (replaced) {
+                String[] parts = h.identity().split("/", -1); parts[1] = Long.toString(Long.parseLong(parts[1]) + 1);
+                GraveMarkerCleanup.tag(h.plugin, marker.block, String.join("/", parts));
+            }
+            marker.removeForPhysicsRepair(type);
+            assertFalse(restoration.protectsPendingMarker(marker.block));
+            h.regionWork.remove().run();
+            if (replaced) verify(marker.block, never()).setType(any(Material.class), anyBoolean());
+            else {
+                verify(marker.block).setType(type, false);
+                assertEquals(h.identity(), marker.tileValues.get(GraveMarkerCleanup.identityKey(h.plugin)));
+                assertTrue(restoration.protectsPendingMarker(marker.block));
+                var broken = new org.bukkit.event.block.BlockBreakEvent(marker.block, h.owner);
+                new GraveClaimListener(h.plugin).onBlockBreak(broken); assertTrue(broken.isCancelled());
+            }
+            read.complete(new GraveStorageManager.RestorationRecords(List.of(), List.of())); h.drain();
+            assertFalse(restoration.isLoading());
+            when(marker.block.getType()).thenReturn(type);
+            assertFalse(restoration.protectsPendingMarker(marker.block));
+            verify(h.owner, never()).giveExp(anyInt()); restoration.retire();
+        }
+    }
+    @Test void partialMySqlAdmissionKeepsAnUnindexedTaggedSuccessorProtected() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.active.clear();
+            var marker = new Marker(h); GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity());
+            var previous = new GravesConfig(h.owner.getUniqueId(), "Owner", new Location(h.world, 1, 64, 1),
+                    new HashMap<>(), 0, "old", h.grave.getGravesConfig().getTime() - 1, false, 0, null, null, "PLAYER_HEAD");
+            var records = new ArrayList<GravesConfig>(); records.add(previous);
+            for (int i = 1; i < 128; i++) records.add(new GravesConfig(h.owner.getUniqueId(), "Owner",
+                    new Location(h.world, i + 1, 64, 1), new HashMap<>(), 0, "other", i, false, 0, null, null, "PLAYER_HEAD"));
+            records.add(h.grave.getGravesConfig());
+            var backend = mock(GraveStorageManager.class); when(backend.isMySQL()).thenReturn(true);
+            when(backend.loadMySQLForRestoration()).thenReturn(CompletableFuture.completedFuture(
+                    new GraveStorageManager.RestorationRecords(records, List.of())));
+            var ledger = mock(GraveClaimLedger.class); when(ledger.restoration(any())).thenReturn(new CompletableFuture<>());
+            when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
+            var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            restoration.start();
+            assertTrue(restoration.protectsPendingMarker(marker.block));
+            h.ownerWork.remove().run();
+            assertTrue(restoration.isLoading()); assertTrue(restoration.hasPending(GraveIdentity.of(previous)));
+            assertFalse(restoration.hasPending(h.identity())); verify(ledger, never()).restoration(any());
+            assertNativeAndEnvironmentalProtection(h, marker.block, neighbor(h, Material.PLAYER_HEAD, 300));
+            h.ownerWork.remove().run();
+            assertFalse(restoration.isLoading()); assertTrue(restoration.hasPending(h.identity()));
+            assertTrue(restoration.protectsPendingMarker(marker.block));
+            verify(marker.block, never()).setMetadata(anyString(), any());
+            verify(marker.block, never()).setType(any(Material.class), anyBoolean()); restoration.retire();
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void startupFallbackAndPhysicsRepairRejectKnownRemovedOrDestroyedRecords(boolean destroyed) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); when(marker.block.getLocation()).thenReturn(h.grave.getGravesConfig().getLocation());
+            GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity());
+            var backend = mock(GraveStorageManager.class); when(backend.isMySQL()).thenReturn(true);
+            when(backend.loadMySQLForRestoration()).thenReturn(new CompletableFuture<>());
+            var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            restoration.start();
+            var physics = mock(org.bukkit.event.block.BlockPhysicsEvent.class); when(physics.getBlock()).thenReturn(marker.block);
+            new GraveBlockProtectionListener(h.plugin).onPhysics(physics); verify(physics).setCancelled(true);
+            Grave removed = mock(Grave.class); when(removed.getGravesConfig()).thenReturn(h.grave.getGravesConfig());
+            when(removed.isRemove()).thenReturn(!destroyed); h.grave.getGravesConfig().setDestroyed(destroyed);
+            restoration.retainLimit(removed);
+            assertFalse(restoration.protectsPendingMarker(marker.block));
+            marker.removeForPhysicsRepair(Material.PLAYER_HEAD);
+            assertNull(restoration.pendingMarkerIdentity(marker.block, Material.PLAYER_HEAD));
+            h.regionWork.remove().run(); verify(marker.block, never()).setType(any(Material.class), anyBoolean());
+            verify(h.owner, never()).giveExp(anyInt()); restoration.retire();
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void startupPhysicsCannotResurrectClaimedOrRemovedLiveMetadata(boolean claimed) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); when(marker.block.getLocation()).thenReturn(h.grave.getGravesConfig().getLocation());
+            var metadata = new ArrayList<org.bukkit.metadata.MetadataValue>();
+            when(marker.block.getMetadata("Grave")).thenAnswer(call -> List.copyOf(metadata));
+            when(marker.block.hasMetadata("Grave")).thenAnswer(call -> !metadata.isEmpty());
+            doAnswer(call -> { metadata.clear(); metadata.add(call.getArgument(1)); return null; })
+                    .when(marker.block).setMetadata(eq("Grave"), any());
+            doAnswer(call -> { metadata.clear(); return null; }).when(marker.block).removeMetadata("Grave", h.plugin);
+            h.grave.loadBlockMeta(marker.block);
+            var state = new DurableFeatureState(h.io, new FeaturePersistenceTest.Disk(), 8192);
+            var cleanup = cleanup(h, state);
+            var backend = mock(GraveStorageManager.class); when(backend.isMySQL()).thenReturn(true);
+            when(backend.loadMySQLForRestoration()).thenReturn(new CompletableFuture<>());
+            var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            restoration.start();
+            var utilities = com.bencodez.advancedcore.api.misc.MiscUtils.getInstance();
+            var metadataHost = utilities.getClass().getDeclaredField("plugin"); metadataHost.setAccessible(true);
+            Object previousHost = metadataHost.get(utilities); metadataHost.set(utilities, h.plugin);
+            try {
+                var physics = mock(org.bukkit.event.block.BlockPhysicsEvent.class); when(physics.getBlock()).thenReturn(marker.block);
+                new GraveBlockProtectionListener(h.plugin).onPhysics(physics); verify(physics).setCancelled(true);
+                if (claimed) { h.grave.claim(h.owner); h.drain(); verify(h.owner).giveExp(17); }
+                else {
+                    h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true);
+                    try { h.grave.removeGrave(GraveRemoveReason.MANUAL_REMOVE); }
+                    finally { h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(false); }
+                    verify(h.owner, never()).giveExp(anyInt());
+                }
+                assertTrue(h.grave.isRemove()); assertTrue(h.grave.getGravesConfig().isDestroyed());
+                assertFalse(restoration.hasPending(h.identity())); assertTrue(restoration.pendingActiveForLimits().isEmpty());
+                assertSame(h.grave, metadata.getFirst().value());
+                assertEquals(h.identity(), marker.values.get(GraveMarkerCleanup.positionKey(h.plugin, marker.block)));
+                marker.removeForPhysicsRepair(Material.PLAYER_HEAD);
+                h.regionWork.remove().run();
+                verify(marker.block, never()).setType(any(Material.class), anyBoolean());
+                assertNull(restoration.pendingMarkerIdentity(marker.block, Material.PLAYER_HEAD));
+                // Ordinary removal owns the cleanup ticket, but loading withholds
+                // its physical cleanup without publishing this grave into restoration.
+                h.regionWork.remove().run(); FeaturePersistenceTest.await(h.io.barrier());
+                Runnable task; while ((task = h.regionWork.poll()) != null) task.run();
+                assertEquals("PLAYER_HEAD", state.snapshot().get(h.identity()));
+                assertTrue(restoration.isLoading()); assertFalse(restoration.hasPending(h.identity()));
+                assertEquals(h.identity(), marker.values.get(GraveMarkerCleanup.positionKey(h.plugin, marker.block)));
+                if (claimed) { h.grave.claim(h.owner); h.drain(); verify(h.owner, times(1)).giveExp(17); }
+            } finally { metadataHost.set(utilities, previousHost); restoration.retire(); cleanup.retire(); }
+        }
     }
     private void assertNativeAndEnvironmentalProtection(GraveActionsTest.Harness h, Block marker, Block neighbor) {
         var claims = new GraveClaimListener(h.plugin); var protection = new GraveBlockProtectionListener(h.plugin);

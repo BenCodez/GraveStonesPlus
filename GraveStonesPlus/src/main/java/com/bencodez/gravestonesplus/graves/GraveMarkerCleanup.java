@@ -33,7 +33,7 @@ public final class GraveMarkerCleanup {
     }
     public CompletableFuture<Boolean> loaded() { return loaded; }
     public static NamespacedKey identityKey(GraveStonesPlus plugin) { return new NamespacedKey(plugin, "grave_marker_identity"); }
-    private static NamespacedKey positionKey(GraveStonesPlus plugin, Block block) {
+    static NamespacedKey positionKey(GraveStonesPlus plugin, Block block) {
         return new NamespacedKey(plugin, "grave_marker_" + (block.getX() & 15) + "_" + block.getY() + "_" + (block.getZ() & 15));
     }
     /** Caller owns this block/region. A pending legacy record must never protect a tagged successor. */

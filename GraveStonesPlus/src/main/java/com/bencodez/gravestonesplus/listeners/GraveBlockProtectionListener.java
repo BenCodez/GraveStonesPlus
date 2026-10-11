@@ -326,6 +326,7 @@ public class GraveBlockProtectionListener implements Listener {
             boolean pending = restoration != null && identity.equals(restoration.pendingMarkerIdentity(block, expected));
 			if ((live || pending) && block.getType() == Material.AIR) {
 				block.setType(expected, false);
+                GraveMarkerCleanup.tag(plugin, block, identity);
 			}
 		}, block.getLocation());
 	}

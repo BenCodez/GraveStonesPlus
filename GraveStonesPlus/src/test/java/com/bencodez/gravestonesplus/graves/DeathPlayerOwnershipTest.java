@@ -38,8 +38,13 @@ class DeathPlayerOwnershipTest {
         ItemMeta meta = mock(ItemMeta.class);
         when(meta.hasLore()).thenReturn(true); when(meta.getLore()).thenReturn(List.of("keep"));
         when(item.hasItemMeta()).thenReturn(true); when(item.getItemMeta()).thenReturn(meta);
-        doAnswer(call -> { h.regionWork.add(call.getArgument(1)); return null; })
-            .when(h.scheduler).runTaskLater(eq(h.plugin), any(Runnable.class), eq(2L), any(Location.class));
+        doAnswer(call -> {
+            Runnable work = call.getArgument(1);
+            var task = mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
+            doAnswer(cancel -> { h.regionWork.remove(work); return null; }).when(task).cancel();
+            h.regionWork.add(work); return task;
+        }).when(h.platform).runAtLocationTimer(any(Location.class), any(Runnable.class), eq(2L), eq(1L),
+                eq(java.util.concurrent.TimeUnit.SECONDS));
         PlayerDeathEvent event = mock(PlayerDeathEvent.class);
         when(event.getEntity()).thenReturn(player); when(event.getDrops()).thenReturn(new ArrayList<>());
         listener.onPlayerDeath(event);
@@ -269,6 +274,120 @@ class DeathPlayerOwnershipTest {
             verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
             verify(h.ownerInventory, times(1)).addItem(successorClone);
             verify(h.ownerInventory, never()).addItem(h.cloned);
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = { false, true })
+    void rejectedCreationSchedulerPreservesNativeDeathAndEarlierKeptItems(boolean keepNewItems) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            Grave oldest = mock(Grave.class);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(10);
+            when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(oldest);
+            if (!keepNewItems) {
+                when(h.config.getKeepItemsWithLore()).thenReturn("");
+                when(h.stored.hasItemMeta()).thenReturn(false);
+            }
+            doThrow(new IllegalStateException("creation scheduler retired"))
+                .when(h.platform).runAtLocationTimer(any(Location.class), any(Runnable.class), eq(2L), eq(1L),
+                        eq(java.util.concurrent.TimeUnit.SECONDS));
+            var event = mock(PlayerDeathEvent.class);
+            when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored));
+            when(event.getDrops()).thenReturn(drops); when(event.getDroppedExp()).thenReturn(7);
+            // A rejected handoff cannot establish ownership of this death's contents.
+            // Check native fallback independently of whether rejection is propagated.
+            try { listener.onPlayerDeath(event); }
+            catch (IllegalStateException expected) {
+                assertEquals("creation scheduler retired", expected.getMessage());
+            }
+            when(h.ownerInventory.getItem(4)).thenReturn(null, h.cloned);
+            respawn(listener, h.owner); h.drain();
+            assertAll(
+                () -> assertEquals(List.of(h.stored), drops, "Rejected creation must preserve native drops"),
+                () -> verify(event, never()).setDroppedExp(anyInt()),
+                () -> verify(oldest, never()).removeGrave(any()),
+                () -> verify(oldest, never()).dropAndRemoveForLimit(any()),
+                () -> verify(h.ownerInventory, times(1)).setItem(4, h.cloned),
+                () -> verify(h.ownerInventory, never()).addItem(any(ItemStack.class)));
+        }
+    }
+    @ParameterizedTest @ValueSource(booleans = { false, true })
+    void missingOrAlreadyCancelledTaskHandleRejectsBeforeConsumingDeath(boolean alreadyCancelled) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            var task = mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
+            when(task.isCancelled()).thenReturn(true);
+            doReturn(alreadyCancelled ? task : null).when(h.platform).runAtLocationTimer(
+                    any(Location.class), any(Runnable.class), eq(2L), eq(1L), eq(java.util.concurrent.TimeUnit.SECONDS));
+            var event = mock(PlayerDeathEvent.class); when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
+            assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> listener.onPlayerDeath(event));
+            assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            when(h.ownerInventory.getItem(4)).thenReturn(null);
+            respawn(listener, h.owner); h.drain();
+            verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            verify(h.ownerInventory, never()).addItem(any(ItemStack.class));
+            if (alreadyCancelled) verify(task, times(1)).cancel();
+        }
+    }
+    @Test void earlyRegionCallbackWaitsForNativeConsumptionAndCreatesOnceWithoutAnotherAdmission() throws Exception {
+        try (var h = new GraveActionsTest.Harness(); var graves = mockConstruction(Grave.class)) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            Runnable[] callback = { null };
+            var task = mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            var event = mock(PlayerDeathEvent.class); when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
+            doAnswer(call -> {
+                callback[0] = call.getArgument(1);
+                callback[0].run(); callback[0].run();
+                assertEquals(List.of(h.stored), drops);
+                verify(event, never()).setDroppedExp(anyInt());
+                assertTrue(graves.constructed().isEmpty());
+                return task;
+            }).when(h.platform).runAtLocationTimer(any(Location.class), any(Runnable.class), eq(2L), eq(1L),
+                    eq(java.util.concurrent.TimeUnit.SECONDS));
+            clearInvocations(h.platform);
+            listener.onPlayerDeath(event);
+            assertTrue(drops.isEmpty()); assertTrue(graves.constructed().isEmpty());
+            callback[0].run(); callback[0].run();
+            assertEquals(1, graves.constructed().size());
+            verify(task, times(1)).cancel();
+            verify(h.platform, times(1)).runAtLocationTimer(any(Location.class), any(Runnable.class),
+                    eq(2L), eq(1L), eq(java.util.concurrent.TimeUnit.SECONDS));
+        }
+    }
+    @Test void failedPreflightCancelsEvenAnEarlyCallbackAndCancellationFailureCannotKeepItsBatch() throws Exception {
+        try (var h = new GraveActionsTest.Harness(); var graves = mockConstruction(Grave.class)) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            when(h.plugin.numberOfGraves(h.owner.getUniqueId())).thenReturn(1);
+            when(h.config.getGraveLimit()).thenReturn(1);
+            Grave oldest = mock(Grave.class); when(h.plugin.getOldestGrave(h.owner.getUniqueId())).thenReturn(oldest);
+            doThrow(new IllegalStateException("limit removal rejected")).when(oldest).removeGrave(any());
+            Runnable[] callback = { null };
+            var task = mock(com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask.class);
+            doThrow(new IllegalStateException("cancel failed")).doNothing().when(task).cancel();
+            doAnswer(call -> { callback[0] = call.getArgument(1); callback[0].run(); return task; })
+                .when(h.platform).runAtLocationTimer(any(Location.class), any(Runnable.class), eq(2L), eq(1L),
+                        eq(java.util.concurrent.TimeUnit.SECONDS));
+            var event = mock(PlayerDeathEvent.class); when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
+            var failure = assertThrows(IllegalStateException.class, () -> listener.onPlayerDeath(event));
+            assertEquals("limit removal rejected", failure.getMessage());
+            assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            callback[0].run(); callback[0].run();
+            assertTrue(graves.constructed().isEmpty()); verify(task, times(2)).cancel();
+            when(h.ownerInventory.getItem(4)).thenReturn(null);
+            respawn(listener, h.owner); h.drain();
+            verify(h.ownerInventory, times(1)).setItem(4, h.cloned);
+            verify(h.ownerInventory, never()).addItem(any(ItemStack.class));
         }
     }
     @Test void deferredGraveReceivesDetachedCapturedItems() throws Exception {

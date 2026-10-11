@@ -183,28 +183,8 @@ public class PlayerDeathListener implements Listener {
 
 		final Location emptyBlockFinal = emptyBlock;
 
-        boolean limitChecked = false;
-        try {
-            if (plugin.numberOfGraves(playerId) >= plugin.getConfigFile().getGraveLimit()) {
-                Grave oldest = plugin.getOldestGrave(playerId);
-                if (oldest != null) {
-                    if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-                        oldest.dropAndRemoveForLimit(entity);
-                    } else {
-                        oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
-                        entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
-                    }
-                }
-            }
-            limitChecked = true;
-        } finally {
-            if (!limitChecked && admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
-        }
-        event.setDroppedExp(0);
-        event.getDrops().clear();
-        if (admitted[0] != null) admitted[0].newest().accepted = true;
 
-		plugin.getBukkitScheduler().runTaskLater(plugin, new Runnable() {
+		CreationHandoff handoff = new CreationHandoff(plugin, new Runnable() {
 			@Override
 			public void run() {
 				Grave grave = new Grave(plugin,
@@ -240,9 +220,86 @@ public class PlayerDeathListener implements Listener {
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
 			}
-		}, 2L, emptyBlockFinal);
+		});
+        boolean scheduled = false;
+        try {
+            handoff.schedule(emptyBlockFinal);
+            scheduled = true;
+        } finally {
+            if (!scheduled && admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+        }
+
+        boolean accepted = false;
+        try {
+            if (plugin.numberOfGraves(playerId) >= plugin.getConfigFile().getGraveLimit()) {
+                Grave oldest = plugin.getOldestGrave(playerId);
+                if (oldest != null) {
+                    if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
+                        oldest.dropAndRemoveForLimit(entity);
+                    } else {
+                        oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
+                        entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+                    }
+                }
+            }
+            event.setDroppedExp(0);
+            event.getDrops().clear();
+            if (admitted[0] != null) admitted[0].newest().accepted = true;
+            handoff.accept();
+            accepted = true;
+        } finally {
+            if (!accepted) {
+                handoff.cancel();
+                if (admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+            }
+        }
 
 	}
+
+    /** A location callback may run before the player region finishes the death event.
+     * The admitted timer retries only that short preparation window; it performs
+     * creation once and cancels itself. No second scheduler admission is required
+     * after native drops are consumed. */
+    private static final class CreationHandoff implements Runnable {
+        private static final int PREPARING = 0, ACCEPTED = 1, RUNNING = 2, FINISHED = 3;
+        private final GraveStonesPlus plugin;
+        private final Runnable creation;
+        private final java.util.concurrent.atomic.AtomicInteger phase = new java.util.concurrent.atomic.AtomicInteger();
+        private final java.util.concurrent.atomic.AtomicReference<com.bencodez.simpleapi.folialib.wrapper.task.WrappedTask> task = new java.util.concurrent.atomic.AtomicReference<>();
+        CreationHandoff(GraveStonesPlus plugin, Runnable creation) {
+            this.plugin = plugin; this.creation = creation;
+        }
+        void schedule(Location location) {
+            try {
+                // The legacy location overload interpreted its delay in seconds.
+                // Preserve that delay explicitly while obtaining a cancellable handle.
+                var scheduled = plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocationTimer(
+                        location, this, 2L, 1L, java.util.concurrent.TimeUnit.SECONDS);
+                task.set(scheduled);
+                if (scheduled == null || scheduled.isCancelled())
+                    throw new java.util.concurrent.RejectedExecutionException("Grave creation scheduler unavailable");
+                if (phase.get() == FINISHED) cancel();
+            } catch (RuntimeException rejected) { cancel(); throw rejected; }
+        }
+        void accept() { phase.compareAndSet(PREPARING, ACCEPTED); }
+        void cancel() {
+            phase.set(FINISHED);
+            var current = task.getAndSet(null);
+            if (current != null) try { current.cancel(); }
+            catch (RuntimeException unavailable) {
+                // The phase fence still prevents any retired callback from creating a grave.
+                // A platform cancellation failure must not skip kept-item rollback.
+                task.compareAndSet(null, current);
+                plugin.getLogger().fine("Grave creation task cancellation unavailable");
+            }
+        }
+        @Override public void run() {
+            if (phase.get() == FINISHED) { cancel(); return; }
+            if (!phase.compareAndSet(ACCEPTED, RUNNING)) return;
+            try { if (plugin.isEnabled()) creation.run(); }
+            finally { cancel(); }
+        }
+    }
 
     private void rollbackKeptBatch(UUID playerId, KeptItems admitted) {
         // Remove only this death's batch from the current generation. Restoring

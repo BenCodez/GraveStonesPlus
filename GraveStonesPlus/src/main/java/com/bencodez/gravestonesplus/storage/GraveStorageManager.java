@@ -28,8 +28,17 @@ public class GraveStorageManager {
     private final java.util.Map<String, GravesConfig> restoringBroken = new java.util.LinkedHashMap<>();
     /** Backend records remain authoritative until a region admission resolves them. */
     public synchronized void retainRestoration(List<GravesConfig> active, List<GravesConfig> broken) {
+        retainRestorationBatch(active, broken);
+        finishRestorationRetention();
+    }
+    /** Owner-prepared partial admission; partial reads never release the startup write fence. */
+    public synchronized void retainRestorationBatch(List<GravesConfig> active, List<GravesConfig> broken) {
+        if (closeRequested || backendClosed) throw new IllegalStateException("storage is closing");
         for (GravesConfig grave : active) restoringActive.put(restorationKey(grave), snapshot(grave));
         for (GravesConfig grave : broken) restoringBroken.put(restorationKey(grave), snapshot(grave));
+    }
+    public synchronized void finishRestorationRetention() {
+        if (closeRequested || backendClosed) throw new IllegalStateException("storage is closing");
         restorationLoading = false;
         if (retained != null) retained = recoverySnapshot();
     }

@@ -319,6 +319,39 @@ class MySQLRestorationOwnershipTest {
             assertTrue(h.ownerTasks.isEmpty()); verify(world, never()).getChunkAt(anyInt(), anyInt());
         }
     }
+    @Test void actualRestorationRetainsLargeSqlInventoryInBoundedOwnerBatches() throws Exception {
+        try (var h = new Fixture(); var bukkit = mockStatic(Bukkit.class); var inventory = mockStatic(InventorySerializer.class)) {
+            field(h.storage, GraveStorageManager.class, "type", DataStorageType.MYSQL);
+            when(h.plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
+            var next = new java.util.concurrent.atomic.AtomicInteger();
+            when(h.rows.next()).thenAnswer(call -> next.incrementAndGet() <= 260);
+            when(h.rows.getLong("time")).thenAnswer(call -> (long) next.get());
+            World world = mock(World.class); when(world.getUID()).thenReturn(h.world);
+            bukkit.when(() -> Bukkit.getWorld(h.world)).thenReturn(world);
+            inventory.when(() -> InventorySerializer.decode("encoded")).thenReturn(new HashMap<>());
+            var encodes = new java.util.concurrent.atomic.AtomicInteger(); Thread owner = Thread.currentThread();
+            inventory.when(() -> InventorySerializer.encode(any())).thenAnswer(call -> {
+                assertSame(owner, Thread.currentThread(), "snapshot encoded off owner"); encodes.incrementAndGet(); return "prepared";
+            });
+            var ledger = mock(com.bencodez.gravestonesplus.graves.GraveClaimLedger.class);
+            when(ledger.restoration(any())).thenReturn(CompletableFuture.completedFuture(
+                    com.bencodez.gravestonesplus.graves.GraveClaimLedger.Restoration.UNAVAILABLE));
+            when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
+            var restoration = new com.bencodez.gravestonesplus.graves.GraveRestoration(h.plugin, h.storage);
+            h.storage.beginRestoration(); restoration.retry(); h.io.barrier().get(5, TimeUnit.SECONDS);
+            for (int i = 0; i < 3; i++) { assertEquals(1, h.ownerTasks.size()); h.ownerTasks.remove().run(); }
+            assertTrue(restoration.isLoading()); assertEquals(0, encodes.get());
+            h.ownerTasks.remove().run();
+            assertEquals(128, encodes.get(), "retention bypassed the per-owner-task item budget");
+            assertTrue(restoration.isLoading()); verify(ledger, never()).restoration(any());
+            h.ownerTasks.remove().run(); assertEquals(256, encodes.get()); assertTrue(restoration.isLoading());
+            h.ownerTasks.remove().run(); assertEquals(260, encodes.get()); assertFalse(restoration.isLoading());
+            assertTrue(h.ownerTasks.isEmpty());
+            var field = GraveStorageManager.class.getDeclaredField("restoringActive"); field.setAccessible(true);
+            assertEquals(260, ((Map<?, ?>) field.get(h.storage)).size());
+            verify(world, never()).getChunkAt(anyInt(), anyInt()); restoration.retire();
+        }
+    }
     @Test void incompleteSqlReadFailsRatherThanPublishingAnEmptyOrPartialRestoration() throws Exception {
         try (var h = new Fixture()) {
             when(h.rows.next()).thenReturn(true).thenThrow(new SQLException("fixture interrupted read"));

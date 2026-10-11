@@ -178,6 +178,43 @@ class MarkerRestorationRegressionTest {
             assertTrue(owners.isEmpty()); restoration.retire();
         }
     }
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void largeCachedStartupBudgetsItemRetentionAndRetiredCallbacksCannotFinish(boolean interrupt) throws Exception {
+        try (var h = new GraveActionsTest.Harness(); var encoding = mockStatic(InventorySerializer.class)) {
+            encoding.when(() -> InventorySerializer.encode(any())).thenReturn("captured");
+            when(h.plugin.getFeatureIO()).thenReturn(h.io); h.active.clear();
+            List<GravesConfig> records = new ArrayList<>();
+            for (int i = 0; i < 260; i++) records.add(new GravesConfig(h.owner.getUniqueId(), "owner",
+                    new Location(h.world, 1, 64, 1), new HashMap<>(h.grave.getGravesConfig().getItems()),
+                    17, "death", i + 1, false, 0, null, null, "PLAYER_HEAD"));
+            var backend = mock(GraveStorageBackend.class);
+            when(backend.loadGraves()).thenReturn(records); when(backend.loadBrokenGraves()).thenReturn(List.of());
+            var manager = new GraveStorageManager(h.plugin);
+            var field = GraveStorageManager.class.getDeclaredField("backend"); field.setAccessible(true); field.set(manager, backend);
+            var ledger = mock(GraveClaimLedger.class); when(ledger.restoration(any())).thenReturn(new CompletableFuture<>());
+            when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
+            h.bukkit.when(Bukkit::isPrimaryThread).thenReturn(true); clearInvocations(h.stored);
+            var restoration = new GraveRestoration(h.plugin, manager);
+            restoration.start(); assertTrue(restoration.isLoading()); assertEquals(1, h.ownerWork.size());
+            verify(h.stored, times(128)).clone(); verify(ledger, never()).restoration(any());
+            restoration.retry(); assertEquals(1, h.ownerWork.size()); verify(backend, times(1)).loadGraves();
+            if (interrupt) {
+                restoration.retire(); h.ownerWork.remove().run(); assertTrue(restoration.isLoading());
+                verify(h.stored, times(128)).clone(); verify(ledger, never()).restoration(any());
+                // An owner snapshot during partial startup must merge with the
+                // unread disk baseline, rather than replace it on shutdown.
+                manager.saveGravesFromObjects(List.of());
+                manager.close(); FeaturePersistenceTest.await(h.io.barrier());
+                verify(backend).saveStartupSnapshot(argThat(list -> list.size() == 128), eq(List.of()));
+                verify(backend, never()).saveSnapshot(any(), any());
+            } else {
+                h.ownerWork.remove().run(); assertTrue(restoration.isLoading()); verify(h.stored, times(256)).clone();
+                h.ownerWork.remove().run(); assertFalse(restoration.isLoading()); verify(h.stored, times(260)).clone();
+                assertTrue(h.ownerWork.isEmpty()); assertEquals(260, restoration.pendingActiveForLimits().size());
+                verify(backend, never()).saveSnapshot(any(), any()); restoration.retire();
+            }
+        }
+    }
     @Test void pendingStoredActiveGraveStillCountsTowardTheOwnerLimit() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             var held = new CompletableFuture<GraveClaimLedger.Restoration>();

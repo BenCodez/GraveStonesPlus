@@ -129,7 +129,10 @@ public final class GraveRestoration {
             try {
                 var cached = cachedFlatRecords();
                 indexCachedRecords(cached);
-                if (org.bukkit.Bukkit.isPrimaryThread()) acceptRecords(cached);
+                if (org.bukkit.Bukkit.isPrimaryThread()) {
+                    running.set(true);
+                    acceptRecordsOnOwner(cached, true).whenComplete(this::accepted);
+                }
             } catch (RuntimeException failure) {
                 plugin.getLogger().warning("Cached grave records remain withheld until owner preparation can retry.");
             }
@@ -144,11 +147,12 @@ public final class GraveRestoration {
             CompletableFuture<GraveStorageManager.RestorationRecords> read = storage.isMySQL()
                     ? storage.loadMySQLForRestoration()
                     : loadCachedFlatOnOwner();
-            read.thenCompose(this::acceptRecordsOnOwner).whenComplete((loaded, error) -> {
-            if (error != null) { running.set(false); plugin.getLogger().warning("Stored graves remain withheld until backend restoration can retry."); }
-            else cycle();
-        });
+            read.thenCompose(this::acceptRecordsOnOwner).whenComplete(this::accepted);
         } else cycle();
+    }
+    private void accepted(Void loaded, Throwable error) {
+        if (error != null) { running.set(false); plugin.getLogger().warning("Stored graves remain withheld until backend restoration can retry."); }
+        else cycle();
     }
     private GraveStorageManager.RestorationRecords cachedFlatRecords() {
         return new GraveStorageManager.RestorationRecords(storage.loadGraves(), storage.loadBrokenGraves());
@@ -163,14 +167,34 @@ public final class GraveRestoration {
         return result;
     }
     private CompletableFuture<Void> acceptRecordsOnOwner(GraveStorageManager.RestorationRecords records) {
+        return acceptRecordsOnOwner(records, false);
+    }
+    private CompletableFuture<Void> acceptRecordsOnOwner(GraveStorageManager.RestorationRecords records, boolean inline) {
         var result = new CompletableFuture<Void>();
-        Runnable accept = () -> {
-            if (retired || !plugin.isEnabled()) { result.completeExceptionally(new IllegalStateException("Grave restoration retired")); return; }
-            try { acceptRecords(records); result.complete(null); }
-            catch (RuntimeException failure) { result.completeExceptionally(failure); }
-        };
-        try { plugin.getBukkitScheduler().runTask(plugin, accept); }
-        catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
+        class Accept implements Runnable {
+            int activeCursor, brokenCursor, invalid;
+            void schedule() {
+                try { plugin.getBukkitScheduler().runTask(plugin, this); }
+                catch (RuntimeException rejected) { result.completeExceptionally(rejected); }
+            }
+            public void run() {
+                if (retired || !plugin.isEnabled()) { result.completeExceptionally(new IllegalStateException("Grave restoration retired")); return; }
+                try {
+                    int activeEnd = Math.min(records.active().size(), activeCursor + MAX_BATCH);
+                    int brokenEnd = Math.min(records.broken().size(), brokenCursor + MAX_BATCH - (activeEnd - activeCursor));
+                    invalid = acceptRecordBatch(records.active().subList(activeCursor, activeEnd),
+                            records.broken().subList(brokenCursor, brokenEnd), invalid);
+                    activeCursor = activeEnd; brokenCursor = brokenEnd;
+                    if (activeCursor == records.active().size() && brokenCursor == records.broken().size()) {
+                        storage.finishRestorationRetention();
+                        synchronized (GraveRestoration.this) { recordsLoaded = true; }
+                        result.complete(null);
+                    } else schedule();
+                } catch (RuntimeException failure) { result.completeExceptionally(failure); }
+            }
+        }
+        Accept accept = new Accept();
+        if (inline) accept.run(); else accept.schedule();
         return result;
     }
     private synchronized void indexCachedRecords(GraveStorageManager.RestorationRecords records) {
@@ -185,11 +209,9 @@ public final class GraveRestoration {
             if (identity != null) { pending.put(identity, grave); index(identity, grave); }
         }
     }
-    private void acceptRecords(GraveStorageManager.RestorationRecords records) {
-        List<GravesConfig> active = records.active(), broken = records.broken();
-        storage.retainRestoration(active, broken);
+    private int acceptRecordBatch(List<GravesConfig> active, List<GravesConfig> broken, int invalid) {
+        storage.retainRestorationBatch(active, broken);
         synchronized (this) {
-            int invalid = 0;
             for (GravesConfig grave : active) {
                 String identity = GraveIdentity.of(grave);
                 if (identity != null && !grave.isDestroyed()) activeRecords.add(identity);
@@ -199,7 +221,7 @@ public final class GraveRestoration {
                 pending.put(key, grave);
                 if (identity != null) index(key, grave);
             }
-            recordsLoaded = true;
+            return invalid;
         }
     }
     private static List<GravesConfig> concat(List<GravesConfig> active, List<GravesConfig> broken) {

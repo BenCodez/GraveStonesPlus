@@ -176,9 +176,10 @@ withdraws only the new kept-item reservation. A callback on a faster Folia regio
 waits until its caller accepts creation, then creates once and cancels its task.
 Failed limit preflight also cancels that callback in both entry points. The existing two-second
 creation delay is preserved; the task repeats only while capture is being prepared.
-This preflight change does not yet count unpublished/restoring graves toward the
-limit or add durable creation intents: failure or shutdown after death capture
-remains a separate legacy lifecycle limitation.
+Unpublished creation reservations and restoring active records count toward the
+owner's limit; replacement selection uses their original creation order. These
+reservations remain process-local rather than durable creation intents: failure
+or shutdown after death capture remains a separate legacy lifecycle limitation.
 
 
 Flat-file startup protects exact persisted marker positions from the already-decoded
@@ -209,3 +210,12 @@ the already-reserved cleanup journal intent. Loaded-chunk cleanup can retry
 without repeating item/XP payout or accessing the marker from the player's
 thread. This retains the existing conservative behavior for untagged markers
 and markers replaced by another grave.
+
+Startup record retention clones and prepares inventories in batches of at most
+128 active/broken records per owner callback, following the existing bounded
+MySQL decoding phase. Partial retention keeps restoration readiness and normal
+startup snapshot publication closed. Retirement or scheduler rejection leaves
+already-captured records retained and unread records authoritative in the
+existing YAML/MySQL backend; shutdown does not publish an incomplete replacement
+of the full store. This is an item-work budget, not a fixed elapsed-time guarantee
+for large/custom inventories.

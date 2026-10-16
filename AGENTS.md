@@ -13,6 +13,12 @@ mvn -B -f GraveStonesPlus/pom.xml package
 
 Confirm current CI and POM settings. Verify the fresh shaded JAR, actual test discovery, and `git diff --check`. Do not run deployment or developer-copy profiles for routine validation.
 
+## Test package organization
+
+Put Java test classes and reusable test helpers under `com.bencodez.gravestonesplus.tests`, using subpackages for related areas. Match the directories below `src/test/java` to the declared package. Keep new and moved tests in this namespace and update imports, resource lookups, reflection references, and build selectors when relocating them.
+
+Preserve every existing test assertion and test discovery. Use a narrow test-only access helper when testing package-private implementation details; do not widen production APIs merely to move a test. Before finishing, verify the package declarations and run the required test/package build so the reorganization cannot silently drop coverage.
+
 ## Architecture and data ownership
 
 - `GraveStonesPlus` owns plugin lifecycle, listener registration, commands, and storage initialization.

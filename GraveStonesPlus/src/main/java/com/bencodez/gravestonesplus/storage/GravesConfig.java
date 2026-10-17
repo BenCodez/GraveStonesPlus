@@ -25,11 +25,51 @@ public class GravesConfig implements ConfigurationSerializable {
 	@Getter
 	private HashMap<Integer, ItemStack> items;
 
+    // Set only on detached owner-prepared storage snapshots. Never serialized as a new field.
+    private transient String preparedItems;
+    private transient RuntimeException preparationFailure;
+    private transient RuntimeException binaryPreparationFailure;
+    private transient Map<Integer, Object> preparedLegacyItems;
+
+    void prepareItemsForStorage() {
+        try { preparedItems = InventorySerializer.encode(items); }
+        catch (IOException failure) {
+            binaryPreparationFailure = new java.io.UncheckedIOException("Could not prepare grave items", failure);
+            try { preparedLegacyItems = PreparedLegacyItems.capture(items); }
+            catch (RuntimeException legacyFailure) {
+                binaryPreparationFailure.addSuppressed(legacyFailure); preparationFailure = binaryPreparationFailure;
+            }
+        }
+        catch (RuntimeException failure) { preparationFailure = failure; }
+    }
+
+    String encodedItemsForStorage() {
+        if (binaryPreparationFailure != null) throw binaryPreparationFailure;
+        if (preparationFailure != null) throw preparationFailure;
+        if (preparedItems != null) return preparedItems;
+        // Compatibility for direct owner-context users of the legacy backend API.
+        try { return InventorySerializer.encode(items); }
+        catch (IOException failure) { throw new java.io.UncheckedIOException("Could not encode grave items", failure); }
+    }
+
+    Map<String, Object> preparedRecordForStorage() {
+        if (preparationFailure != null) throw preparationFailure;
+        if (preparedItems == null && preparedLegacyItems == null) throw new IllegalStateException("Grave items were not owner-prepared");
+        Map<String, Object> record = new java.util.LinkedHashMap<>(serialize());
+        record.put("==", GravesConfig.class.getName());
+        return record;
+    }
+
 	@Getter
 	private int exp;
 
 	@Getter
 	private Location location;
+
+    /** Original UUID remains serializable while the world is unavailable. */
+    @Getter
+    @Setter
+    private UUID worldId;
 
 	@Getter
 	private UUID uuid;
@@ -45,11 +85,11 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@Getter
 	@Setter
-	private boolean destroyed;
+	private volatile boolean destroyed;
 
 	@Getter
 	@Setter
-	private long destroyedTime;
+	private volatile long destroyedTime;
 
 	@Getter
 	@Setter
@@ -88,6 +128,7 @@ public class GravesConfig implements ConfigurationSerializable {
 			String graveDisplayType) {
 		this.uuid = uuid;
 		this.location = loc;
+        this.worldId = loc != null && loc.getWorld() != null ? loc.getWorld().getUID() : null;
 		this.items = items != null ? items : new HashMap<Integer, ItemStack>();
 		this.exp = exp;
 		this.playerName = playerName;
@@ -102,6 +143,7 @@ public class GravesConfig implements ConfigurationSerializable {
 
 	@Override
 	public Map<String, Object> serialize() {
+        if (preparationFailure != null) throw preparationFailure;
 		Map<String, Object> serialized = new HashMap<String, Object>();
 
 		serialized.put("DeathMessage", deathMessage);
@@ -116,7 +158,7 @@ public class GravesConfig implements ConfigurationSerializable {
 		}
 
 		serialized.put("PlayerName", playerName);
-		serialized.put("World", location.getWorld().getUID().toString());
+		serialized.put("World", worldId.toString());
 		serialized.put("X", location.getBlockX());
 		serialized.put("Y", location.getBlockY());
 		serialized.put("Z", location.getBlockZ());
@@ -127,9 +169,13 @@ public class GravesConfig implements ConfigurationSerializable {
 		// New: store the display type used for this grave
 		serialized.put("GraveDisplayType", graveDisplayType);
 
-		// New primary format
+		// Prepared fallback contains no Bukkit objects; disk workers only emit plain YAML values.
+        if (preparedLegacyItems != null) {
+            serialized.put("Items", preparedLegacyItems); return serialized;
+        }
+        // New primary format
 		try {
-			serialized.put("ItemsEncoded", InventorySerializer.encode(items));
+			serialized.put("ItemsEncoded", preparedItems != null ? preparedItems : InventorySerializer.encode(items));
 		} catch (IOException e) {
 			// Fallback: if encoding fails, write legacy format so data is not lost
 			serialized.put("Items", items);
@@ -152,7 +198,8 @@ public class GravesConfig implements ConfigurationSerializable {
 		UUID uuid = UUID.fromString(deserialize.get("UUID").toString());
 		String playerName = deserialize.get("PlayerName").toString();
 
-		World world = Bukkit.getWorld(UUID.fromString(deserialize.get("World").toString()));
+		UUID worldId = UUID.fromString(deserialize.get("World").toString());
+        World world = Bukkit.getWorld(worldId);
 		Location loc = new Location(world, NumberConversions.toInt(deserialize.get("X")),
 				NumberConversions.toInt(deserialize.get("Y")), NumberConversions.toInt(deserialize.get("Z")));
 
@@ -205,8 +252,9 @@ public class GravesConfig implements ConfigurationSerializable {
 			}
 		}
 
-		return new GravesConfig(uuid, playerName, loc, items, exp, deathMessage, time, destroyed, destroyedTime,
-				displayUUID, interactUUID, normalizeDisplayType(displayTypeStr, displayUUID));
+        GravesConfig record = new GravesConfig(uuid, playerName, loc, items, exp, deathMessage, time, destroyed, destroyedTime,
+                displayUUID, interactUUID, normalizeDisplayType(displayTypeStr, displayUUID));
+        record.setWorldId(worldId); return record;
 	}
 
 	/**

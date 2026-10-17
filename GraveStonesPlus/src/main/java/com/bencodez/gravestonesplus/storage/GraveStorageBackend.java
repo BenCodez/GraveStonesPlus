@@ -40,6 +40,26 @@ public interface GraveStorageBackend {
 	 */
 	void saveBrokenGraves(List<GravesConfig> graves);
 
+	default void saveSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+		saveBrokenGraves(broken);
+		saveGraves(active);
+	}
+
+    /** Merge captures with the persisted baseline when shutdown interrupts initial restoration. */
+    default void saveStartupSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+        throw new UnsupportedOperationException("Backend cannot preserve incomplete startup state");
+    }
+
+    /** Acknowledge display metadata only; never recreate or modify contents of a grave. */
+    default void saveDisplayIdentity(GravesConfig grave) {
+        throw new UnsupportedOperationException("Backend cannot acknowledge display identity");
+    }
+
+    /** Strict existing-row recreation acknowledgement; unsupported backends fail closed. */
+    default void saveRecreatedGrave(GravesConfig grave) {
+        throw new UnsupportedOperationException("Backend cannot acknowledge recreation");
+    }
+
 	/**
 	 * Insert or update a single grave (incremental write). Default implementation
 	 * is no-op (used only by MySQL backend).

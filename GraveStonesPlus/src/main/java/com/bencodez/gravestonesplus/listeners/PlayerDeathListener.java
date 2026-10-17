@@ -1,8 +1,12 @@
 package com.bencodez.gravestonesplus.listeners;
 
 import java.util.HashMap;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import java.util.function.BiConsumer;
 
 import org.bukkit.Location;
@@ -22,6 +26,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import com.bencodez.gravestonesplus.GraveStonesPlus;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.gravestonesplus.graves.GraveCreationTask;
 import com.bencodez.gravestonesplus.nbt.NBTRule;
 import com.bencodez.gravestonesplus.storage.GravesConfig;
 import com.bencodez.simpleapi.messages.MessageAPI;
@@ -38,10 +43,37 @@ public class PlayerDeathListener implements Listener {
 		this.plugin = plugin;
 	}
 
-	private final HashMap<UUID, HashMap<Integer, ItemStack>> deathItems = new HashMap<UUID, HashMap<Integer, ItemStack>>();
+	// Players in separate Folia regions can die/respawn concurrently. Each value is
+    // one death generation; delayed callbacks must never consume a successor's items.
+    private static final class KeptBatch {
+        final Map<Integer, ItemStack> items;
+        volatile boolean accepted;
+        KeptBatch(Map<Integer, ItemStack> source) {
+            HashMap<Integer, ItemStack> snapshot = new HashMap<>();
+            source.forEach((slot, item) -> snapshot.put(slot, item.clone()));
+            items = Map.copyOf(snapshot);
+        }
+    }
+    private static final class KeptItems {
+        final List<KeptBatch> batches;
+        // A new identity fences callbacks even when the new death captures no items.
+        KeptItems(KeptItems previous) { batches = previous.batches; }
+        KeptItems(List<KeptBatch> batches) { this.batches = List.copyOf(batches); }
+        KeptItems(KeptItems previous, Map<Integer, ItemStack> source) {
+            List<KeptBatch> merged = previous == null ? new ArrayList<>() : new ArrayList<>(previous.batches);
+            merged.add(new KeptBatch(source));
+            batches = List.copyOf(merged);
+        }
+        KeptBatch newest() { return batches.get(batches.size() - 1); }
+        boolean ready() { return batches.stream().allMatch(batch -> batch.accepted); }
+    }
+    private static final int MAX_PENDING_KEPT_SNAPSHOTS = 8;
+    private final ConcurrentMap<UUID, KeptItems> deathItems = new ConcurrentHashMap<>();
 
 	@EventHandler(priority = EventPriority.HIGHEST)
 	public void onPlayerDeath(PlayerDeathEvent event) {
+        final UUID playerId = event.getEntity().getUniqueId();
+        deathItems.computeIfPresent(playerId, (id, previous) -> new KeptItems(previous));
 		final Location deathLocation = event.getEntity().getLocation();
 		if (plugin.getConfigFile().getDisabledWorlds().contains(deathLocation.getWorld().getName())) {
 			plugin.debug("Graves in " + deathLocation.getWorld().getName() + " are disabled");
@@ -78,16 +110,7 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		final Player entity = event.getEntity();
-		if (plugin.numberOfGraves(entity.getUniqueId()) >= plugin.getConfigFile().getGraveLimit()) {
-			Grave oldest = plugin.getOldestGrave(entity.getUniqueId());
-			if (oldest != null) {
-				if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
-					oldest.dropItemsOnGround(entity);
-				}
-				oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
-				entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
-			}
-		}
+        final String playerName = entity.getName();
 
 		Location emptyBlock = null;
 		if (deathLocation.getBlock().isEmpty() && deathLocation.getBlockY() > deathLocation.getWorld().getMinHeight()
@@ -114,12 +137,8 @@ public class PlayerDeathListener implements Listener {
 		// Add any other player-related placeholders you might need here
 
 		final String deathMessage = event.getDeathMessage();
-		if (plugin.getConfigFile().isKeepAllExp()) {
-			event.setDroppedExp(getTotalExperience(event.getEntity()));
-		}
-		final int droppedExp = event.getDroppedExp();
-		event.setDroppedExp(0); // Clear Bukkit's default dropped experience
-		event.getDrops().clear(); // Clear Bukkit's default dropped items
+		final int droppedExp = plugin.getConfigFile().isKeepAllExp()
+				? getTotalExperience(event.getEntity()) : event.getDroppedExp();
 
 		// Store items that will go into the grave and items that will be kept
 		HashMap<Integer, ItemStack> itemsWithSlot = new HashMap<Integer, ItemStack>(); // Items to be placed in the
@@ -127,73 +146,14 @@ public class PlayerDeathListener implements Listener {
 		HashMap<Integer, ItemStack> keepItems = new HashMap<Integer, ItemStack>(); // Items to be kept in the player's
 																					// inventory
 
-		BiConsumer<Integer, ItemStack> processItem = (idx, item) -> {
-			if (item != null && !item.getType().isAir()) { // Ensure item exists and is not air
-				// plugin.getLogger().info("Processing item: " + item.getType().name() + " at
-				// slot " + idx); // Debug log
-
-				// --- Priority 1: Ignore NBT Rules ---
-				if (plugin.getNbtConfigManager() != null
-						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getIgnoreNbtRules())) {
-					// plugin.getLogger().info(" Item " + item.getType().name() + " matched an
-					// 'ignore' NBT rule. Skipping further processing.");
-					return; // Return immediately, this item is not handled by GraveStonesPlus
-				}
-
-				// --- Priority 2: Slimefun Soulbound Items ---
-				if (plugin.getSlimefun() != null && plugin.getSlimefun().isSoulBoundItem(item)) {
-					// plugin.getLogger().info(" Item " + item.getType().name() + " is Slimefun
-					// Soulbound. Allowing Slimefun to handle.");
-					return; // Assume Slimefun will handle and keep these items itself, so we don't
-							// interfere
-				}
-
-				// --- Priority 3: Lore Matching Rules ---
-				// Here, playerPlaceholders will be used to replace placeholders in the
-				// keepItemsWithLore config
-				final String loreToMatch = com.bencodez.advancedcore.api.messages.PlaceholderUtils
-						.replacePlaceHolder(plugin.getConfigFile().getKeepItemsWithLore(), playerPlaceholders);
-				if (keepItemsWithMatchingLore(item, loreToMatch)) {
-					keepItems.put(idx, item);
-					// plugin.getLogger().info(" Item " + item.getType().name() + " kept due to
-					// matching lore: '" + loreToMatch + "'");
-					return;
-				}
-
-				// --- Priority 4: Keep NBT Rules ---
-				if (plugin.getNbtConfigManager() != null
-						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getKeepNbtRules())) {
-					keepItems.put(idx, item);
-					// plugin.getLogger().info(" Item " + item.getType().name() + " kept due to
-					// matching NBT 'keep' rule.");
-					return;
-				}
-
-				// --- Priority 5: Grave NBT Rules ---
-				if (plugin.getNbtConfigManager() != null
-						&& doesItemMatchAnyRule(item, plugin.getNbtConfigManager().getGraveNbtRules())) {
-					itemsWithSlot.put(idx, item);
-					// plugin.getLogger().info(" Item " + item.getType().name() + " put in grave due
-					// to matching NBT 'grave' rule.");
-					return;
-				}
-
-				// --- Priority 6: Curse of Vanishing ---
-				if (hasCurseOfVanishing(item)) {
-					// plugin.getLogger().info(" Item " + item.getType().name() + " has Curse of
-					// Vanishing and not kept by any rule, will be removed.");
-					return; // The item will not be added to any list, thus being removed
-				}
-
-				// --- Priority 7: Default behavior (if none of the above rules match) ---
-				itemsWithSlot.put(idx, item);
-				// plugin.getLogger().info(" Item " + item.getType().name() + " (default) put in
-				// grave.");
-
-			} else {
-				// plugin.getLogger().info(" Slot " + idx + " is empty or air, skipping.");
-			}
-		};
+        final ItemRuleEvaluator evaluator = ItemRuleEvaluator.forPlayer(plugin, entity);
+        BiConsumer<Integer, ItemStack> processItem = (idx, item) -> {
+            switch (evaluator.evaluate(item)) {
+                case KEEP_LORE, KEEP_NBT -> keepItems.put(idx, item);
+                case GRAVE_NBT, GRAVE_DEFAULT -> itemsWithSlot.put(idx, item.clone());
+                default -> { }
+            }
+        };
 
 		// Iterate through player inventory slots and process items
 		for (int i = 0; i < 36; i++) { // Main inventory (0-35)
@@ -206,19 +166,35 @@ public class PlayerDeathListener implements Listener {
 		processItem.accept(-4, inv.getBoots()); // Boots
 		processItem.accept(-5, inv.getItemInOffHand()); // Offhand
 
-		if (!keepItems.isEmpty()) {
-			deathItems.put(event.getEntity().getUniqueId(), keepItems);
+        // Admission comes before limit removal, but a failed preflight must not
+        // leave these same items eligible for both native drops and respawn.
+        KeptItems[] admitted = { null };
+        if (!keepItems.isEmpty()) {
+			deathItems.compute(playerId, (id, pending) -> {
+                if (pending != null && pending.batches.size() >= MAX_PENDING_KEPT_SNAPSHOTS) return pending;
+                KeptItems merged = new KeptItems(pending, keepItems);
+                admitted[0] = merged;
+                return merged;
+			});
+			if (admitted[0] == null) {
+				plugin.getLogger().warning("Kept items not retained: pending snapshot limit reached");
+				return;
+			}
 		}
 
 		final Location emptyBlockFinal = emptyBlock;
 
-		plugin.getBukkitScheduler().runTaskLater(plugin, new Runnable() {
-			@Override
-			public void run() {
-				Grave grave = new Grave(plugin,
-						new GravesConfig(entity.getUniqueId(), entity.getName(), emptyBlockFinal, itemsWithSlot,
-								droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null,
-								plugin.getConfigFile().getGraveDisplayTypeEnum().name()));
+
+        final GravesConfig record;
+        try {
+            record = new GravesConfig(playerId, playerName, emptyBlockFinal, itemsWithSlot,
+                    droppedExp, deathMessage, System.currentTimeMillis(), false, 0, null, null,
+                    plugin.getConfigFile().getGraveDisplayTypeEnum().name());
+        } catch (RuntimeException rejected) {
+            if (admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+            throw rejected;
+        }
+        GraveCreationTask handoff = new GraveCreationTask(plugin, record, grave -> {
 				grave.loadChunk(false);
 
 				grave.createGrave();
@@ -236,14 +212,66 @@ public class PlayerDeathListener implements Listener {
 				String msg = MessageAPI.colorize(com.bencodez.advancedcore.api.messages.PlaceholderUtils
 						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
 				if (!msg.isEmpty()) {
-					entity.sendMessage(msg);
+                    try {
+                        plugin.getBukkitScheduler().runTask(plugin, () -> {
+                            if (plugin.isEnabled() && entity.isOnline()) entity.sendMessage(msg);
+                        }, entity);
+                    } catch (RuntimeException rejected) {
+                        // A retired player cannot receive a message; the grave itself is already established.
+                        plugin.getLogger().fine("Skipping grave notification: player scheduler unavailable");
+                    }
 				}
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
-			}
-		}, 2, emptyBlockFinal);
+		});
+        boolean scheduled = false;
+        try {
+            handoff.schedule(emptyBlockFinal);
+            scheduled = true;
+        } finally {
+            if (!scheduled && admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+        }
+
+        boolean accepted = false;
+        try {
+            if (handoff.priorGraves() >= plugin.getConfigFile().getGraveLimit()) {
+                Grave oldest = handoff.replacement();
+                if (oldest != null) {
+                    if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
+                        if (!oldest.admitLimitRemoval(entity)) {
+                            plugin.getLogger().warning("Grave creation declined: limit payout admission unavailable; death drops retained");
+                            return;
+                        }
+                    } else {
+                        oldest.removeGrave(GraveRemoveReason.LIMIT_REACHED);
+                        entity.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
+                    }
+                }
+            }
+            event.setDroppedExp(0);
+            event.getDrops().clear();
+            if (admitted[0] != null) admitted[0].newest().accepted = true;
+            handoff.accept();
+            accepted = true;
+        } finally {
+            if (!accepted) {
+                handoff.cancel();
+                if (admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+            }
+        }
 
 	}
+
+    private void rollbackKeptBatch(UUID playerId, KeptItems admitted) {
+        // Remove only this death's batch from the current generation. Restoring
+        // an earlier whole snapshot would discard a successor's kept items.
+        KeptBatch batch = admitted.newest();
+        deathItems.computeIfPresent(playerId, (id, pending) -> {
+            List<KeptBatch> retained = new ArrayList<>(pending.batches);
+            retained.removeIf(candidate -> candidate == batch);
+            return retained.isEmpty() ? null : new KeptItems(retained);
+        });
+    }
 
 	private boolean doesItemMatchAnyRule(ItemStack item, List<NBTRule> keepNbtRules) {
 		if (plugin.isNbtAPIHooked()) {
@@ -256,64 +284,84 @@ public class PlayerDeathListener implements Listener {
 	public void onRespawn(PlayerRespawnEvent event) {
 		Player player = event.getPlayer();
 		UUID uuid = player.getUniqueId();
-		if (deathItems.containsKey(uuid)) {
-			HashMap<Integer, ItemStack> items = deathItems.remove(uuid);
-			plugin.getBukkitScheduler().runTask(plugin, () -> {
+        KeptItems pending = deathItems.get(uuid);
+        if (pending != null) {
+            try {
+                plugin.getBukkitScheduler().runTask(plugin, () -> {
+                    if (!plugin.isEnabled() || !player.isOnline() || player.isDead() || !pending.ready() || !deathItems.remove(uuid, pending)) return;
 				PlayerInventory inv = player.getInventory();
-				items.forEach((slot, item) -> {
+				pending.batches.forEach(batch -> batch.items.forEach((slot, item) -> {
 					if (item == null || item.getType().isAir())
 						return;
 					if (slot >= 0) {
 						if (inv.getItem(slot) == null)
 							inv.setItem(slot, item);
 						else
-							inv.addItem(item);
+							dropOverflow(player, inv.addItem(item));
 					} else {
 						switch (slot) {
 						case -1:
 							if (isSlotAvailable(inv.getHelmet()))
 								inv.setHelmet(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -2:
 							if (isSlotAvailable(inv.getChestplate()))
 								inv.setChestplate(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -3:
 							if (isSlotAvailable(inv.getLeggings()))
 								inv.setLeggings(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -4:
 							if (isSlotAvailable(inv.getBoots()))
 								inv.setBoots(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						case -5:
 							if (isSlotAvailable(inv.getItemInOffHand()))
 								inv.setItemInOffHand(item);
 							else
-								inv.addItem(item);
+								dropOverflow(player, inv.addItem(item));
 							break;
 						}
 					}
-				});
-			});
+				}));
+                }, player);
+            } catch (RuntimeException rejected) {
+                // Keep this generation for a later respawn; never mutate a retired player off-owner.
+                plugin.getLogger().warning("Kept items remain pending: player scheduler unavailable");
+            }
 		}
 
 		if (plugin.getConfigFile().isGiveCompassOnRespawn()) {
-			plugin.getBukkitScheduler().runTaskLaterAsynchronously(plugin, () -> {
+			Runnable deliverCompass = () -> {
+                if (!plugin.isEnabled() || !player.isOnline() || !player.hasPermission("GraveStonesPlus.Compass")) return;
 				Grave grave = plugin.getLatestGrave(player);
-				if (grave != null) {
-					plugin.getBukkitScheduler().runTask(plugin, () -> grave.giveCompass(player));
+				if (grave != null && plugin.canTrack(grave, player)) {
+					grave.giveCompass(player);
 				}
-			}, 5L);
+            };
+            var folia = plugin.getBukkitScheduler().getFoliaLib();
+            // The original respawn delay is five server ticks. Its Spigot/Paper entity-delay
+            // overloads recurse, so use the synchronous delay there. Folia needs the
+            // moving player's entity owner; a retired entity receives no compass.
+            if (folia.isFolia()) folia.getImpl().runAtEntityLater(player, deliverCompass, () -> {}, 5L);
+            else folia.getImpl().runLater(deliverCompass, 5L);
 		}
+	}
+
+	private void dropOverflow(Player player, Map<Integer, ItemStack> leftovers) {
+		if (leftovers == null) return;
+		leftovers.values().forEach(item -> {
+			if (item != null && !item.getType().isAir()) player.getWorld().dropItemNaturally(player.getLocation(), item);
+		});
 	}
 
 	/**
@@ -373,31 +421,9 @@ public class PlayerDeathListener implements Listener {
 		return slot == null || slot.getType().isAir();
 	}
 
-	public boolean keepItemsWithMatchingLore(ItemStack item, String text) {
-		if (item == null || item.getType().isAir() || text == null || text.isEmpty()) {
-			return false;
-		}
-		if (item.hasItemMeta()) {
-			ItemMeta meta = item.getItemMeta();
-			if (meta.hasLore()) {
-				// Iterate through each line of the item's Lore and compare with the provided
-				// text
-				for (String loreLine : meta.getLore()) {
-					if (loreLine.equalsIgnoreCase(text)) { // Use equalsIgnoreCase for case-insensitive comparison
-						return true;
-					}
-				}
-			}
-		}
-		return false;
-	}
+    public boolean keepItemsWithMatchingLore(ItemStack item, String text) { return ItemRuleEvaluator.matchesLore(item, text); }
 
-	public boolean hasCurseOfVanishing(ItemStack item) {
-		if (item != null && item.hasItemMeta()) {
-			return item.getItemMeta().getEnchants().containsKey(Enchantment.VANISHING_CURSE);
-		}
-		return false;
-	}
+    public boolean hasCurseOfVanishing(ItemStack item) { return ItemRuleEvaluator.vanishes(item); }
 
 	public Location getAirBlock(Location loc) {
 		int startingY = loc.getBlockY();

@@ -1,6 +1,7 @@
 package com.bencodez.gravestonesplus.graves;
 
 import java.util.*;
+import java.util.function.Function;
 import org.bukkit.*;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -14,10 +15,13 @@ public final class GraveNavigation {
     private final Map<UUID, String> selected = new java.util.concurrent.ConcurrentHashMap<>();
     public GraveNavigation(GraveStonesPlus plugin) { this.plugin = plugin; }
     public Grave target(Player player) {
+        return target(player, this::resolve);
+    }
+    private Grave target(Player player, Function<String, Grave> resolver) {
         if (loading()) return null;
         String identity = selected.get(player.getUniqueId());
         if (identity == null) return null;
-        Grave grave = resolve(identity);
+        Grave grave = resolver.apply(identity);
         if (grave == null && pending(identity)) return null;
         if (grave == null || !plugin.canTrack(grave, player)) { selected.remove(player.getUniqueId()); return null; }
         return grave;
@@ -47,9 +51,49 @@ public final class GraveNavigation {
         return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().hasPending(identity)
                 && !plugin.getGraveRestoration().isConflicted(identity);
     }
+
+    /** One inventory pass only; authorization remains at each compass update. */
+    private final class RefreshLookup {
+        private final Map<String, Grave> matches = new HashMap<>();
+
+        private Grave liveMatch(String identity) {
+            if (identity == null) return null;
+            Grave grave = matches.get(identity);
+            if (grave != null && identity.equals(GraveIdentity.of(grave.getGravesConfig()))
+                    && plugin.isLiveGrave(grave)) return grave;
+            matches.remove(identity);
+            return null;
+        }
+
+        private Grave remember(Grave grave) {
+            if (grave != null) {
+                String identity = GraveIdentity.of(grave.getGravesConfig());
+                if (identity != null && plugin.isLiveGrave(grave)) matches.put(identity, grave);
+            }
+            return grave;
+        }
+
+        Grave resolve(String identity) {
+            Grave match = liveMatch(identity);
+            return match != null ? match : remember(GraveNavigation.this.resolve(identity));
+        }
+
+        Grave legacy(Player player, CompassMeta meta, NamespacedKey key, String identity) {
+            Grave match = liveMatch(identity);
+            if (match != null && match.isOwner(player)) {
+                Long time = meta.getPersistentDataContainer().get(key, PersistentDataType.LONG);
+                Location location = meta.getLodestone();
+                if (time != null && time == match.getGravesConfig().getTime() && location != null
+                        && location.equals(match.getGravesConfig().getLocation())) return match;
+            }
+            return remember(legacyTarget(player, meta, key));
+        }
+    }
+
     public void refresh(Player player) {
         if (loading()) return;
-        target(player);
+        RefreshLookup lookup = new RefreshLookup();
+        target(player, lookup::resolve);
         if (!player.isOnline()) return;
         NamespacedKey identityKey = new NamespacedKey(plugin, "graveidentity");
         NamespacedKey legacy = new NamespacedKey(plugin, "gravecompass");
@@ -60,7 +104,7 @@ public final class GraveNavigation {
             String identity = meta.getPersistentDataContainer().get(identityKey, PersistentDataType.STRING);
             if (identity == null && !meta.getPersistentDataContainer().has(legacy, PersistentDataType.LONG)) continue;
             String legacyIdentity = identity == null ? legacyIdentity(player, meta, legacy) : null;
-            Grave grave = identity == null ? legacyTarget(player, meta, legacy) : resolve(identity);
+            Grave grave = identity == null ? lookup.legacy(player, meta, legacy, legacyIdentity) : lookup.resolve(identity);
             // Legacy items predate the identity tag. Reconstruct the same stable
             // owner/time/position identity before deciding that a withheld record
             // is stale; restoration may have finished its backend read while the

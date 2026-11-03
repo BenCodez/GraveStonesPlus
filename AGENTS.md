@@ -44,6 +44,10 @@ A grave's identity and state transition must remain consistent across memory, wo
 8. Keep Bukkit/world/entity/inventory access on the correct Bukkit or Folia execution context; keep SQL and filesystem work off server/region threads.
 9. Use stable UUID/world/location identity and preserve legacy serialized records and database schemas through explicit migrations.
 10. Optional integrations and marker implementations must remain guarded when dependencies, worlds, entities, or materials are unavailable.
+11. Pending persisted markers retain exact-position destruction protection through archive and chunk admission without
+    exposing claimable metadata or rewards. Queries run on the event/region owner, use the existing restoration index,
+    and reject destroyed/removed records, wrong materials and successor identities. Deferred physics repair rechecks
+    ownership. Deferred hologram cleanup must preserve any live grave's adopted display at the entity-owned cleanup boundary.
 
 ## Drop-in upgrade and compatibility contract
 

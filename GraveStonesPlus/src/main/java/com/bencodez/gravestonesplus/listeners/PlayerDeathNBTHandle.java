@@ -1,6 +1,7 @@
 package com.bencodez.gravestonesplus.listeners;
 
 import java.util.List;
+import java.util.ArrayList;
 
 import org.bukkit.inventory.ItemStack;
 
@@ -11,6 +12,13 @@ import de.tr7zw.nbtapi.NBTCompound;
 import de.tr7zw.nbtapi.NBTItem;
 
 public class PlayerDeathNBTHandle {
+	/** Returns matching rule names using the same matcher used during death processing. */
+	public List<String> matchingRuleNames(GraveStonesPlus plugin, ItemStack item, List<NBTRule> rules) {
+		List<String> result = new ArrayList<>();
+		if (!plugin.isNbtAPIHooked() || rules == null) return result;
+		for (NBTRule rule : rules) if (doesItemMatchAnyRule(plugin, item, java.util.Collections.singletonList(rule))) result.add(rule.getName());
+		return result;
+	}
 	/**
 	 * Generic NBT rule matching method. Checks if the given item matches any rule
 	 * in the provided list of NBT rules.

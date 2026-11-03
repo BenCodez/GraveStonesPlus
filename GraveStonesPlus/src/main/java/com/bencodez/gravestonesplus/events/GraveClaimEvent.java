@@ -8,7 +8,10 @@ import com.bencodez.gravestonesplus.graves.Grave;
 
 /**
  * Called when a player attempts to claim a grave (receive its items/exp).
- * This event is cancellable.
+ * This event is cancellable. On Folia it runs on the grave region; the
+ * claimant may belong to another region. Schedule mutable player access on
+ * the player entity scheduler. Grave item/experience changes are captured
+ * after the cancellable callbacks and before durable reservation.
  */
 public class GraveClaimEvent extends GraveEvent implements Cancellable {
 

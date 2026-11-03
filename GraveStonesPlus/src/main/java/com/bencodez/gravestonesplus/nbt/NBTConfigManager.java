@@ -12,13 +12,23 @@ import java.util.List;
 public class NBTConfigManager {
     private GraveStonesPlus plugin;
     private FileConfiguration config;
-    private List<NBTRule> ignoreNbtRules;
-    private List<NBTRule> keepNbtRules;
-    private List<NBTRule> graveNbtRules;
+    private volatile RulesSnapshot rules = new RulesSnapshot(List.of(), List.of(), List.of());
 
     public NBTConfigManager(GraveStonesPlus plugin) {
         this.plugin = plugin;
         loadConfig();
+    }
+
+    private NBTConfigManager(GraveStonesPlus plugin, FileConfiguration data, String keepLore) {
+        this.plugin = plugin;
+        this.config = data;
+        rules = new RulesSnapshot(loadRulesFromSection("ignore_nbt_rules"),
+                loadRulesFromSection("keep_nbt_rules"), loadRulesFromSection("grave_nbt_rules"),
+                keepLore == null ? "" : keepLore);
+    }
+    /** Prepare against the same general-config generation, without publishing or reading files. */
+    public static NBTConfigManager prepare(GraveStonesPlus plugin, FileConfiguration data, String keepLore) {
+        return new NBTConfigManager(plugin, data, keepLore);
     }
 
     public void loadConfig() {
@@ -29,13 +39,16 @@ public class NBTConfigManager {
         this.config = YamlConfiguration.loadConfiguration(file);
 
 
-        this.ignoreNbtRules = loadRulesFromSection("ignore_nbt_rules");
-        this.keepNbtRules = loadRulesFromSection("keep_nbt_rules");
-        this.graveNbtRules = loadRulesFromSection("grave_nbt_rules");
+        List<NBTRule> ignore = loadRulesFromSection("ignore_nbt_rules");
+        List<NBTRule> keep = loadRulesFromSection("keep_nbt_rules");
+        List<NBTRule> grave = loadRulesFromSection("grave_nbt_rules");
+        String keepLore = plugin.getConfigFile() == null ? "" : plugin.getConfigFile().getKeepItemsWithLore();
+        RulesSnapshot loaded = new RulesSnapshot(ignore, keep, grave, keepLore == null ? "" : keepLore);
+        rules = loaded;
 
-        plugin.getLogger().info("Loaded " + ignoreNbtRules.size() + " NBT ignore rules.");
-        plugin.getLogger().info("Loaded " + keepNbtRules.size() + " NBT keep rules.");
-        plugin.getLogger().info("Loaded " + graveNbtRules.size() + " NBT grave rules.");
+        plugin.getLogger().info("Loaded " + loaded.ignore().size() + " NBT ignore rules.");
+        plugin.getLogger().info("Loaded " + loaded.keep().size() + " NBT keep rules.");
+        plugin.getLogger().info("Loaded " + loaded.grave().size() + " NBT grave rules.");
     }
 
     private List<NBTRule> loadRulesFromSection(String sectionName) {
@@ -61,15 +74,22 @@ public class NBTConfigManager {
 
 
     public List<NBTRule> getIgnoreNbtRules() {
-        return ignoreNbtRules;
+        return rules.ignore();
     }
 
     public List<NBTRule> getKeepNbtRules() {
-        return keepNbtRules;
+        return rules.keep();
     }
 
     public List<NBTRule> getGraveNbtRules() {
-        return graveNbtRules;
+        return rules.grave();
+    }
+
+    public RulesSnapshot snapshot() { return rules; }
+
+    public record RulesSnapshot(List<NBTRule> ignore, List<NBTRule> keep, List<NBTRule> grave, String keepLore) {
+        public RulesSnapshot(List<NBTRule> ignore, List<NBTRule> keep, List<NBTRule> grave) { this(ignore, keep, grave, ""); }
+        public RulesSnapshot { ignore = List.copyOf(ignore); keep = List.copyOf(keep); grave = List.copyOf(grave); }
     }
 
 

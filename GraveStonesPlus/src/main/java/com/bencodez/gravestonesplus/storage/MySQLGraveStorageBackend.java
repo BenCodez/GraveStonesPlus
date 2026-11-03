@@ -48,6 +48,10 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
 		return table != null ? table.loadAll(true) : new ArrayList<GravesConfig>();
 	}
 
+    List<java.util.function.Supplier<GravesConfig>> loadDeferred(boolean broken) {
+        return table != null ? table.loadDeferred(broken) : List.of();
+    }
+
 	@Override
 	public void saveGraves(List<GravesConfig> graves) {
 		// Bulk is intentionally not used for MySQL.
@@ -62,34 +66,44 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
 
 	@Override
 	public void upsertGrave(GravesConfig grave, boolean broken) {
-		if (table != null) {
-			table.upsertGrave(grave, broken);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.upsertGraveChecked(grave, broken);
 	}
+
+    @Override public void saveDisplayIdentity(GravesConfig grave) {
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.saveDisplayIdentity(grave);
+    }
+
+    @Override public void saveRecreatedGrave(GravesConfig grave) {
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.saveRecreatedGrave(grave);
+    }
 
 	@Override
 	public void setBroken(GravesConfig grave, boolean broken) {
-		if (table != null) {
-			table.setBroken(grave, broken);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.setBrokenChecked(grave, broken);
 	}
 
 	@Override
 	public void updateExistingGrave(GravesConfig grave, boolean broken) {
-		if (table != null) {
-			table.updateExistingGrave(grave, broken);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.updateExistingGraveChecked(grave, broken);
 	}
 
 	@Override
 	public void deleteGrave(GravesConfig grave) {
-		if (table != null) {
-			table.deleteGrave(grave);
-		}
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.deleteGraveChecked(grave);
 	}
 
 	@Override
-	public void close() {
-		// keep pool for plugin lifetime; handled by AdvancedCore/plugin lifecycle
+	public synchronized void close() {
+        // This table creates its own SimpleAPI pool; AdvancedCore's user-storage
+        // cleanup does not own it. The manager calls us after its serial writes drain.
+        GravesMySQLTable closing = table;
+        table = null;
+        if (closing != null) closing.close();
 	}
 }

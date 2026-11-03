@@ -49,6 +49,26 @@ public class FlatFileGraveStorageBackend implements GraveStorageBackend {
 	}
 
 	@Override
+	public void saveSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+		graveLocations.saveSnapshot(active, broken);
+	}
+
+    @Override
+    public void saveStartupSnapshot(List<GravesConfig> active, List<GravesConfig> broken) {
+        // Only detached, owner-prepared records enter this worker-only path.
+        var activeRecords = active.stream().map(GravesConfig::preparedRecordForStorage).toList();
+        var brokenRecords = broken.stream().map(GravesConfig::preparedRecordForStorage).toList();
+        var path = graveLocations.getdFile().toPath();
+        try {
+            String baseline = java.nio.file.Files.exists(path) ? java.nio.file.Files.readString(path) : "";
+            String document = StartupGraveDocument.merge(baseline, activeRecords, brokenRecords);
+            com.bencodez.gravestonesplus.graves.DurableFeatureState.publishDocument(path, document);
+        } catch (java.io.IOException failure) {
+            throw new java.io.UncheckedIOException("Failed to preserve startup grave state", failure);
+        }
+    }
+
+	@Override
 	public void close() {
 		// no-op
 	}

@@ -44,27 +44,27 @@ public class GraveClaimListener implements Listener {
 	 * Tracks active held-left-click attempts.
 	 */
 	@Getter
-	private final Map<UUID, Grave> mining = new HashMap<UUID, Grave>();
+	private final Map<UUID, Grave> mining = new java.util.concurrent.ConcurrentHashMap<UUID, Grave>();
 
 	/**
 	 * Last time a player swung at a grave.
 	 */
 	@Getter
-	private final Map<UUID, Long> lastSwing = new HashMap<UUID, Long>();
+	private final Map<UUID, Long> lastSwing = new java.util.concurrent.ConcurrentHashMap<UUID, Long>();
 
 	/**
 	 * Tracks the last grave handled for a player to avoid duplicate processing from
 	 * multiple events firing for the same action.
 	 */
 	@Getter
-	private final Map<UUID, Grave> lastHandledGrave = new HashMap<UUID, Grave>();
+	private final Map<UUID, Grave> lastHandledGrave = new java.util.concurrent.ConcurrentHashMap<UUID, Grave>();
 
 	/**
 	 * Tracks the last handled time for a player to avoid duplicate processing from
 	 * multiple events firing for the same action.
 	 */
 	@Getter
-	private final Map<UUID, Long> lastHandledTime = new HashMap<UUID, Long>();
+	private final Map<UUID, Long> lastHandledTime = new java.util.concurrent.ConcurrentHashMap<UUID, Long>();
 
 	/**
 	 * Creates the listener.
@@ -87,16 +87,11 @@ public class GraveClaimListener implements Listener {
 						continue;
 					}
 
-					Grave grave = mining.get(uuid);
-					if (grave == null || !grave.isValid() || grave.getGravesConfig().isDestroyed()) {
-						clearPlayerState(uuid);
-						continue;
-					}
-
-					Long last = lastSwing.get(uuid);
-					if (last == null || now - last > 400L) {
-						clearPlayerState(uuid);
-					}
+                    plugin.getBukkitScheduler().runTask(plugin, () -> {
+                        Grave grave = mining.get(uuid);
+                        Long last = lastSwing.get(uuid);
+                        if (!player.isOnline() || !plugin.isLiveGrave(grave) || last == null || now - last > 400L) clearPlayerState(uuid);
+                    }, player);
 				}
 			}
 		}, 5L, 5L);
@@ -124,6 +119,13 @@ public class GraveClaimListener implements Listener {
 			}
 
 			plugin.getPlayerBreakManager().handleOwnerHit(player, grave);
+			return;
+		}
+
+		// A per-grave recovery grant is an explicit owner authorization and is
+		// revalidated again by Grave.claim at the final mutation boundary.
+		if (plugin.canRecover(grave, player)) {
+			grave.claim(player);
 			return;
 		}
 
@@ -175,6 +177,8 @@ public class GraveClaimListener implements Listener {
 			return;
 		}
 
+        if (isPendingMarker(block)) return;
+
 		Grave grave = getGraveFromBlock(block);
 		if (grave == null || !grave.isValid()) {
 			return;
@@ -212,6 +216,8 @@ public class GraveClaimListener implements Listener {
 			return;
 		}
 
+        if (isPendingMarker(clicked)) { event.setCancelled(true); return; }
+
 		Grave grave = getGraveFromBlock(clicked);
 		if (grave == null) {
 			return;
@@ -245,6 +251,8 @@ public class GraveClaimListener implements Listener {
 		if (!isAnyGraveMarker(block.getType())) {
 			return;
 		}
+
+        if (isPendingMarker(block)) { event.setCancelled(true); return; }
 
 		Grave grave = getGraveFromBlock(block);
 		if (grave == null) {
@@ -313,6 +321,11 @@ public class GraveClaimListener implements Listener {
 
 		return (Grave) obj;
 	}
+
+    private boolean isPendingMarker(Block block) {
+        var restoration = plugin.getGraveRestoration();
+        return restoration != null && restoration.protectsPendingMarker(block);
+    }
 
 	/**
 	 * Checks whether the material is used as a grave marker.

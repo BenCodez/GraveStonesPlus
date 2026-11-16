@@ -554,6 +554,11 @@ public class CommandLoader {
 
         GravesConfig record = new GravesConfig(uuid, name, emptyBlockFinal, itemsWithSlot, droppedExp, deathMessage,
                 System.currentTimeMillis(), false, 0, null, null, plugin.getConfigFile().getGraveDisplayTypeEnum().name());
+        var restoration = plugin.getGraveRestoration();
+        if (restoration != null && restoration.isWaitingForStoredCapacity()) {
+            sender.sendMessage("Grave creation declined: stored grave capacity is loading");
+            return;
+        }
         GraveCreationTask creation = new GraveCreationTask(plugin, record, grave -> {
 			grave.loadChunk(false);
 			grave.createGrave();

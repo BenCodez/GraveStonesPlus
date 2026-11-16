@@ -18,6 +18,27 @@ import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 
 /** Production death/respawn entry points, with independently controlled region/player queues. */
 class DeathPlayerOwnershipTest {
+    @Test void mysqlStartupLeavesNativeDeathDropsAndXpWithoutKeptItemEntitlement() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var listener = new PlayerDeathListener(h.plugin);
+            capture(h, listener, h.owner, h.ownerInventory, h.stored);
+            respawn(listener, h.owner); h.drain(); clearInvocations(h.ownerInventory);
+            when(h.ownerInventory.getItem(4)).thenReturn(h.stored);
+            var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            when(storage.isMySQL()).thenReturn(true);
+            var restoration = new GraveRestoration(h.plugin, storage);
+            when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            var event = mock(PlayerDeathEvent.class); when(event.getEntity()).thenReturn(h.owner);
+            var drops = new ArrayList<>(List.of(h.stored)); when(event.getDrops()).thenReturn(drops);
+            when(event.getDroppedExp()).thenReturn(7);
+            listener.onPlayerDeath(event);
+            assertEquals(List.of(h.stored), drops); verify(event, never()).setDroppedExp(anyInt());
+            respawn(listener, h.owner); h.drain();
+            verify(h.ownerInventory, never()).setItem(anyInt(), any());
+            assertFalse(restoration.hasPending(GraveIdentity.of(h.grave.getGravesConfig())));
+            restoration.retire();
+        }
+    }
     private static void capture(GraveActionsTest.Harness h, PlayerDeathListener listener, Player player,
             PlayerInventory inventory, ItemStack item) {
         when(h.folia.isFolia()).thenReturn(true);

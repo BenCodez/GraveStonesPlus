@@ -14,6 +14,22 @@ import com.bencodez.gravestonesplus.commands.CommandLoader;
 
 /** Test-grave creation must not destroy a real grave when scheduler admission fails. */
 class AdminCreationAdmissionTest {
+    @Test void mysqlStartupDeclinesAdminCreationWithoutEvictingOrScheduling() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var oldest = mock(Grave.class); Location target = prepare(h, oldest, true);
+            var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            when(storage.isMySQL()).thenReturn(true);
+            var restoration = new GraveRestoration(h.plugin, storage);
+            when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            var items = new HashMap<Integer, ItemStack>(Map.of(4, h.stored));
+            new CommandLoader(h.plugin).createTestGrave(h.owner.getUniqueId(), "Owner", target, items, 7, "test", h.owner);
+            verify(h.owner).sendMessage("Grave creation declined: stored grave capacity is loading");
+            verify(oldest, never()).admitLimitRemoval(any()); verify(oldest, never()).removeGrave(any());
+            verify(h.platform, never()).runAtLocationTimer(any(), any(Runnable.class), anyLong(), anyLong(), any(TimeUnit.class));
+            verify(h.plugin, never()).addGrave(any()); assertEquals(Map.of(4, h.stored), items);
+            restoration.retire();
+        }
+    }
     private static Location prepare(GraveActionsTest.Harness h, Grave oldest, boolean drop) {
         when(h.config.getDisabledWorlds()).thenReturn(new ArrayList<>());
         when(h.config.getGraveLimit()).thenReturn(1);

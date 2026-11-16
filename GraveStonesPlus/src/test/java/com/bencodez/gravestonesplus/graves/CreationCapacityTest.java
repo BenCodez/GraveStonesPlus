@@ -9,6 +9,39 @@ import org.junit.jupiter.api.Test;
 import com.bencodez.gravestonesplus.storage.*;
 
 class CreationCapacityTest {
+    @Test void mysqlCapacityAdmissionWaitsForEveryStoredRecordBeforeSelectingReplacement() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.active.clear(); when(h.config.getGraveLimit()).thenReturn(1);
+            when(h.plugin.numberOfGraves(any())).thenCallRealMethod();
+            when(h.plugin.getOldestGrave(any())).thenCallRealMethod();
+            var storage = mock(GraveStorageManager.class); when(storage.isMySQL()).thenReturn(true);
+            var read = new java.util.concurrent.CompletableFuture<GraveStorageManager.RestorationRecords>();
+            when(storage.loadMySQLForRestoration()).thenReturn(read);
+            var ledger = mock(GraveClaimLedger.class);
+            when(ledger.restoration(any())).thenReturn(new java.util.concurrent.CompletableFuture<>());
+            when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
+            var restoration = new GraveRestoration(h.plugin, storage);
+            when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            var next = record(h, 1000);
+            restoration.start();
+            try {
+                assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> restoration.reserveCreation(next));
+                var records = new ArrayList<GravesConfig>();
+                for (int i = 0; i < 129; i++) records.add(record(h, 100 + i));
+                read.complete(new GraveStorageManager.RestorationRecords(records, List.of()));
+                h.ownerWork.remove().run(); // Only the first 128 are indexed.
+                assertEquals(128, h.plugin.numberOfGraves(h.owner.getUniqueId()));
+                assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> restoration.reserveCreation(next));
+                assertFalse(restoration.hasPending(GraveIdentity.of(next)));
+                h.ownerWork.remove().run();
+                var admitted = restoration.reserveCreation(next);
+                assertEquals(129, admitted.priorGraves());
+                assertSame(records.getFirst(), admitted.replacement().getGravesConfig());
+                verify(h.world, never()).getChunkAt(anyInt(), anyInt());
+                verify(h.events, never()).callEvent(any());
+            } finally { restoration.retire(); }
+        }
+    }
     private GravesConfig record(GraveActionsTest.Harness h, long time) {
         return new GravesConfig(h.owner.getUniqueId(), "Owner", new Location(h.world, 3, 64, 3),
                 new HashMap<>(Map.of(4, h.stored)), 7, "test", time, false, 0, null, null, "CHEST");

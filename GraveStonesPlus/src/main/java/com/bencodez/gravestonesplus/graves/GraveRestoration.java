@@ -49,7 +49,7 @@ public final class GraveRestoration {
     /** Called on the capture owner before scheduler admission. Returns the prior logical count. */
     public synchronized CreationAdmission reserveCreation(GravesConfig record) {
         String identity = GraveIdentity.of(record);
-        if (retired || identity == null || creating.size() >= MAX_CREATIONS || pending.containsKey(identity))
+        if (retired || isWaitingForStoredCapacity() || identity == null || creating.size() >= MAX_CREATIONS || pending.containsKey(identity))
             throw new java.util.concurrent.RejectedExecutionException("Grave creation capacity unavailable");
         int prior = plugin.numberOfGraves(record.getUuid());
         // A successfully admitted asynchronous eviction may temporarily retain one extra
@@ -532,6 +532,8 @@ public final class GraveRestoration {
         process(chunks.getOrDefault(new ChunkKey(world, x, z), Set.of()).stream().limit(MAX_BATCH).toList().iterator());
     }
     public synchronized boolean isLoading() { return !recordsLoaded; }
+    /** SQL capacity is unknown until every decoded record has entered the index. */
+    public synchronized boolean isWaitingForStoredCapacity() { return storage.isMySQL() && !recordsLoaded; }
     private synchronized void initiallyExamined(String key) { initialAdmission.remove(key); }
     public synchronized boolean hasPendingInitialAdmission() { return !initialAdmission.isEmpty(); }
     public boolean isConflicted(String identity) { return identity != null && conflicts.contains(identity); }

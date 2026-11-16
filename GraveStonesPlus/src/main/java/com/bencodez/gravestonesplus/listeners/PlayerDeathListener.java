@@ -110,6 +110,11 @@ public class PlayerDeathListener implements Listener {
 		}
 
 		final Player entity = event.getEntity();
+        var restoration = plugin.getGraveRestoration();
+        if (restoration != null && restoration.isWaitingForStoredCapacity()) {
+            plugin.getLogger().warning("Grave creation declined: stored grave capacity is loading; death drops and XP retained");
+            return;
+        }
         final String playerName = entity.getName();
 
 		Location emptyBlock = null;

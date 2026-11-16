@@ -5,6 +5,9 @@ import static org.mockito.Mockito.*;
 
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.junit.jupiter.api.Test;
+import org.mockito.ArgumentCaptor;
+import com.bencodez.gravestonesplus.graves.Grave;
+import com.bencodez.simpleapi.time.ParsedDuration;
 
 import com.bencodez.gravestonesplus.config.Config;
 import com.bencodez.gravestonesplus.graves.GraveDisplayType;
@@ -43,4 +46,23 @@ class LegacyConfigTest {
         config.loadValues();
         assertEquals(GraveDisplayType.CHEST, config.getGraveDisplayTypeEnum());
     }
+    @Test
+    void numericLegacyLifetimeUsesMinutesAndNegativeSentinelDoesNotSchedule() {
+        Grave grave = mock(Grave.class);
+        doCallRealMethod().when(grave).checkTimeLimit(anyString());
+        doCallRealMethod().when(grave).checkTimeLimit(anyInt());
+        doCallRealMethod().when(grave).checkTimeLimit(any(ParsedDuration.class));
+        grave.checkTimeLimit("-1");
+        grave.checkTimeLimit("0");
+        // The legacy disabled values must return before accessing a plugin or record.
+        verify(grave, never()).removeGrave(any());
+        reset(grave);
+        doCallRealMethod().when(grave).checkTimeLimit(anyString());
+        doCallRealMethod().when(grave).checkTimeLimit(anyInt());
+        grave.checkTimeLimit("1800");
+        ArgumentCaptor<ParsedDuration> duration = ArgumentCaptor.forClass(ParsedDuration.class);
+        verify(grave).checkTimeLimit(duration.capture());
+        assertEquals(1800L * 60L * 1000L, duration.getValue().getMillis());
+    }
+
 }

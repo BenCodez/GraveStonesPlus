@@ -51,11 +51,11 @@ class GraveRecoveryTest {
             Block block = mock(Block.class);
             when(block.getType()).thenReturn(material);
             GravesConfig record = record(false, "PLAYER_HEAD", block);
-            Grave grave = spy(new Grave(null, record));
-            doNothing().when(grave).createGrave();
+            GraveStonesPlus plugin = mock(GraveStonesPlus.class, RETURNS_DEEP_STUBS);
+            Grave grave = new Grave(plugin, record);
             var items = record.getItems();
             assertTrue(grave.recoverMissingMarker(), material.name());
-            verify(grave).createGrave();
+            verify(plugin.getBukkitScheduler()).runTask(eq(plugin), any(Runnable.class), eq(record.getLocation()));
             assertSame(record, grave.getGravesConfig());
             assertSame(items, record.getItems());
             assertEquals(42, record.getExp());
@@ -186,6 +186,22 @@ class GraveRecoveryTest {
         record.setDestroyed(true);
         callback.getValue().run();
         verifyNoInteractions(block);
+    }
+
+    @Test
+    void recoveryRechecksSolidReplacementAtFinalWrite() {
+        GraveStonesPlus plugin = mock(GraveStonesPlus.class, RETURNS_DEEP_STUBS);
+        Block block = mock(Block.class);
+        when(block.getType()).thenReturn(Material.WATER);
+        GravesConfig record = record(false, "CHEST", block);
+        Grave grave = new Grave(plugin, record);
+        assertTrue(grave.recoverMissingMarker());
+        ArgumentCaptor<Runnable> callback = ArgumentCaptor.forClass(Runnable.class);
+        verify(plugin.getBukkitScheduler()).runTask(eq(plugin), callback.capture(), eq(record.getLocation()));
+        when(block.getType()).thenReturn(Material.STONE);
+        callback.getValue().run();
+        verify(block, never()).setType(any(Material.class), anyBoolean());
+        assertFalse(record.isDestroyed());
     }
 
     private static void setField(Object target, String name, Object value) throws Exception {

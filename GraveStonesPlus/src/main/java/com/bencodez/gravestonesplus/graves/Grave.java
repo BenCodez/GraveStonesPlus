@@ -207,6 +207,10 @@ public class Grave {
 	 * Creates the grave marker in the world based on the stored display type.
 	 */
 	public void createGrave() {
+		createGrave(false);
+	}
+
+	private void createGrave(final boolean recoveryOnly) {
 		final Grave grave = this;
 
 		final GraveDisplayType typeToUse = getStoredDisplayTypeOrDefault();
@@ -218,7 +222,8 @@ public class Grave {
 
 				@Override
 				public void run() {
-					if (remove || gravesConfig.isDestroyed()) {
+					if (remove || gravesConfig.isDestroyed()
+							|| (recoveryOnly && !isReplaceableMarkerBlock())) {
 						return;
 					}
 					loadChunk(false);
@@ -244,7 +249,8 @@ public class Grave {
 
 				@Override
 				public void run() {
-					if (remove || gravesConfig.isDestroyed()) {
+					if (remove || gravesConfig.isDestroyed()
+							|| (recoveryOnly && !isReplaceableMarkerBlock())) {
 						return;
 					}
 					loadChunk(false);
@@ -269,7 +275,8 @@ public class Grave {
 
 				@Override
 				public void run() {
-					if (remove || gravesConfig.isDestroyed()) {
+					if (remove || gravesConfig.isDestroyed()
+							|| (recoveryOnly && !isReplaceableMarkerBlock())) {
 						return;
 					}
 					loadChunk(false);
@@ -621,13 +628,17 @@ public class Grave {
 		if (isValid()) {
 			return true;
 		}
-		Material material = gravesConfig.getLocation().getBlock().getType();
-		if (material == Material.AIR || material == Material.CAVE_AIR || material == Material.VOID_AIR
-				|| material == Material.WATER || material == Material.LAVA) {
-			createGrave();
+		if (isReplaceableMarkerBlock()) {
+			createGrave(true);
 			return true;
 		}
 		return false;
+	}
+
+	private boolean isReplaceableMarkerBlock() {
+		Material material = gravesConfig.getLocation().getBlock().getType();
+		return material == Material.AIR || material == Material.CAVE_AIR || material == Material.VOID_AIR
+				|| material == Material.WATER || material == Material.LAVA;
 	}
 
 	public BInventoryButton getGUIItem() {

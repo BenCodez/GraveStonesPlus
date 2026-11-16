@@ -93,6 +93,7 @@ public class Grave {
 	public Grave(GraveStonesPlus plugin, GravesConfig gravesConfig) {
 		this.plugin = plugin;
 		this.gravesConfig = gravesConfig;
+		this.remove = gravesConfig.isDestroyed();
 	}
 
 	/**
@@ -206,6 +207,10 @@ public class Grave {
 	 * Creates the grave marker in the world based on the stored display type.
 	 */
 	public void createGrave() {
+		createGrave(false);
+	}
+
+	private void createGrave(final boolean recoveryOnly) {
 		final Grave grave = this;
 
 		final GraveDisplayType typeToUse = getStoredDisplayTypeOrDefault();
@@ -217,10 +222,14 @@ public class Grave {
 
 				@Override
 				public void run() {
+					if (remove || gravesConfig.isDestroyed()
+							|| (recoveryOnly && !isReplaceableMarkerBlock())) {
+						return;
+					}
 					loadChunk(false);
 
 					Block block = grave.getGravesConfig().getLocation().getBlock();
-					block.setType(Material.CHEST);
+					block.setType(Material.CHEST, false);
 
 					// Fake chest only: cosmetic name, do not store items in chest inventory
 					if (block.getState() instanceof Chest) {
@@ -240,6 +249,10 @@ public class Grave {
 
 				@Override
 				public void run() {
+					if (remove || gravesConfig.isDestroyed()
+							|| (recoveryOnly && !isReplaceableMarkerBlock())) {
+						return;
+					}
 					loadChunk(false);
 
 					Block block = grave.getGravesConfig().getLocation().getBlock();
@@ -250,7 +263,7 @@ public class Grave {
 						itemDisplay.getPersistentDataContainer().set(plugin.getKey(), PersistentDataType.INTEGER, 1);
 					}
 
-					block.setType(Material.BARRIER);
+					block.setType(Material.BARRIER, false);
 					loadBlockMeta(block);
 				}
 			}, gravesConfig.getLocation());
@@ -262,10 +275,14 @@ public class Grave {
 
 				@Override
 				public void run() {
+					if (remove || gravesConfig.isDestroyed()
+							|| (recoveryOnly && !isReplaceableMarkerBlock())) {
+						return;
+					}
 					loadChunk(false);
 
 					Block block = grave.getGravesConfig().getLocation().getBlock();
-					block.setType(Material.PLAYER_HEAD);
+					block.setType(Material.PLAYER_HEAD, false);
 					if (block.getState() instanceof Skull) {
 						Skull skull = (Skull) block.getState();
 						skull.setOwningPlayer(Bukkit.getOfflinePlayer(getGravesConfig().getUuid()));
@@ -324,7 +341,7 @@ public class Grave {
 			Location hologramLocation = gravesConfig.getLocation().getBlock().getLocation().clone().add(.5, 0, .5);
 			for (Entity entity : hologramLocation.getWorld().getNearbyEntities(hologramLocation, 1, 3, 1)) {
 				if (entity.getType().equals(EntityType.ARMOR_STAND)
-						|| entity.getType().equals(EntityType.ITEM_DISPLAY)) {
+						|| "ITEM_DISPLAY".equals(entity.getType().name())) {
 					if (entity.getPersistentDataContainer().has(plugin.getKey(), PersistentDataType.INTEGER)) {
 						Integer value = entity.getPersistentDataContainer().get(plugin.getKey(),
 								PersistentDataType.INTEGER);
@@ -589,10 +606,45 @@ public class Grave {
 		}
 	}
 
+	private ItemBuilder getGUIIcon() {
+		// Respect the global opt-out from player profiles in recovery menus too.
+		if (plugin.getConfigFile().getGraveDisplayTypeEnum() == GraveDisplayType.CHEST) {
+			return new ItemBuilder(Material.CHEST);
+		}
+		return new ItemBuilder(Material.PLAYER_HEAD)
+				.setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()));
+	}
+
+	/**
+	 * Repair an active grave whose cosmetic block was lost to fluids or physics.
+	 * Never overwrite a replacement solid block or resurrect a broken record.
+	 *
+	 * @return whether the marker is present or repair was scheduled
+	 */
+	public boolean recoverMissingMarker() {
+		if (remove || gravesConfig.isDestroyed()) {
+			return false;
+		}
+		if (isValid()) {
+			return true;
+		}
+		if (isReplaceableMarkerBlock()) {
+			createGrave(true);
+			return true;
+		}
+		return false;
+	}
+
+	private boolean isReplaceableMarkerBlock() {
+		Material material = gravesConfig.getLocation().getBlock().getType();
+		return material == Material.AIR || material == Material.CAVE_AIR || material == Material.VOID_AIR
+				|| material == Material.WATER || material == Material.LAVA;
+	}
+
 	public BInventoryButton getGUIItem() {
 		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(
-				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
+				getGUIIcon()
 						.setName("&3&l" + gravesConfig.getPlayerName())
 						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
 								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
@@ -628,7 +680,7 @@ public class Grave {
 	public BInventoryButton getGUIItemBroken() {
 		Location loc = gravesConfig.getLocation();
 		BInventoryButton b = new BInventoryButton(
-				new ItemBuilder(Material.PLAYER_HEAD).setSkullOwner(Bukkit.getOfflinePlayer(gravesConfig.getUuid()))
+				getGUIIcon()
 						.setName("&3&l" + gravesConfig.getPlayerName())
 						.addLoreLine("&3" + "Location: " + loc.getWorld().getName() + " (" + loc.getBlockX() + ","
 								+ loc.getBlockY() + "," + loc.getBlockZ() + ")")
@@ -641,15 +693,6 @@ public class Grave {
 			public void onClick(ClickEvent clickEvent) {
 				Grave grave = (Grave) getData("grave");
 				if (clickEvent.getClick().equals(ClickType.SHIFT_RIGHT)) {
-					loadChunk(true);
-					grave.createGrave();
-					plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-
-						@Override
-						public void run() {
-							grave.createHologram();
-						}
-					}, grave.getGravesConfig().getLocation());
 					plugin.recreateBrokenGrave(grave);
 					clickEvent.getWhoClicked().sendMessage(MessageAPI.colorize("&cGrave readded"));
 				} else if (clickEvent.getClick().equals(ClickType.SHIFT_LEFT)) {
@@ -886,10 +929,12 @@ public class Grave {
 	}
 
 	public void createBrokenGrave() {
+		remove = false;
+		lastClick = 0;
 		gravesConfig.setDestroyed(false);
 		gravesConfig.setDestroyedTime(0);
 		createGrave();
-		createHologram();
+		plugin.getBukkitScheduler().runTask(plugin, this::createHologram, gravesConfig.getLocation());
 	}
 
 	public void dropItemsOnGround(Player p) {

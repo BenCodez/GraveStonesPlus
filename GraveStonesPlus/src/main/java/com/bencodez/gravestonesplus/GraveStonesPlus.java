@@ -125,7 +125,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			return;
 		}
 
-		grave.getGravesConfig().setDestroyed(false);
+		// A stale recovery-menu click must not recreate an already active marker.
+		if (!grave.isRemove() && !grave.getGravesConfig().isDestroyed()) {
+			return;
+		}
+
+		grave.createBrokenGrave();
 
 		if (!containsByKey(graves, grave)) {
 			graves.add(grave);
@@ -257,10 +262,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 						// Display-entities: ensure display entity is present if block is barrier
 						grave.checkBlockDisplayAndFixIfMissing();
 
-						if (grave.isValid()) {
+						if (grave.recoverMissingMarker()) {
 							grave.createHologram();
-							grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
 							graves.add(grave);
+							grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
 							debug("Grave loaded: " + grave.getGravesConfig().getLocation());
 
 						} else {
@@ -298,20 +303,21 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 				@Override
 				public void run() {
 					if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
-						for (int i = graves.size() - 1; i >= 0; i--) {
-							Grave grave = graves.get(i);
-							if (!grave.isRemove()) {
-								if (grave.isValid()) {
-									grave.checkGlowing();
-								} else {
-									plugin.getBukkitScheduler().runTask(plugin, () -> {
-										;
+						List<Grave> snapshot;
+						synchronized (graves) {
+							snapshot = new ArrayList<>(graves);
+						}
+						for (Grave grave : snapshot) {
+							plugin.getBukkitScheduler().runTask(plugin, () -> {
+								if (!grave.isRemove()) {
+									if (grave.recoverMissingMarker()) {
+										grave.checkGlowing();
+									} else {
 										grave.removeGrave(GraveRemoveReason.INVALID);
 										grave.removeHologramsAround();
-
-									}, grave.getGravesConfig().getLocation());
+									}
 								}
-							}
+							}, grave.getGravesConfig().getLocation());
 						}
 					} else {
 						cancel();

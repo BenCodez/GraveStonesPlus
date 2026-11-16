@@ -168,14 +168,7 @@ public class GraveBlockProtectionListener implements Listener {
 
 		event.setCancelled(true);
 
-		Material type = block.getType();
-		if (type == Material.BARRIER) {
-			restoreIfRemovedNextTick(block, Material.BARRIER);
-		} else if (type == Material.PLAYER_HEAD) {
-			restoreIfRemovedNextTick(block, Material.PLAYER_HEAD);
-		} else if (type == Material.CHEST) {
-			restoreIfRemovedNextTick(block, Material.CHEST);
-		}
+		restoreIfRemovedNextTick(block);
 	}
 
 	/**
@@ -300,17 +293,17 @@ public class GraveBlockProtectionListener implements Listener {
 	 * Restores a grave marker block on the next tick if it was removed.
 	 *
 	 * @param block    Block
-	 * @param expected Expected material
 	 */
-	private void restoreIfRemovedNextTick(final Block block, final Material expected) {
-		if (block == null) {
+	private void restoreIfRemovedNextTick(final Block block) {
+		final Grave grave = getGrave(block);
+		if (grave == null) {
 			return;
 		}
 
 		plugin.getBukkitScheduler().runTask(plugin, () -> {
-			if (block.getType() == Material.AIR) {
-				block.setType(expected, false);
-			}
+			// The grave may have been claimed/removed since the physics event.
+			// Recovery checks its live state before restoring either air or fluids.
+			grave.recoverMissingMarker();
 		}, block.getLocation());
 	}
 }

@@ -138,7 +138,6 @@ public class GravesConfig implements ConfigurationSerializable {
 		return serialized;
 	}
 
-	@SuppressWarnings("unchecked")
 	public static GravesConfig deserialize(Map<String, Object> deserialize) {
 		Object displayObj = deserialize.get("DisplayUUID");
 		String displayStr = displayObj != null ? displayObj.toString() : null;
@@ -190,10 +189,11 @@ public class GravesConfig implements ConfigurationSerializable {
 		if (items == null || items.isEmpty()) {
 			Object legacyItems = deserialize.get("Items");
 			if (legacyItems instanceof Map) {
-				try {
-					items = (HashMap<Integer, ItemStack>) legacyItems;
-				} catch (Exception e) {
-					items = new HashMap<Integer, ItemStack>();
+				// YAML map implementations and slot key types vary between versions.
+				// Copy entries rather than discarding a non-HashMap legacy inventory.
+				for (Map.Entry<?, ?> entry : ((Map<?, ?>) legacyItems).entrySet()) {
+					int slot = Integer.parseInt(entry.getKey().toString());
+					items.put(slot, (ItemStack) entry.getValue());
 				}
 			} else if (legacyItems instanceof String) {
 				// Extra fallback: if some older DB wrote encoded string under "Items"

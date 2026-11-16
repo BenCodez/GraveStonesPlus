@@ -37,8 +37,10 @@ class GraveActionsTest {
         final GraveStonesPlus plugin = mock(GraveStonesPlus.class);
         final Config config = mock(Config.class);
         final BukkitScheduler scheduler = mock(BukkitScheduler.class);
-        final com.bencodez.simpleapi.folialib.FoliaLib folia = mock(com.bencodez.simpleapi.folialib.FoliaLib.class);
-        final com.bencodez.simpleapi.folialib.impl.ServerImplementation platform = mock(com.bencodez.simpleapi.folialib.impl.ServerImplementation.class);
+        final com.bencodez.simpleapi.folialib.FoliaLib folia = mock(com.bencodez.simpleapi.folialib.FoliaLib.class, RETURNS_DEEP_STUBS);
+        // Infer the actual return type: newer compatible SimpleAPI snapshots
+        // return a subtype of ServerImplementation from getImpl().
+        final com.bencodez.simpleapi.folialib.impl.ServerImplementation platform = folia.getImpl();
         final World world = mock(World.class);
         final Player owner = mock(Player.class), helper = mock(Player.class);
         final PlayerInventory ownerInventory = mock(PlayerInventory.class), helperInventory = mock(PlayerInventory.class);
@@ -52,7 +54,7 @@ class GraveActionsTest {
         Harness() throws Exception {
             when(plugin.getName()).thenReturn("GraveStonesPlus"); when(plugin.getLogger()).thenReturn(Logger.getAnonymousLogger());
             when(plugin.isEnabled()).thenReturn(true); when(plugin.getConfigFile()).thenReturn(config);
-            when(scheduler.getFoliaLib()).thenReturn(folia); when(folia.getImpl()).thenReturn(platform);
+            when(scheduler.getFoliaLib()).thenReturn(folia);
             when(plugin.getBukkitScheduler()).thenReturn(scheduler); when(plugin.getTrustedGraveAccessStore()).thenReturn(access);
             when(plugin.getHologramHandler()).thenReturn(new com.bencodez.advancedcore.api.hologram.HologramHandler(plugin));
             when(plugin.getGraveClaimLedger()).thenReturn(ledger); when(plugin.getGraveNavigation()).thenReturn(navigation);

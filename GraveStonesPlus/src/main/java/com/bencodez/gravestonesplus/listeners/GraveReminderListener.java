@@ -108,7 +108,7 @@ public final class GraveReminderListener implements Listener {
         return plugin.getGraveReminderStore().isReady()
                 && plugin.getTrustedGraveAccessStore().isReady()
                 && plugin.getGraveClaimLedger().isReady()
-                && (restoration == null || !restoration.isLoading());
+                && (restoration == null || !restoration.isLoading() && !restoration.hasPendingInitialAdmission());
     }
     private void add(List<GraveReminderStore.Notice> notices, Player player, Grave grave, String kind, long deadline, long threshold, long now) {
         if (!GraveDeadlines.eligible(now, deadline, threshold)) return;

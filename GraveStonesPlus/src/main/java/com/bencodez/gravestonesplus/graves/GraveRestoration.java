@@ -21,6 +21,9 @@ public final class GraveRestoration {
     private final Map<String, Boolean> limitRequests = new HashMap<>();
     private final Set<String> displayRepairs = new HashSet<>();
     private final Set<String> savingDisplays = new HashSet<>();
+    // One bounded-by-records startup pass, independent of records retained for
+    // unavailable worlds/chunks. Login summaries must not consume partial lists.
+    private final Set<String> initialAdmission = new HashSet<>();
     private final Set<String> conflicts = ConcurrentHashMap.newKeySet();
     private final Map<ChunkKey, Set<String>> chunks = new HashMap<>();
     // Shares pending record ownership and retention; never scans worlds or publishes a live Grave.
@@ -237,6 +240,7 @@ public final class GraveRestoration {
             for (GravesConfig grave : concat(active, broken)) {
                 String identity = GraveIdentity.of(grave); String key = identity == null ? "unresolved-" + invalid++ : identity;
                 pending.put(key, grave);
+                if (!creating.contains(key)) initialAdmission.add(key);
                 if (identity != null) index(key, grave);
             }
             return invalid;
@@ -260,7 +264,7 @@ public final class GraveRestoration {
         plugin.getGraveClaimLedger().restoration(GraveIdentity.of(record)).whenComplete((decision, error) -> {
             if (retired || !plugin.isEnabled()) { running.set(false); return; }
             if (error != null || decision == GraveClaimLedger.Restoration.UNAVAILABLE) { process(batch); return; }
-            if (decision == GraveClaimLedger.Restoration.RESERVED) { process(batch); return; }
+            if (decision == GraveClaimLedger.Restoration.RESERVED) { initiallyExamined(key); process(batch); return; }
             Location loc = record.getLocation();
             if (loc != null && loc.getWorld() == null && record.getWorldId() != null) {
                 try {
@@ -279,7 +283,7 @@ public final class GraveRestoration {
             GraveClaimLedger.Restoration decision, Location loc) {
             // Both active and historical records require a resolved world before publication.
             // Keep unavailable worlds pending so menus and recreation never see a null world.
-            if (loc == null || loc.getWorld() == null) { process(batch); return; }
+            if (loc == null || loc.getWorld() == null) { initiallyExamined(key); process(batch); return; }
             if (decision == GraveClaimLedger.Restoration.PAID || record.isDestroyed()) {
                 plugin.getMarkerCleanup().retain(record).whenComplete((saved, failure) -> {
                     if (retired || !plugin.isEnabled()) { running.set(false); return; }
@@ -394,7 +398,10 @@ public final class GraveRestoration {
                     // Keep this record indexed until the serial storage owner acknowledges it.
                     persistDisplayRepair(key, record, loc);
 
-                }).whenComplete((unused, failure) -> process(batch));
+                }).whenComplete((unused, failure) -> {
+                    if (failure == null) initiallyExamined(key);
+                    process(batch);
+                });
             } catch (RuntimeException rejected) { running.set(false); }
     }
     private void persistDisplayRepair(String key, GravesConfig record, Location loc) {
@@ -429,6 +436,7 @@ public final class GraveRestoration {
         else { storage.saveBrokenGravesFromObjects(plugin.brokenGraveSnapshot()); storage.saveGravesFromObjects(plugin.activeGraveSnapshot()); }
     }
     private synchronized void resolved(String key, GravesConfig record) {
+        initialAdmission.remove(key);
         pending.remove(key); admitted.remove(key); published.remove(key); conflicts.remove(key);
         activeRecords.remove(key); limitRequests.remove(key);
         displayRepairs.remove(key); savingDisplays.remove(key);
@@ -524,6 +532,8 @@ public final class GraveRestoration {
         process(chunks.getOrDefault(new ChunkKey(world, x, z), Set.of()).stream().limit(MAX_BATCH).toList().iterator());
     }
     public synchronized boolean isLoading() { return !recordsLoaded; }
+    private synchronized void initiallyExamined(String key) { initialAdmission.remove(key); }
+    public synchronized boolean hasPendingInitialAdmission() { return !initialAdmission.isEmpty(); }
     public boolean isConflicted(String identity) { return identity != null && conflicts.contains(identity); }
     public synchronized boolean hasPending(String identity) { return identity != null && pending.containsKey(identity); }
     public void retire() { retired = true; if (timer != null) timer.cancel(); }

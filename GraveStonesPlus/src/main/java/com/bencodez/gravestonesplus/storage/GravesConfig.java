@@ -43,6 +43,9 @@ public class GravesConfig implements ConfigurationSerializable {
         catch (RuntimeException failure) { preparationFailure = failure; }
     }
 
+    /** Journal replay supplies the previously owner-encoded bytes; never decode items on the SQL worker. */
+    void acceptPreparedSqlItems(String encoded) { preparedItems = java.util.Objects.requireNonNull(encoded); }
+
     String encodedItemsForStorage() {
         if (binaryPreparationFailure != null) throw binaryPreparationFailure;
         if (preparationFailure != null) throw preparationFailure;

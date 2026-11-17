@@ -187,6 +187,33 @@ class MarkerRestorationRegressionTest {
         doAnswer(i -> { h.active.add(i.getArgument(0)); return null; }).when(h.plugin).restoreActiveRecord(any());
         var restoration = new GraveRestoration(h.plugin, backend); when(h.plugin.getGraveRestoration()).thenReturn(restoration); return restoration;
     }
+    @Test void malformedHistoricalLifetimeDoesNotStrandTheFollowingRecord() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var first = h.grave.getGravesConfig(); first.setDestroyed(true);
+            var next = new GravesConfig(h.owner.getUniqueId(), "Owner", new Location(h.world, 2, 64, 1),
+                    new HashMap<>(), 5, "synthetic", System.currentTimeMillis() + 1, true,
+                    System.currentTimeMillis(), null, null, "PLAYER_HEAD");
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, first, ready, ready);
+            var field = GraveRestoration.class.getDeclaredField("storage"); field.setAccessible(true);
+            var backend = (GraveStorageManager) field.get(restoration);
+            when(backend.loadGraves()).thenReturn(List.of(first, next));
+            var cleanup = mock(GraveMarkerCleanup.class);
+            when(cleanup.retain(any())).thenReturn(CompletableFuture.completedFuture(true));
+            when(h.plugin.getMarkerCleanup()).thenReturn(cleanup);
+            when(h.config.getBrokenGraveTimeLimit()).thenThrow(new NumberFormatException("synthetic malformed duration")).thenReturn("0");
+            restoration.start();
+            // The malformed record remains recoverable, but the serial batch must advance.
+            Runnable task; while ((task = h.ownerWork.poll()) != null) {
+                try { task.run(); } catch (NumberFormatException malformedDuration) { /* simulated owner reports it */ }
+            }
+            verify(h.plugin).restoreBrokenRecord(argThat(grave -> grave.getGravesConfig() == next));
+            assertTrue(restoration.hasPending(GraveIdentity.of(first)));
+            assertFalse(restoration.hasPending(GraveIdentity.of(next)));
+            assertEquals(17, first.getExp()); assertSame(h.stored, first.getItems().get(4));
+            verify(h.owner, never()).giveExp(anyInt()); restoration.retire();
+        }
+    }
     private static Block neighbor(GraveActionsTest.Harness h, Material type, int x) {
         var block = mock(Block.class); when(block.getWorld()).thenReturn(h.world); when(block.getType()).thenReturn(type);
         when(block.getX()).thenReturn(x); when(block.getY()).thenReturn(64); when(block.getZ()).thenReturn(1); return block;

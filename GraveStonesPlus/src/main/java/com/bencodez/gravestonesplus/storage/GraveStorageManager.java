@@ -170,6 +170,8 @@ public class GraveStorageManager {
 	 * @param graves active grave objects
 	 */
 	public synchronized void saveGravesFromObjects(List<Grave> graves) {
+        // Legacy SQL list saves are no-ops, not mutations or recovery inputs.
+        if (isMySQL()) return;
 		List<GravesConfig> list = new ArrayList<GravesConfig>();
 		if (graves != null) {
 			for (Grave g : copy(graves)) {
@@ -179,12 +181,11 @@ public class GraveStorageManager {
 			}
 		}
 		if (backend != null) {
-            List<PreparedSql> prepared = rememberSql(list, false);
             if (restorationLoading) { retained = recoverySnapshot(); return; }
             // Compose before admission: later region resolution cannot erase a record
             // from a previously captured snapshot. Following removal snapshots win in order.
             List<GravesConfig> safe = preserving(list, false);
-            enqueue(() -> { backend.saveGraves(safe); acknowledgeSql(prepared, false); });
+            enqueue(() -> backend.saveGraves(safe));
 		}
 	}
 
@@ -232,6 +233,8 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 	 * @param brokenGraves broken grave objects
 	 */
 	public synchronized void saveBrokenGravesFromObjects(List<Grave> brokenGraves) {
+        // Legacy SQL list saves are no-ops, not mutations or recovery inputs.
+        if (isMySQL()) return;
 		List<GravesConfig> list = new ArrayList<GravesConfig>();
 		if (brokenGraves != null) {
 			for (Grave g : copy(brokenGraves)) {
@@ -241,12 +244,11 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 			}
 		}
 		if (backend != null) {
-            List<PreparedSql> prepared = rememberSql(list, true);
             if (restorationLoading) { retained = recoverySnapshot(); return; }
             // Compose before admission: later region resolution cannot erase a record
             // from a previously captured snapshot. Following removal snapshots win in order.
             List<GravesConfig> safe = preserving(list, true);
-            enqueue(() -> { backend.saveBrokenGraves(safe); acknowledgeSql(prepared, false); });
+            enqueue(() -> backend.saveBrokenGraves(safe));
 		}
 	}
 

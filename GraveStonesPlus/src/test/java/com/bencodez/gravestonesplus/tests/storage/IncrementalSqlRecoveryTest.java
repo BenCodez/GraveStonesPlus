@@ -211,4 +211,42 @@ class IncrementalSqlRecoveryTest {
             verify(h.plugin, never()).activeGraveSnapshot(); verify(h.plugin, never()).brokenGraveSnapshot();
         }
     }
+    @ParameterizedTest @ValueSource(booleans = {false, true})
+    void legacySqlListNoOpCannotReplacePendingBrokenContents(boolean brokenList) throws Exception {
+        try (var h = new Fixture(4)) {
+            var stale = GraveStorageManager.snapshot(h.target);
+            var oldGrave = mock(Grave.class); when(oldGrave.getGravesConfig()).thenReturn(stale);
+            h.target.setDestroyed(true); h.target.getItems().get(0).setAmount(7);
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
+            doAnswer(call -> { entered.countDown(); waitFor(release); throw new IllegalStateException("synthetic SQL failure"); })
+                    .when(h.backend).updateExistingGrave(any(), eq(true));
+            var saved = new CopyOnWriteArrayList<String>();
+            doAnswer(call -> {
+                var captured = (GravesConfig) call.getArgument(0);
+                saved.add(captured.getItems().get(0).getAmount() + ":" + call.getArgument(1)); return null;
+            }).when(h.backend).upsertGrave(any(), anyBoolean());
+            h.manager.updateExistingGrave(h.target, true); waitFor(entered);
+            try {
+                if (brokenList) h.manager.saveBrokenGravesFromObjects(List.of(oldGrave));
+                else h.manager.saveGravesFromObjects(List.of(oldGrave));
+            } finally { release.countDown(); }
+            await(h.io.barrier());
+            assertEquals(List.of("7:true"), saved, "legacy SQL no-op must not replace a genuine transition");
+            verify(h.backend, never()).saveGraves(any()); verify(h.backend, never()).saveBrokenGraves(any());
+        }
+    }
+    @Test void saturatedLegacySqlListsCannotCreateRecoveryRows() throws Exception {
+        try (var h = new Fixture(1)) {
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
+            var first = h.io.submit(() -> { entered.countDown(); waitFor(release); return true; });
+            waitFor(entered); var queued = h.io.submit(() -> true);
+            var grave = mock(Grave.class); when(grave.getGravesConfig()).thenReturn(h.target);
+            try {
+                h.manager.saveGravesFromObjects(List.of(grave));
+                h.manager.saveBrokenGravesFromObjects(List.of(grave));
+            } finally { release.countDown(); }
+            await(first); await(queued); await(h.io.barrier());
+            verifyNoInteractions(h.backend); assertEquals(0, h.encodes.get());
+        }
+    }
 }

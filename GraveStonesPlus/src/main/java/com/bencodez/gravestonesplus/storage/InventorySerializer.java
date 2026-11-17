@@ -3,7 +3,6 @@ package com.bencodez.gravestonesplus.storage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.EOFException;
 import java.util.List;
 import java.util.HashSet;
 import java.util.HashMap;
@@ -93,22 +92,21 @@ public final class InventorySerializer {
                     throw new IOException("Could not read inventory data", e);
                 }
             }
-            int marker;
-            try {
-                marker = ois.readInt();
-            } catch (EOFException legacyEnd) {
-                return items;
-            }
-            if (marker == SLOT_KEYS) {
-                int count = ois.readInt();
-                if (count <= 0 || count > size) throw new IOException("Invalid slot-key count");
-                HashSet<Integer> seen = new HashSet<>();
-                for (int i = 0; i < count; i++) {
-                    int slot = ois.readInt();
-                    if (slot >= 0 || !seen.add(slot)) throw new IOException("Invalid equipment slot key");
-                    ItemStack item = items.remove(size - count + i);
-                    if (item != null) items.put(slot, item);
-                }
+            // A legacy frame ends cleanly. Once any suffix byte exists,
+            // require the complete marker instead of swallowing partial EOF.
+            int first = ois.read();
+            if (first == -1) return items;
+            int marker = (first << 24) | (ois.readUnsignedByte() << 16)
+                    | (ois.readUnsignedByte() << 8) | ois.readUnsignedByte();
+            if (marker != SLOT_KEYS) throw new IOException("Invalid slot-key marker");
+            int count = ois.readInt();
+            if (count <= 0 || count > size) throw new IOException("Invalid slot-key count");
+            HashSet<Integer> seen = new HashSet<>();
+            for (int i = 0; i < count; i++) {
+                int slot = ois.readInt();
+                if (slot >= 0 || !seen.add(slot)) throw new IOException("Invalid equipment slot key");
+                ItemStack item = items.remove(size - count + i);
+                if (item != null) items.put(slot, item);
             }
         }
         return items;

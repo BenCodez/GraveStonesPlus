@@ -105,4 +105,23 @@ class InventorySerializerTest {
         }
     }
 
+    private String withMarkerBytes(byte[] marker) throws Exception {
+        var bytes = new ByteArrayOutputStream();
+        try (var out = new BukkitObjectOutputStream(bytes)) {
+            out.writeInt(1); out.writeObject(new TestItem("equipment")); out.write(marker);
+        }
+        return Base64.getEncoder().encodeToString(bytes.toByteArray());
+    }
+    @Test void partialMarkerIsRejected() throws Exception {
+        byte[] marker = {0x53, 0x4c, 0x54};
+        for (int count = 1; count <= 3; count++) {
+            String encoded = withMarkerBytes(Arrays.copyOf(marker, count));
+            assertThrows(IOException.class, () -> InventorySerializer.decode(encoded));
+        }
+    }
+    @Test void unknownMarkerIsRejected() throws Exception {
+        String encoded = withMarkerBytes(new byte[] {0x53, 0x4c, 0x54, 0x32});
+        assertThrows(IOException.class, () -> InventorySerializer.decode(encoded));
+    }
+
 }

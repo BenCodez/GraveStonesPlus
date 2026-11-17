@@ -19,8 +19,10 @@ public final class GraveNavigation {
         if (identity == null) return null;
         Grave grave = resolve(identity);
         if (grave == null && pending(identity)) return null;
-        if (temporarilyReserved(grave, player, identity)) return null;
-        if (grave == null || !plugin.canTrack(grave, player)) { selected.remove(player.getUniqueId()); return null; }
+        if (grave == null || !plugin.canTrack(grave, player)) {
+            if (temporarilyUnavailable(grave, player, identity)) return null;
+            selected.remove(player.getUniqueId()); return null;
+        }
         return grave;
     }
     private Grave resolve(String identity) {
@@ -48,9 +50,16 @@ public final class GraveNavigation {
         return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().hasPending(identity)
                 && !plugin.getGraveRestoration().isConflicted(identity);
     }
-    private boolean temporarilyReserved(Grave grave, Player player, String identity) {
-        return grave != null && plugin.isLiveGrave(grave) && plugin.getGraveClaimLedger().isPendingRecovery(identity)
-                && (grave.isOwner(player) || plugin.getTrustedGraveAccessStore().allows(identity, player.getUniqueId(), TrustedGraveAccess.Kind.TRACK));
+    private boolean temporarilyUnavailable(Grave grave, Player player, String identity) {
+        if (grave == null || grave.isRemove() || grave.getGravesConfig().isDestroyed()
+                || !(grave.isOwner(player) || plugin.getTrustedGraveAccessStore().allows(identity, player.getUniqueId(), TrustedGraveAccess.Kind.TRACK))) return false;
+        // A deadline fences interaction before its cancellable removal callback.
+        // Preserve authorized identity until removal commits or cancellation restores liveness.
+        if (plugin.getGraveClaimLedger().isPendingRecovery(identity)) return true;
+        if (plugin.getGraveClaimLedger().isBlocked(identity)) return false;
+        // Called after a failed trackability check: a deadline may cross during
+        // that check, or cancellation may already have restored liveness.
+        return grave.getExpiryDeadline() > 0 || plugin.canTrack(grave, player);
     }
     public void refresh(Player player) {
         if (loading()) return;
@@ -71,8 +80,8 @@ public final class GraveNavigation {
             // is stale; restoration may have finished its backend read while the
             // matching record is still awaiting admission.
             if (grave == null && pending(identity == null ? legacyIdentity : identity)) continue;
-            if (temporarilyReserved(grave, player, identity == null ? legacyIdentity : identity)) continue;
             if (grave == null || !plugin.canTrack(grave, player)) {
+                if (temporarilyUnavailable(grave, player, identity == null ? legacyIdentity : identity)) continue;
                 meta.setLodestone(null); meta.getPersistentDataContainer().remove(identityKey);
                 meta.getPersistentDataContainer().remove(legacy); meta.setDisplayName("Inactive grave compass");
             } else {

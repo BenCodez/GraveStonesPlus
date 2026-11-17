@@ -39,6 +39,103 @@ class NavigationLegacyCompassRegressionTest {
             h.navigation.refresh(viewer); verify(compass.data, times(2)).remove(any()); assertNull(h.navigation.target(viewer));
         }
     }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void cancelledExpirationRestoresSelectedTrackingWithoutRetagging(boolean legacy) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.grant(TrustedGraveAccess.Kind.TRACK);
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), h.grave.getGravesConfig().getLocation());
+            if (!legacy) when(compass.data.get(any(), eq(PersistentDataType.STRING))).thenReturn(h.identity());
+            var viewer = legacy ? h.owner : h.helper;
+            when((legacy ? h.ownerInventory : h.helperInventory).getContents()).thenReturn(new ItemStack[] {compass.item});
+            assertTrue(h.navigation.select(viewer, h.grave));
+            expire(h.grave);
+            assertNull(h.navigation.target(viewer), "elapsed deadline must not expose a usable target");
+            h.navigation.refresh(viewer);
+            verify(compass.data, never()).remove(any()); verify(compass.item, never()).setItemMeta(any());
+            doAnswer(call -> {
+                if (call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveRemoveEvent event
+                        && event.getReason() == com.bencodez.gravestonesplus.events.GraveRemoveReason.EXPIRED)
+                    event.setCancelled(true);
+                return null;
+            }).when(h.events).callEvent(any());
+            h.bukkit.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(true);
+            try { h.grave.removeGrave(com.bencodez.gravestonesplus.events.GraveRemoveReason.EXPIRED); }
+            finally { h.bukkit.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(false); }
+            assertEquals(0, h.grave.getExpiryDeadline()); assertFalse(h.grave.isRemove());
+            assertSame(h.grave, h.navigation.target(viewer), "cancelled expiry must preserve the selected identity");
+            h.navigation.refresh(viewer);
+            verify(compass.meta).setLodestone(h.grave.getGravesConfig().getLocation());
+            verify(compass.data, never()).remove(any());
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void committedExpirationClearsPreviouslyPreservedCompass(boolean legacy) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.grant(TrustedGraveAccess.Kind.TRACK);
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), h.grave.getGravesConfig().getLocation());
+            if (!legacy) when(compass.data.get(any(), eq(PersistentDataType.STRING))).thenReturn(h.identity());
+            var viewer = legacy ? h.owner : h.helper;
+            when((legacy ? h.ownerInventory : h.helperInventory).getContents()).thenReturn(new ItemStack[] {compass.item});
+            assertTrue(h.navigation.select(viewer, h.grave)); expire(h.grave);
+            h.navigation.refresh(viewer); verify(compass.data, never()).remove(any());
+            h.bukkit.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(true);
+            try { h.grave.removeGrave(com.bencodez.gravestonesplus.events.GraveRemoveReason.EXPIRED); }
+            finally { h.bukkit.when(org.bukkit.Bukkit::isPrimaryThread).thenReturn(false); }
+            assertTrue(h.grave.isRemove()); assertTrue(h.grave.getGravesConfig().isDestroyed());
+            h.navigation.refresh(viewer); verify(compass.data, times(2)).remove(any());
+            assertNull(h.navigation.target(viewer));
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(strings = {"revoked", "paid", "destroyed", "removed"})
+    void elapsedDeadlineCannotPreservePermanentlyUnauthorizedTargets(String terminal) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.grant(TrustedGraveAccess.Kind.TRACK);
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), h.grave.getGravesConfig().getLocation());
+            when(compass.data.get(any(), eq(PersistentDataType.STRING))).thenReturn(h.identity());
+            when(h.helperInventory.getContents()).thenReturn(new ItemStack[] {compass.item});
+            assertTrue(h.navigation.select(h.helper, h.grave)); expire(h.grave);
+            switch (terminal) {
+                case "revoked" -> assertTrue(FeaturePersistenceTest.await(h.access.revokeAsync(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.TRACK)));
+                case "paid" -> {
+                    assertTrue(FeaturePersistenceTest.await(h.ledger.reserve(h.identity(), h.owner.getUniqueId())));
+                    assertTrue(FeaturePersistenceTest.await(h.ledger.paid(h.identity(), h.owner.getUniqueId())));
+                }
+                case "destroyed" -> h.grave.getGravesConfig().setDestroyed(true);
+                case "removed" -> h.active.clear();
+                default -> throw new AssertionError(terminal);
+            }
+            assertNull(h.navigation.target(h.helper)); h.navigation.refresh(h.helper);
+            verify(compass.data, times(2)).remove(any()); verify(compass.meta).setLodestone(null);
+        }
+    }
+    @Test void cancellationDuringTrackabilityCheckCannotEraseTheRestoredSelection() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), h.grave.getGravesConfig().getLocation());
+            when(compass.data.get(any(), eq(PersistentDataType.STRING))).thenReturn(h.identity());
+            when(h.ownerInventory.getContents()).thenReturn(new ItemStack[] {compass.item});
+            assertTrue(h.navigation.select(h.owner, h.grave)); expire(h.grave);
+            when(h.plugin.canTrack(h.grave, h.owner)).thenAnswer(call -> {
+                if (h.grave.getExpiryDeadline() > 0) {
+                    var deadline = Grave.class.getDeclaredField("expiryDeadline"); deadline.setAccessible(true);
+                    deadline.setLong(h.grave, 0); // Cancellation wins after the first expired-state observation.
+                    return false;
+                }
+                return call.callRealMethod();
+            });
+            h.navigation.refresh(h.owner);
+            verify(compass.data, never()).remove(any());
+            assertSame(h.grave, h.navigation.target(h.owner));
+        }
+    }
+
+    private static void expire(Grave grave) throws Exception {
+        var deadline = Grave.class.getDeclaredField("expiryDeadline"); deadline.setAccessible(true);
+        deadline.setLong(grave, System.currentTimeMillis() - 1);
+    }
+
     @Test void paidOutcomeInvalidatesThePreviouslyReservedCompass() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             Compass compass = compass(h, h.grave.getGravesConfig().getTime(), new Location(h.world, 1, 64, 1));

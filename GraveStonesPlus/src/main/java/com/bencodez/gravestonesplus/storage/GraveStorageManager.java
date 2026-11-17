@@ -17,6 +17,13 @@ public class GraveStorageManager {
 	private GraveStorageBackend backend;
 	private DataStorageType type = DataStorageType.FLATFILE;
     private record Recovery(List<GravesConfig> active, List<GravesConfig> broken) { }
+    private record SqlKey(java.util.UUID player, java.util.UUID world, long time, int x, int y, int z) { }
+    private record PreparedSql(SqlKey key, GravesConfig grave, boolean broken) { }
+    private static final Recovery SQL_RECOVERY = new Recovery(List.of(), List.of());
+    // Only outstanding SQL mutations: one latest owner-prepared value per identity.
+    // Existing, unchanged backend rows do not need to be recopied for recovery.
+    private final java.util.Map<SqlKey, PreparedSql> sqlPending = new java.util.LinkedHashMap<>();
+
     private Recovery retained;
     private Recovery latestPrepared;
     private boolean recovering;
@@ -152,7 +159,8 @@ public class GraveStorageManager {
 	public synchronized void setBroken(GravesConfig grave, boolean broken) {
 		if (backend != null && isMySQL()) {
 			GravesConfig snapshot = snapshot(grave);
-            enqueue(() -> backend.setBroken(snapshot, broken));
+            PreparedSql prepared = rememberSql(snapshot, broken);
+            enqueue(() -> { backend.setBroken(snapshot, broken); acknowledgeSql(prepared, false); });
 		}
 	}
 
@@ -171,11 +179,12 @@ public class GraveStorageManager {
 			}
 		}
 		if (backend != null) {
+            List<PreparedSql> prepared = rememberSql(list, false);
             if (restorationLoading) { retained = recoverySnapshot(); return; }
             // Compose before admission: later region resolution cannot erase a record
             // from a previously captured snapshot. Following removal snapshots win in order.
             List<GravesConfig> safe = preserving(list, false);
-            enqueue(() -> backend.saveGraves(safe));
+            enqueue(() -> { backend.saveGraves(safe); acknowledgeSql(prepared, false); });
 		}
 	}
 
@@ -196,7 +205,8 @@ public class GraveStorageManager {
 	public synchronized void upsertGrave(GravesConfig grave, boolean broken) {
 		if (backend != null && isMySQL()) {
 			GravesConfig snapshot = snapshot(grave);
-            enqueue(() -> backend.upsertGrave(snapshot, broken));
+            PreparedSql prepared = rememberSql(snapshot, broken);
+            enqueue(() -> { backend.upsertGrave(snapshot, broken); acknowledgeSql(prepared, false); });
 		}
 	}
 
@@ -209,7 +219,8 @@ public class GraveStorageManager {
 public synchronized void updateExistingGrave(GravesConfig grave, boolean broken) {
 	if (backend != null && isMySQL()) {
 		GravesConfig snapshot = snapshot(grave);
-        enqueue(() -> backend.updateExistingGrave(snapshot, broken));
+        PreparedSql prepared = rememberSql(snapshot, broken);
+        enqueue(() -> { backend.updateExistingGrave(snapshot, broken); acknowledgeSql(prepared, false); });
 	}
 }
 
@@ -230,11 +241,12 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 			}
 		}
 		if (backend != null) {
+            List<PreparedSql> prepared = rememberSql(list, true);
             if (restorationLoading) { retained = recoverySnapshot(); return; }
             // Compose before admission: later region resolution cannot erase a record
             // from a previously captured snapshot. Following removal snapshots win in order.
             List<GravesConfig> safe = preserving(list, true);
-            enqueue(() -> backend.saveBrokenGraves(safe));
+            enqueue(() -> { backend.saveBrokenGraves(safe); acknowledgeSql(prepared, false); });
 		}
 	}
 
@@ -243,7 +255,8 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         if (backend == null || !isMySQL()) return java.util.concurrent.CompletableFuture.failedFuture(
                 new IllegalStateException("MySQL grave backend unavailable"));
         GravesConfig captured = snapshot(grave);
-        return enqueueFuture(() -> { backend.saveDisplayIdentity(captured); return true; });
+        PreparedSql prepared = rememberSql(captured, captured.isDestroyed());
+        return enqueueFuture(() -> { backend.saveDisplayIdentity(captured); acknowledgeSql(prepared, false); return true; });
     }
 
     /** Acknowledge this exact existing SQL row without rewriting or serializing its contents. */
@@ -251,7 +264,8 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         if (backend == null || !isMySQL()) return java.util.concurrent.CompletableFuture.failedFuture(
                 new IllegalStateException("MySQL grave backend unavailable"));
         GravesConfig captured = snapshot(grave);
-        return enqueueFuture(() -> { backend.saveRecreatedGrave(captured); return true; });
+        PreparedSql prepared = rememberSql(captured, false);
+        return enqueueFuture(() -> { backend.saveRecreatedGrave(captured); acknowledgeSql(prepared, false); return true; });
     }
 
 	public synchronized java.util.concurrent.CompletableFuture<Boolean> saveSnapshotFromObjects(
@@ -259,14 +273,22 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		List<GravesConfig> active = snapshotObjects(activeGraves);
 		List<GravesConfig> broken = snapshotObjects(brokenGraves);
 		if (backend == null) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage backend unavailable"));
-		if (restorationLoading) { retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage restoration pending")); }
+		if (restorationLoading) {
+            rememberSql(active, false); rememberSql(broken, true);
+            retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage restoration pending"));
+        }
 		List<GravesConfig> safeActive = preserving(active, false);
 		List<GravesConfig> safeBroken = preserving(broken, true);
-		if (isMySQL()) return enqueueFuture(() -> {
-			for (GravesConfig grave : safeActive) backend.upsertGrave(grave, false);
-			for (GravesConfig grave : safeBroken) backend.upsertGrave(grave, true);
-			return true;
-		});
+        if (isMySQL()) {
+            List<PreparedSql> prepared = new ArrayList<>(rememberSql(safeActive, false));
+            prepared.addAll(rememberSql(safeBroken, true));
+            return enqueueFuture(() -> {
+                for (GravesConfig grave : safeActive) backend.upsertGrave(grave, false);
+                for (GravesConfig grave : safeBroken) backend.upsertGrave(grave, true);
+                acknowledgeSql(prepared, false);
+                return true;
+            });
+        }
 		return enqueueFuture(() -> { backend.saveSnapshot(safeActive, safeBroken); return true; });
 	}
 
@@ -298,6 +320,32 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                 grave.getDisplayUUID(), grave.getInteractUUID(), grave.getGraveDisplayType());
         copy.setWorldId(grave.getWorldId()); copy.prepareItemsForStorage(); return copy;
     }
+    /** Caller already captured/encoded this record on its owner; do not inspect other graves. */
+    private PreparedSql rememberSql(GravesConfig grave, boolean broken) {
+        if (!isMySQL() || closeRequested || backendClosed) return null;
+        var location = grave.getLocation();
+        SqlKey key = new SqlKey(grave.getUuid(), grave.getWorldId(), grave.getTime(),
+                location.getBlockX(), location.getBlockY(), location.getBlockZ());
+        PreparedSql prepared = new PreparedSql(key, grave, broken);
+        sqlPending.put(key, prepared);
+        return prepared;
+    }
+    private List<PreparedSql> rememberSql(List<GravesConfig> records, boolean broken) {
+        if (!isMySQL() || closeRequested || backendClosed) return List.of();
+        List<PreparedSql> prepared = new ArrayList<>(records.size());
+        for (GravesConfig grave : records) prepared.add(rememberSql(grave, broken));
+        return prepared;
+    }
+    private synchronized void acknowledgeSql(PreparedSql prepared, boolean recovery) {
+        // A partial/older write may not have persisted all fields. Once recovery is
+        // required, only a full recovery upsert can retire the latest prepared value.
+        if (prepared != null && (recovery || retained == null && !recovering)
+                && sqlPending.get(prepared.key()) == prepared) sqlPending.remove(prepared.key());
+    }
+    private void acknowledgeSql(List<PreparedSql> prepared, boolean recovery) {
+        for (PreparedSql record : prepared) acknowledgeSql(record, recovery);
+    }
+
     /** Retain one latest authoritative snapshot when admission fails, rather than
      * discarding a death/removal transition. Capture and admission share this lock. */
     private synchronized void enqueue(Runnable write) {
@@ -310,7 +358,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         admitted.submit(() -> {
             started.set(true);
             try { write.run(); return true; }
-            catch (RuntimeException failure) {
+            catch (RuntimeException | Error failure) {
                 synchronized (this) { if (retained == null) retained = latestPrepared; }
                 throw failure;
             }
@@ -331,7 +379,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		var admitted = plugin.getFeatureIO().admit();
 		if (admitted == null) { retained = latestPrepared; return java.util.concurrent.CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException("feature worker unavailable")); }
 		var started = new java.util.concurrent.atomic.AtomicBoolean();
-		var result = admitted.submit(() -> { started.set(true); try { return write.get(); } catch (RuntimeException failure) {
+		var result = admitted.submit(() -> { started.set(true); try { return write.get(); } catch (RuntimeException | Error failure) {
 			synchronized (this) { if (retained == null) retained = latestPrepared; } throw failure;
 		} });
 		result.whenComplete((saved, failure) -> { if (failure != null) {
@@ -341,6 +389,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		return result;
 	}
     private Recovery recoverySnapshot() {
+        if (isMySQL()) return SQL_RECOVERY;
         List<GravesConfig> active = new ArrayList<>(), broken = new ArrayList<>();
         for (Grave grave : plugin.activeGraveSnapshot()) active.add(snapshot(grave.getGravesConfig()));
         for (Grave grave : plugin.brokenGraveSnapshot()) broken.add(snapshot(grave.getGravesConfig()));
@@ -350,6 +399,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
     private void flushRetained() {
         while (true) {
             Recovery recovery;
+            List<PreparedSql> sqlRecovery = null;
             boolean loading;
             synchronized (this) {
                 if (backendClosed) return;
@@ -357,7 +407,10 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                 recovery = loading && !closeRequested ? null : retained;
                 if (!loading || closeRequested) retained = null;
                 recovering = recovery != null;
-                if (recovery != null) recovery = new Recovery(preserving(recovery.active(), false), preserving(recovery.broken(), true));
+                if (recovery != null) {
+                    if (isMySQL()) sqlRecovery = List.copyOf(sqlPending.values());
+                    else recovery = new Recovery(preserving(recovery.active(), false), preserving(recovery.broken(), true));
+                }
             }
             if (loading && recovery == null) {
                 closeBackendIfRequested();
@@ -370,13 +423,15 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
             boolean failed = false;
             try {
                 if (isMySQL()) {
-                    for (GravesConfig grave : recovery.active()) backend.upsertGrave(grave, false);
-                    for (GravesConfig grave : recovery.broken()) backend.upsertGrave(grave, true);
+                    for (PreparedSql prepared : sqlRecovery) {
+                        backend.upsertGrave(prepared.grave(), prepared.broken());
+                        acknowledgeSql(prepared, true);
+                    }
                 } else {
                     if (loading) backend.saveStartupSnapshot(recovery.active(), recovery.broken());
                     else backend.saveSnapshot(recovery.active(), recovery.broken());
                 }
-            } catch (RuntimeException failure) {
+            } catch (RuntimeException | Error failure) {
                 synchronized (this) { if (retained == null) retained = recovery; }
                 failed = true;
                 plugin.getLogger().severe("Retained grave backend snapshot could not be flushed; storage requires repair before shutdown.");

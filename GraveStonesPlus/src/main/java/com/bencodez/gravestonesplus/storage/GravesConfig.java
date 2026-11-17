@@ -237,11 +237,11 @@ public class GravesConfig implements ConfigurationSerializable {
 		if (items == null || items.isEmpty()) {
 			Object legacyItems = deserialize.get("Items");
 			if (legacyItems instanceof Map) {
-				try {
-					items = (HashMap<Integer, ItemStack>) legacyItems;
-				} catch (Exception e) {
-					items = new HashMap<Integer, ItemStack>();
-				}
+                // Legacy YAML maps and slot key types vary. Preserve equipment
+                // keys without changing the separate ItemsEncoded format.
+                for (Map.Entry<?, ?> entry : ((Map<?, ?>) legacyItems).entrySet()) {
+                    items.put(Integer.parseInt(entry.getKey().toString()), (ItemStack) entry.getValue());
+                }
 			} else if (legacyItems instanceof String) {
 				// Extra fallback: if some older DB wrote encoded string under "Items"
 				try {

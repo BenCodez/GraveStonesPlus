@@ -12,6 +12,17 @@ import org.junit.jupiter.api.Test;
 
 /** Exercises the real marker scheduler, including actors in a different region. */
 class GraveRegionOwnershipTest {
+    @Test void chestRecoveryIconsAvoidProfileLookupForLegacyHeadRecords() throws Exception {
+        try (var h = new GraveActionsTest.Harness();
+                var builders = mockConstruction(com.bencodez.advancedcore.api.item.ItemBuilder.class, (builder, context) ->
+                        assertEquals(Material.CHEST, context.arguments().getFirst()))) {
+            when(h.config.getGraveDisplayTypeEnum()).thenReturn(GraveDisplayType.CHEST);
+            var method = Grave.class.getDeclaredMethod("recoveryMenuIcon"); method.setAccessible(true);
+            Object icon = method.invoke(h.grave);
+            assertSame(builders.constructed().getFirst(), icon);
+            h.bukkit.verify(() -> org.bukkit.Bukkit.getOfflinePlayer(any(java.util.UUID.class)), never());
+        }
+    }
     @Test void remoteClaimCallbacksBelongToTheGraveRegion() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             when(h.folia.isFolia()).thenReturn(true);
@@ -87,11 +98,12 @@ class GraveRegionOwnershipTest {
     @Test void retiredActorAfterClaimCallbacksReleasesUnreservedAdmission() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             when(h.folia.isFolia()).thenReturn(true);
+            h.grave.claim(h.owner);
             doAnswer(call -> { ((Runnable) call.getArgument(2)).run();
                 return java.util.concurrent.CompletableFuture.completedFuture(
                     com.bencodez.simpleapi.folialib.enums.EntityTaskResult.SUCCESS);
             }).when(h.platform).runAtEntityWithFallback(any(org.bukkit.entity.Entity.class), any(), any(Runnable.class));
-            h.grave.claim(h.owner); h.entityWork.remove().run(); h.regionWork.remove().run();
+            h.entityWork.remove().run(); h.regionWork.remove().run();
             assertFalse(h.ledger.isBlocked(h.identity()));
             var inProgress = Grave.class.getDeclaredField("claimInProgress"); inProgress.setAccessible(true);
             assertFalse(inProgress.getBoolean(h.grave)); verify(h.owner, never()).giveExp(anyInt());
@@ -178,6 +190,7 @@ class GraveRegionOwnershipTest {
                 });
                 h.active.clear(); grave.getGravesConfig().setDestroyed(true);
                 grave.getGravesConfig().setGraveDisplayType(type);
+                grave.setLastClick(987L);
                 var restored = grave.recreateAsync(h.helper, true);
                 FeaturePersistenceTest.await(h.io.barrier()); FeaturePersistenceTest.await(h.io.barrier());
                 assertTrue(h.regionWork.isEmpty()); assertFalse(restored.isDone());
@@ -187,11 +200,12 @@ class GraveRegionOwnershipTest {
                 assertEquals(1, h.regionWork.size()); assertFalse(restored.isDone());
                 assertTrue(grave.getGravesConfig().isDestroyed());
                 graveOwner.set(true); h.regionWork.remove().run(); graveOwner.set(false);
-                assertTrue(FeaturePersistenceTest.await(restored));
+                assertFalse(restored.isDone(), "queued marker admission is not completion");
                 assertFalse(grave.getGravesConfig().isDestroyed());
                 verify(h.world, never()).getBlockAt(any(Location.class));
-                assertEquals(2, h.regionWork.size(), "marker and hologram each dispatch to the grave");
-                graveOwner.set(true);
+                assertEquals(1, h.regionWork.size(), "marker must execute before recreation completes");
+                graveOwner.set(true); h.regionWork.remove().run();
+                assertTrue(FeaturePersistenceTest.await(restored)); assertEquals(0, grave.getLastClick());
                 while (!h.regionWork.isEmpty()) h.regionWork.remove().run();
                 graveOwner.set(false);
                 Material material = type.equals("CHEST") ? Material.CHEST : type.equals("PLAYER_HEAD") ? Material.PLAYER_HEAD : Material.BARRIER;
@@ -216,14 +230,28 @@ class GraveRegionOwnershipTest {
         }
     }
 
+    @Test void retirementBeforeMarkerMutationKeepsRecreationHistoricalAndRetryable() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.grave.getGravesConfig().setDestroyed(true); h.grave.getGravesConfig().setDestroyedTime(4567L);
+            var restored = h.grave.recreateAsync(null, true); h.drain(); h.regionWork.remove().run();
+            assertFalse(restored.isDone()); assertFalse(h.grave.getGravesConfig().isDestroyed());
+            h.grave.retireAcknowledgments(); assertFalse(FeaturePersistenceTest.await(restored));
+            assertTrue(h.grave.getGravesConfig().isDestroyed()); assertEquals(4567L, h.grave.getGravesConfig().getDestroyedTime());
+            h.regionWork.remove().run(); verify(h.world, never()).getBlockAt(any(Location.class));
+            verify(h.owner, never()).giveExp(anyInt());
+        }
+    }
     @Test void locationOnlyRecreationKeepsLocationScheduledMarkerPath() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             when(h.folia.isFolia()).thenReturn(true);
-            var grave = spy(h.grave); doNothing().when(grave).createGrave(); doNothing().when(grave).createHologram();
+            var grave = spy(h.grave); doNothing().when(grave).createHologram();
+            doNothing().when(grave).loadBlockMeta(any()); doNothing().when(grave).loadChunk(false);
+            var block = mock(Block.class); when(h.world.getBlockAt(any(Location.class))).thenReturn(block);
             grave.getGravesConfig().setDestroyed(true);
             var restored = grave.recreateAsync(null, true); h.drain();
             h.regionWork.remove().run();
-            assertTrue(FeaturePersistenceTest.await(restored)); verify(grave).createGrave();
+            assertFalse(restored.isDone()); h.regionWork.remove().run();
+            assertTrue(FeaturePersistenceTest.await(restored)); verify(block).setType(Material.PLAYER_HEAD);
             assertTrue(h.entityWork.isEmpty());
         }
     }

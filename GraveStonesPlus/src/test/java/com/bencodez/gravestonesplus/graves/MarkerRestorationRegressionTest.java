@@ -53,6 +53,89 @@ class MarkerRestorationRegressionTest {
             }).when(block).setType(expected, false);
         }
     }
+    @ParameterizedTest @EnumSource(value = Material.class, names = {"AIR", "CAVE_AIR", "VOID_AIR", "WATER", "LAVA"})
+    void discoveredLegacyMarkerRepairsOnlyOnOwnerAndPreservesContentsThroughAdmission(Material missing) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); var material = new java.util.concurrent.atomic.AtomicReference<>(missing);
+            when(marker.block.getType()).thenAnswer(call -> material.get());
+            doAnswer(call -> { material.set(call.getArgument(0)); return null; }).when(marker.block).setType(any(), eq(false));
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, h.grave.getGravesConfig(), ready, ready);
+            var storageField = GraveRestoration.class.getDeclaredField("storage"); storageField.setAccessible(true);
+            var storage = (GraveStorageManager) storageField.get(restoration);
+            when(storage.saveSnapshotFromObjects(any(), any())).thenReturn(CompletableFuture.completedFuture(true));
+            GraveActionsTest.retryOnOwner(h, restoration); h.regionWork.remove().run();
+            assertTrue(h.active.isEmpty()); assertTrue(restoration.hasPending(h.identity()));
+            verify(marker.block, never()).setType(any(), anyBoolean());
+            h.regionWork.remove().run();
+            assertEquals(Material.PLAYER_HEAD, material.get());
+            assertEquals(h.identity(), marker.tileValues.get(GraveMarkerCleanup.identityKey(h.plugin)));
+            assertTrue(h.active.isEmpty(), "repair does not itself publish claimable contents");
+            assertEquals(17, h.grave.getGravesConfig().getExp()); assertSame(h.stored, h.grave.getGravesConfig().getItems().get(4));
+            GraveActionsTest.retryOnOwner(h, restoration); h.regionWork.remove().run(); h.drain();
+            assertEquals(1, h.active.size()); assertTrue(restoration.hasPending(h.identity()), "persistence acknowledgement is still location-owned");
+            GraveActionsTest.drainGround(h); assertFalse(restoration.hasPending(h.identity()));
+            verify(marker.block, times(1)).setType(Material.PLAYER_HEAD, false);
+            verify(h.world, never()).getChunkAt(anyInt(), anyInt()); verify(h.owner, never()).giveExp(anyInt());
+            restoration.retire();
+        }
+    }
+    @ParameterizedTest @ValueSource(strings = {"solid", "successor", "destroyed", "reserved", "disabled", "unloaded"})
+    void queuedLegacyRepairRechecksTheFinalMutationBoundary(String change) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.AIR);
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, h.grave.getGravesConfig(), ready, ready);
+            GraveActionsTest.retryOnOwner(h, restoration); h.regionWork.remove().run();
+            assertEquals(1, h.regionWork.size());
+            switch (change) {
+                case "solid" -> when(marker.block.getType()).thenReturn(Material.STONE);
+                case "successor" -> GraveMarkerCleanup.tag(h.plugin, marker.block, h.identity() + "-new");
+                case "destroyed" -> h.grave.getGravesConfig().setDestroyed(true);
+                case "reserved" -> when(h.plugin.getGraveClaimLedger().isBlocked(h.identity())).thenReturn(true);
+                case "disabled" -> when(h.plugin.isEnabled()).thenReturn(false);
+                case "unloaded" -> when(h.world.isChunkLoaded(anyInt(), anyInt())).thenReturn(false);
+            }
+            h.regionWork.remove().run();
+            verify(marker.block, never()).setType(any(), anyBoolean());
+            assertTrue(h.active.isEmpty()); assertTrue(restoration.hasPending(h.identity()));
+            assertEquals(17, h.grave.getGravesConfig().getExp()); verify(h.owner, never()).giveExp(anyInt());
+            restoration.retire();
+        }
+    }
+    @Test void activeMissingMarkerIsWithheldIntoTheSameRestorationOwnerWithoutStorageDeletion() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.WATER);
+            var storage = mock(GraveStorageManager.class); var restoration = new GraveRestoration(h.plugin, storage);
+            when(h.plugin.getGraveRestoration()).thenReturn(restoration);
+            doAnswer(call -> { h.active.remove(call.getArgument(0)); return null; }).when(h.plugin).withholdRestoredRecord(any());
+            when(h.plugin.numberOfGraves(any())).thenCallRealMethod();
+            restoration.retainMarkerRepair(h.grave); restoration.retainMarkerRepair(h.grave);
+            assertTrue(h.active.isEmpty()); assertEquals(1, h.plugin.numberOfGraves(h.owner.getUniqueId()));
+            assertTrue(restoration.hasPending(h.identity())); assertFalse(h.plugin.canRecover(h.grave, h.owner));
+            assertSame(h.grave.getGravesConfig(), restoration.pendingActiveForLimits().getFirst().getGravesConfig());
+            assertFalse(h.grave.getGravesConfig().isDestroyed()); assertEquals(17, h.grave.getGravesConfig().getExp());
+            verify(storage, never()).updateExistingGrave(any(), anyBoolean());
+            verify(storage, never()).saveGravesFromObjects(any()); verify(h.plugin, never()).restoreBrokenRecord(any());
+            restoration.retire();
+        }
+    }
+    @Test void cancelledInvalidEventAndRejectedRepairNeverRetireStoredContents() throws Exception {
+        for (boolean cancelled : List.of(false, true)) try (var h = new GraveActionsTest.Harness()) {
+            var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.WATER);
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, h.grave.getGravesConfig(), ready, ready);
+            if (cancelled) doAnswer(call -> { if (call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveRemoveEvent event)
+                    event.setCancelled(true); return null; }).when(h.events).callEvent(any());
+            else doThrow(new java.util.concurrent.RejectedExecutionException("synthetic rejection"))
+                    .when(h.scheduler).runTask(eq(h.plugin), any(Runnable.class), any(Location.class));
+            GraveActionsTest.retryOnOwner(h, restoration); h.regionWork.remove().run();
+            assertTrue(h.active.isEmpty()); assertTrue(restoration.hasPending(h.identity()));
+            assertFalse(h.grave.getGravesConfig().isDestroyed()); assertEquals(17, h.grave.getGravesConfig().getExp());
+            verify(h.plugin, never()).restoreBrokenRecord(any()); verify(marker.block, never()).setType(any(), anyBoolean());
+            assertTrue(h.regionWork.isEmpty()); restoration.retire();
+        }
+    }
     @Test void paidClaimRetainsCleanupWhenRegionHandoffIsRejected() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             var marker = new Marker(h);
@@ -893,10 +976,11 @@ class MarkerRestorationRegressionTest {
             assertEquals(1, h.entityWork.size()); h.entityWork.remove().run();
             verify(marker.block, never()).setType(any()); assertTrue(record.isDestroyed()); assertFalse(recreated.isDone());
             clearInvocations(h.helper);
+            h.regionWork.remove().run(); assertFalse(recreated.isDone());
             h.regionWork.remove().run(); assertTrue(FeaturePersistenceTest.await(recreated));
             verify(h.helper, never()).hasPermission(anyString()); verify(h.helper, never()).isOnline();
             when(h.config.isDisableArmorStands()).thenReturn(true);
-            assertEquals(2, h.regionWork.size(), "marker and hologram tasks are location-owned");
+            assertEquals(1, h.regionWork.size(), "hologram follows the acknowledged marker task");
             while (!h.regionWork.isEmpty()) h.regionWork.remove().run();
             verify(marker.block).setType(Material.PLAYER_HEAD);
             h.drain();
@@ -1252,7 +1336,7 @@ class MarkerRestorationRegressionTest {
             restoration.retire();
         }
     }
-    @Test void initiallyLoadedInvalidMarkerIsNeverPublishedAsAnActiveRecord() throws Exception {
+    @Test void solidReplacementRetainsInvalidRecordPendingWithoutPublishingOrRetiring() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             h.active.clear(); var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.STONE);
             var cleanup = cleanup(h, new DurableFeatureState(h.io, new FeaturePersistenceTest.Disk(), 8192));
@@ -1262,7 +1346,9 @@ class MarkerRestorationRegressionTest {
             when(h.plugin.getFeatureIO()).thenReturn(h.io); when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());
             var restoration = new GraveRestoration(h.plugin, backend); GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier()); h.regionWork.remove().run(); FeaturePersistenceTest.await(h.io.barrier());
             GraveActionsTest.drainGround(h);
-            verify(h.plugin, never()).restoreActiveRecord(any()); verify(h.plugin).restoreBrokenRecord(any()); assertTrue(h.active.isEmpty()); verify(marker.block, never()).setMetadata(eq("Grave"), any());
+            verify(h.plugin, never()).restoreActiveRecord(any()); verify(h.plugin, never()).restoreBrokenRecord(any());
+            assertTrue(restoration.hasPending(h.identity())); assertFalse(h.grave.getGravesConfig().isDestroyed());
+            assertTrue(h.active.isEmpty()); verify(marker.block, never()).setMetadata(eq("Grave"), any());
             restoration.retire(); cleanup.retire();
         }
     }
@@ -1411,44 +1497,22 @@ class MarkerRestorationRegressionTest {
         }
     }
 
-    @Test void invalidStartupRemovalRevokesBothHelperKindsBeforeHistoricalPublication() throws Exception {
-        for (boolean rejectRevocation : List.of(false, true)) try (var h = new GraveActionsTest.Harness()) {
+    @Test void solidReplacementRetainsGrantsButNeverExposesPendingRecovery() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
             h.grant(TrustedGraveAccess.Kind.TRACK); h.grant(TrustedGraveAccess.Kind.RECOVER);
-            h.active.clear(); var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.STONE);
-            var cleanup = cleanup(h, new DurableFeatureState(h.io, new FeaturePersistenceTest.Disk(), 8192));
-            var ledger = mock(GraveClaimLedger.class);
-            when(ledger.restoration(any())).thenReturn(CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE));
-            when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
-            var backend = mock(GraveStorageManager.class);
-            when(backend.loadGraves()).thenReturn(List.of(h.grave.getGravesConfig())); when(backend.loadBrokenGraves()).thenReturn(List.of());
-            when(h.plugin.getFeatureIO()).thenReturn(h.io);
-            CountDownLatch removed = new CountDownLatch(1);
-            doAnswer(i -> { removed.countDown(); return null; }).when(backend).restorationResolved(any());
-            doAnswer(i -> {
-                assertFalse(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.TRACK));
-                assertFalse(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.RECOVER));
-                return null;
-            }).when(h.plugin).restoreBrokenRecord(any());
-            if (rejectRevocation) h.accessDisk.fail = true;
-            var restoration = new GraveRestoration(h.plugin, backend);
-            GraveActionsTest.retryOnOwner(h, restoration); FeaturePersistenceTest.await(h.io.barrier()); h.regionWork.remove().run();
-            FeaturePersistenceTest.await(h.io.barrier()); FeaturePersistenceTest.await(h.io.barrier());
-            assertFalse(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.TRACK));
-            assertFalse(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.RECOVER));
-            GraveActionsTest.drainGround(h);
-            if (!rejectRevocation) assertTrue(removed.await(2, TimeUnit.SECONDS), "durable revocation/removal callback must complete");
-            assertEquals(!rejectRevocation, h.grave.getGravesConfig().isDestroyed());
-            if (rejectRevocation) {
-                assertTrue(restoration.hasPending(h.identity())); verify(h.plugin, never()).restoreBrokenRecord(any());
-                verify(backend, never()).restorationResolved(any());
-            } else {
-                verify(h.plugin).restoreBrokenRecord(any()); verify(backend).restorationResolved(any());
-                var restarted = new TrustedGraveAccessStore(new DurableFeatureState(h.io, h.accessDisk, 4096), System::currentTimeMillis);
-                assertTrue(FeaturePersistenceTest.await(restarted.loaded()));
-                assertFalse(restarted.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.RECOVER));
-                assertTrue(restarted.list(h.identity()).isEmpty());
-            }
-            restoration.retire(); cleanup.retire();
+            var marker = new Marker(h); when(marker.block.getType()).thenReturn(Material.STONE);
+            var ready = CompletableFuture.completedFuture(GraveClaimLedger.Restoration.AVAILABLE);
+            var restoration = restoration(h, h.grave.getGravesConfig(), ready, ready);
+            GraveActionsTest.retryOnOwner(h, restoration); h.regionWork.remove().run();
+            while (!h.regionWork.isEmpty()) h.regionWork.remove().run();
+            assertTrue(restoration.hasPending(h.identity())); assertTrue(h.active.isEmpty());
+            assertFalse(h.plugin.canRecover(h.grave, h.helper)); assertFalse(h.plugin.canTrack(h.grave, h.helper));
+            assertTrue(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.TRACK));
+            assertTrue(h.access.allows(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.RECOVER));
+            assertFalse(h.grave.getGravesConfig().isDestroyed());
+            verify(h.plugin, never()).restoreBrokenRecord(any()); verify(h.owner, never()).giveExp(anyInt());
+            verify(marker.block, never()).setType(any()); verify(marker.block, never()).setType(any(), anyBoolean());
+            restoration.retire();
         }
     }
 

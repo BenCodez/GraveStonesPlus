@@ -31,6 +31,13 @@ public final class GraveClaimLedger {
     public CompletableFuture<Boolean> loaded() { return loaded; }
     public boolean isReady() { return archiveReady && state.isReady(); }
     public synchronized boolean isBlocked(String grave) { return grave == null || !archiveReady || !state.isReady() || recentPaid.containsKey(grave) || pending.contains(grave) || state.snapshot().containsKey(grave); }
+    /** Cached-only reservation query; navigation never probes the archive/filesystem. */
+    synchronized boolean isPendingRecovery(String grave) {
+        if (grave == null || !isReady() || recentPaid.containsKey(grave)) return false;
+        String value = state.snapshot().get(grave);
+        return value == null ? pending.contains(grave)
+                : value.startsWith("RESERVED:") || value.startsWith("QUEUED_LIMIT:");
+    }
     public CompletableFuture<Boolean> canRecreate(String grave) {
         if (isBlocked(grave)) return CompletableFuture.completedFuture(false);
         return state.inspect(current -> !isBlocked(grave) && !current.containsKey(grave) && !archived(grave))

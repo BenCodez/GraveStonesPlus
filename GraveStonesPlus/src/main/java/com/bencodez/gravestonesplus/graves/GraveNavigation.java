@@ -19,6 +19,7 @@ public final class GraveNavigation {
         if (identity == null) return null;
         Grave grave = resolve(identity);
         if (grave == null && pending(identity)) return null;
+        if (temporarilyReserved(grave, player, identity)) return null;
         if (grave == null || !plugin.canTrack(grave, player)) { selected.remove(player.getUniqueId()); return null; }
         return grave;
     }
@@ -47,6 +48,10 @@ public final class GraveNavigation {
         return plugin.getGraveRestoration() != null && plugin.getGraveRestoration().hasPending(identity)
                 && !plugin.getGraveRestoration().isConflicted(identity);
     }
+    private boolean temporarilyReserved(Grave grave, Player player, String identity) {
+        return grave != null && plugin.isLiveGrave(grave) && plugin.getGraveClaimLedger().isPendingRecovery(identity)
+                && (grave.isOwner(player) || plugin.getTrustedGraveAccessStore().allows(identity, player.getUniqueId(), TrustedGraveAccess.Kind.TRACK));
+    }
     public void refresh(Player player) {
         if (loading()) return;
         target(player);
@@ -66,6 +71,7 @@ public final class GraveNavigation {
             // is stale; restoration may have finished its backend read while the
             // matching record is still awaiting admission.
             if (grave == null && pending(identity == null ? legacyIdentity : identity)) continue;
+            if (temporarilyReserved(grave, player, identity == null ? legacyIdentity : identity)) continue;
             if (grave == null || !plugin.canTrack(grave, player)) {
                 meta.setLodestone(null); meta.getPersistentDataContainer().remove(identityKey);
                 meta.getPersistentDataContainer().remove(legacy); meta.setDisplayName("Inactive grave compass");

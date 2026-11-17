@@ -21,6 +21,7 @@ public final class GraveRestoration {
     private final Map<String, Boolean> limitRequests = new HashMap<>();
     private final Set<String> displayRepairs = new HashSet<>();
     private final Set<String> savingDisplays = new HashSet<>();
+    private final Set<String> repairingMarkers = new HashSet<>();
     // One bounded-by-records startup pass, independent of records retained for
     // unavailable worlds/chunks. Login summaries must not consume partial lists.
     private final Set<String> initialAdmission = new HashSet<>();
@@ -356,25 +357,23 @@ public final class GraveRestoration {
                         return;
                     }
                     if (loaded && !grave.isValid()) {
+                        grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
+                        if (grave.isRemove() || record.isDestroyed()) { resolved(key, record); return; }
                         var removal = new com.bencodez.gravestonesplus.events.GraveRemoveEvent(grave, com.bencodez.gravestonesplus.events.GraveRemoveReason.INVALID);
                         org.bukkit.Bukkit.getPluginManager().callEvent(removal);
                         if (removal.isCancelled()) return;
-                        // An integration can repair the marker while observing the event.
+                        // The event can repair or cancel. Otherwise retain the exact active
+                        // record and reconcile only replaceable air/fluid on its region owner.
                         if (!grave.isValid()) {
-                            Grave invalid = grave;
-                            plugin.getMarkerCleanup().retain(record).thenCompose(saved -> {
-                                if (!saved || retired || !plugin.isEnabled()) return CompletableFuture.completedFuture(false);
-                                // A recreated historical grave retains its identity. Revoke durably
-                                // before publishing removal so old helpers cannot inherit recreation.
-                                return plugin.getTrustedGraveAccessStore().revokeForGraveAsync(GraveIdentity.of(record));
-                            }).thenAccept(saved -> {
-                                if (saved && !retired && plugin.isEnabled()) plugin.getBukkitScheduler().runTask(plugin, () -> {
-                                    if (retired || !plugin.isEnabled() || invalid.isValid()) return;
-                                    plugin.getGraveNavigation().invalidate(GraveIdentity.of(record));
-                                    record.setDestroyed(true); record.setDestroyedTime(System.currentTimeMillis());
-                                    plugin.removeGrave(invalid); plugin.restoreBrokenRecord(invalid); resolved(key, record); persistResolvedRemoval(record);
-                                }, loc);
-                            }); return;
+                            synchronized (this) { if (!repairingMarkers.add(key)) return; }
+                            grave.repairMissingMarkerAsync().whenComplete((repaired, failure) -> {
+                                synchronized (GraveRestoration.this) {
+                                    repairingMarkers.remove(key);
+                                    if (failure == null && Boolean.TRUE.equals(repaired) && pending.get(key) == record)
+                                        displayRepairs.add(key);
+                                }
+                            });
+                            return;
                         }
                     }
                     // Set the authoritative deadline before logical publication, without probing an unloaded marker.
@@ -439,7 +438,7 @@ public final class GraveRestoration {
         initialAdmission.remove(key);
         pending.remove(key); admitted.remove(key); published.remove(key); conflicts.remove(key);
         activeRecords.remove(key); limitRequests.remove(key);
-        displayRepairs.remove(key); savingDisplays.remove(key);
+        displayRepairs.remove(key); savingDisplays.remove(key); repairingMarkers.remove(key);
         // The key retains the original position even if an integration moved its mutable record.
         if (key != null && !key.startsWith("unresolved-")) {
             String[] identity = key.split("/", -1);
@@ -531,6 +530,17 @@ public final class GraveRestoration {
         // native chunk admission bounded like the timer, leaving the rest indexed.
         process(chunks.getOrDefault(new ChunkKey(world, x, z), Set.of()).stream().limit(MAX_BATCH).toList().iterator());
     }
+    /** Withdraw an identified live marker for bounded reconciliation, preserving backend ownership. */
+    public synchronized void retainMarkerRepair(Grave grave) {
+        if (retired || grave == null || grave.isRemove() || grave.getGravesConfig().isDestroyed()) return;
+        GravesConfig record = grave.getGravesConfig(); String identity = GraveIdentity.of(record);
+        if (identity == null || plugin.getGraveClaimLedger().isBlocked(identity)) return;
+        GravesConfig existing = pending.get(identity);
+        if (existing != null && existing != record) return;
+        pending.put(identity, record); admitted.put(identity, grave); activeRecords.add(identity);
+        published.remove(identity); index(identity, record);
+        plugin.withholdRestoredRecord(grave); grave.removeTimer();
+    }
     public synchronized boolean isLoading() { return !recordsLoaded; }
     /** SQL capacity is unknown until every decoded record has entered the index. */
     public synchronized boolean isWaitingForStoredCapacity() { return storage.isMySQL() && !recordsLoaded; }
@@ -538,5 +548,10 @@ public final class GraveRestoration {
     public synchronized boolean hasPendingInitialAdmission() { return !initialAdmission.isEmpty(); }
     public boolean isConflicted(String identity) { return identity != null && conflicts.contains(identity); }
     public synchronized boolean hasPending(String identity) { return identity != null && pending.containsKey(identity); }
-    public void retire() { retired = true; if (timer != null) timer.cancel(); }
+    public void retire() {
+        java.util.List<Grave> observed;
+        synchronized (this) { retired = true; observed = java.util.List.copyOf(admitted.values()); }
+        observed.forEach(Grave::retireAcknowledgments);
+        if (timer != null) timer.cancel();
+    }
 }

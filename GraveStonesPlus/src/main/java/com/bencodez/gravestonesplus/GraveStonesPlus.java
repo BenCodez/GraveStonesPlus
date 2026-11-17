@@ -154,6 +154,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
 	}
 
+    /**
+     * Initiates asynchronous recreation. This legacy void method does not
+     * guarantee changed state before return; await the future overload instead.
+     */
 	public void recreateBrokenGrave(Grave grave) {
 		recreateBrokenGrave(grave, null);
 	}
@@ -359,6 +363,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
             if (reload != null) reload.completeExceptionally(new IllegalStateException("Grave reload lifecycle retired"));
         }
 
+        for (Grave grave : activeGraveSnapshot()) grave.retireAcknowledgments();
+        for (Grave grave : brokenGraveSnapshot()) grave.retireAcknowledgments();
 		if (graveRestoration != null) graveRestoration.retire();
         if (markerCleanup != null) markerCleanup.retire();
 		if (graveReminderListener != null) graveReminderListener.stop();
@@ -393,8 +399,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
     /**
      * Reloads the files off-thread and completes after the Bukkit owner has
-     * published the new configuration. The legacy void method intentionally
-     * remains fire-and-forget for binary/source compatibility.
+     * published the new configuration. The legacy void method initiates this
+     * work asynchronously; callers requiring new settings must await this future.
+     * Its descriptor is preserved, but synchronous completion is not promised.
      */
     public CompletableFuture<Void> reloadAsync() {
         final CompletableFuture<Void> completion;
@@ -457,7 +464,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
         } catch (RuntimeException admissionFailure) {
             completion.completeExceptionally(admissionFailure);
         }
-        return completion;
+        // Observers cannot cancel or forge the internal publication boundary.
+        return completion.copy();
     }
 
     /** Read bytes only on I/O; Bukkit YAML deserialization runs on the publication owner. */
@@ -617,7 +625,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
                     || !getConfigFile().isGlowingEffectNearGrave()
                     || !location.getWorld().isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) return;
             if (grave.isValid()) grave.checkGlowing();
-            else grave.removeGrave(GraveRemoveReason.INVALID);
+            else if (graveRestoration != null) graveRestoration.retainMarkerRepair(grave);
         }, location);
     }
     /** Eligibility reads only stored state; never probes blocks or loads chunks. */

@@ -13,6 +13,44 @@ import org.junit.jupiter.api.Test;
 
 /** Regression coverage for legacy compasses during asynchronous restoration admission. */
 class NavigationLegacyCompassRegressionTest {
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans = {false, true})
+    void reservationPreservesAuthorizedCompassAndSelectionUntilItsOutcome(boolean legacy) throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            h.grant(TrustedGraveAccess.Kind.TRACK);
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), new Location(h.world, 1, 64, 1));
+            if (!legacy) when(compass.data.get(any(), eq(PersistentDataType.STRING))).thenReturn(h.identity());
+            var viewer = legacy ? h.owner : h.helper;
+            when((legacy ? h.ownerInventory : h.helperInventory).getContents()).thenReturn(new ItemStack[] {compass.item});
+            assertTrue(h.navigation.select(viewer, h.grave));
+            // Exercise both process-local admission and persisted RESERVED state.
+            var reservation = h.ledger.reserve(h.identity(), h.owner.getUniqueId(), "synthetic evidence");
+            assertNull(h.navigation.target(viewer)); h.navigation.refresh(viewer);
+            verify(compass.data, never()).remove(any()); verify(compass.item, never()).setItemMeta(any());
+            assertTrue(FeaturePersistenceTest.await(reservation));
+            h.navigation.refresh(viewer); verify(compass.data, never()).remove(any());
+            assertTrue(FeaturePersistenceTest.await(h.ledger.cancel(h.identity())));
+            assertSame(h.grave, h.navigation.target(viewer));
+            h.navigation.refresh(viewer); verify(compass.meta).setLodestone(h.grave.getGravesConfig().getLocation());
+            // Durable reservation must never override removal or helper revocation.
+            assertTrue(FeaturePersistenceTest.await(h.ledger.reserve(h.identity(), h.owner.getUniqueId())));
+            if (legacy) h.active.clear();
+            else assertTrue(FeaturePersistenceTest.await(h.access.revokeAsync(h.identity(), h.helper.getUniqueId(), TrustedGraveAccess.Kind.TRACK)));
+            h.navigation.refresh(viewer); verify(compass.data, times(2)).remove(any()); assertNull(h.navigation.target(viewer));
+        }
+    }
+    @Test void paidOutcomeInvalidatesThePreviouslyReservedCompass() throws Exception {
+        try (var h = new GraveActionsTest.Harness()) {
+            Compass compass = compass(h, h.grave.getGravesConfig().getTime(), new Location(h.world, 1, 64, 1));
+            when(compass.data.get(any(), eq(PersistentDataType.STRING))).thenReturn(h.identity());
+            when(h.ownerInventory.getContents()).thenReturn(new ItemStack[] {compass.item});
+            assertTrue(h.navigation.select(h.owner, h.grave));
+            assertTrue(FeaturePersistenceTest.await(h.ledger.reserve(h.identity(), h.owner.getUniqueId())));
+            h.navigation.refresh(h.owner); verify(compass.data, never()).remove(any());
+            assertTrue(FeaturePersistenceTest.await(h.ledger.paid(h.identity(), h.owner.getUniqueId())));
+            h.navigation.refresh(h.owner); verify(compass.data, times(2)).remove(any()); assertNull(h.navigation.target(h.owner));
+        }
+    }
     @Test void rejectedPlayerRefreshDoesNotInterruptRemovalOrOtherPlayers() throws Exception {
         try (var h = new GraveActionsTest.Harness()) {
             h.grant(TrustedGraveAccess.Kind.TRACK);

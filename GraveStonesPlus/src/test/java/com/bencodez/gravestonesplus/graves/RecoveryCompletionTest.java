@@ -42,16 +42,18 @@ class RecoveryCompletionTest {
             var ledger = new GraveClaimLedger(new DurableFeatureState(h.io, h.claimDisk, 8192), directory.resolve("archive"));
             FeaturePersistenceTest.await(ledger.loaded()); when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
 
-            h.grave.claim(h.owner); h.drain();
+            var payoutCompletion = h.grave.claimAsync(h.owner); h.drain();
+            assertFalse(payoutCompletion.isDone());
             assertTrue(ledger.status(h.identity()).startsWith("RESERVED:"));
             assertFalse(Files.exists(directory.resolve("archive")));
             assertFalse(h.grave.getGravesConfig().isDestroyed()); verify(h.plugin, never()).removeGrave(any());
             verify(h.owner, never()).sendMessage("Paid"); verify(h.owner).giveExp(17);
 
-            first.complete(null); h.drain();
+            first.complete(null); h.drain(); assertFalse(payoutCompletion.isDone());
             assertTrue(ledger.status(h.identity()).startsWith("RESERVED:"));
             verify(h.plugin, never()).removeGrave(any());
             second.complete(null); h.drain();
+            assertEquals(ClaimResult.COMPLETED, FeaturePersistenceTest.await(payoutCompletion));
             assertTrue(ledger.status(h.identity()).startsWith("PAID:"));
             assertTrue(h.grave.getGravesConfig().isDestroyed()); verify(h.plugin).removeGrave(h.grave);
             verify(h.owner).sendMessage("Paid");
@@ -100,7 +102,9 @@ class RecoveryCompletionTest {
         try (GraveActionsTest.Harness h = new GraveActionsTest.Harness()) {
             overflow(h); var handler = mock(FullInventoryHandler.class); when(h.plugin.getFullInventoryHandler()).thenReturn(handler);
             var completion = new CompletableFuture<Void>(); when(handler.giveItemAsync(h.owner, h.cloned)).thenReturn(completion);
-            h.grave.claim(h.owner); h.drain(); completion.completeExceptionally(new IllegalStateException("retention failed")); h.drain();
+            var payoutCompletion = h.grave.claimAsync(h.owner); h.drain(); assertFalse(payoutCompletion.isDone());
+            completion.completeExceptionally(new IllegalStateException("retention failed")); h.drain();
+            assertEquals(ClaimResult.HELD, FeaturePersistenceTest.await(payoutCompletion));
             assertTrue(h.ledger.status(h.identity()).startsWith("RESERVED:"));
             assertFalse(h.grave.getGravesConfig().isDestroyed()); verify(h.plugin, never()).removeGrave(any());
             verify(h.owner, never()).sendMessage("Paid"); verify(h.owner).giveExp(17);
@@ -184,6 +188,27 @@ class RecoveryCompletionTest {
         var locations = mock(com.bencodez.gravestonesplus.storage.GraveLocations.class);
         when(locations.getdFile()).thenReturn(graves.toFile());
         GraveActionsTest.field(h.plugin, "gravesConfig", locations);
+    }
+
+    @Test void reloadObserverCannotCancelOrForgeInternalOwnerPublication() throws Exception {
+        for (int observerAction : List.of(0, 1, 2)) try (var h = new GraveActionsTest.Harness()) {
+            GraveActionsTest.field(h.plugin, "featureIO", h.io);
+            GraveActionsTest.field(h.plugin, "configFile", h.config);
+            GraveActionsTest.field(h.plugin, "nbtConfigManager", mock(com.bencodez.gravestonesplus.nbt.NBTConfigManager.class));
+            when(h.plugin.getJavascriptEngine()).thenReturn(new HashMap<>());
+            when(h.plugin.activeGraveSnapshot()).thenReturn(List.of()); reloadPaths(h);
+            doCallRealMethod().when(h.plugin).reloadAsync();
+            var observer = h.plugin.reloadAsync(); FeaturePersistenceTest.await(h.io.barrier());
+            var field = com.bencodez.gravestonesplus.GraveStonesPlus.class.getDeclaredField("pendingReload"); field.setAccessible(true);
+            var internal = (CompletableFuture<?>) field.get(h.plugin);
+            if (observerAction == 0) observer.cancel(false);
+            else if (observerAction == 1) observer.complete(null);
+            else observer.completeExceptionally(new IllegalStateException("synthetic observer failure"));
+            assertFalse(internal.isDone());
+            assertThrows(ExecutionException.class, () -> FeaturePersistenceTest.await(h.plugin.reloadAsync()));
+            h.ownerWork.remove().run(); FeaturePersistenceTest.await(internal);
+            verify(h.plugin).reloadAdvancedCore(false);
+        }
     }
 
     @Test void malformedYamlFailsBeforeConfigMutationOrOwnerPublication() throws Exception {

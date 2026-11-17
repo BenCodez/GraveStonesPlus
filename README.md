@@ -1,7 +1,5 @@
 # GraveStonesPlus
 
-Get builds here: http://bencodez.com/job/GraveStonesPlus/
-
 ## Per-grave helpers
 
 Owners use a selected grave from `/gravestonesplus graves`, or look at their marker:
@@ -244,3 +242,32 @@ failed/cancelled eviction leaves the owner above the limit. A durably queued old
 grave remains retiring under the existing logical-limit policy. Both
 records are retained on uncertain storage failure; resolve that failure rather than
 retrying a payout whose outcome is unknown. Other owners remain independent.
+
+### Completion contracts for integrations
+
+`reload()` and the legacy void recreation methods initiate asynchronous work. Their
+signatures remain available, but they do not promise updated configuration or grave
+state before returning. Await `reloadAsync()` or the future-bearing
+`recreateBrokenGrave(grave, actor, createMarker)` overload when subsequent work depends
+on completion. Recreation success waits for any requested marker mutation and the
+active/broken persistence transition; holograms are best-effort cosmetics.
+
+`Grave.claimAsync(player)` observes one claim attempt. `COMPLETED` acknowledges actual
+items/XP and overflow delivery plus the durable non-replayable completion record.
+`DENIED` means this request did not pay; `FAILED` means no payout and no retained
+reservation for this request; `HELD` requires administrator reconciliation and must
+not trigger automatic replay. A different concurrent attempt may still own recovery.
+Legacy `claim(player)` initiates the same safe path: XP is deferred until after durable
+reservation. Bukkit-primary cancellable callbacks still run before that method returns.
+
+Completion callbacks may execute on a storage worker. Schedule player/world access on
+its Bukkit/Folia owner rather than blocking a server thread on a future. Returned
+observations cannot cancel or complete the internal operation. Retirement can report
+an uncertain held outcome while durable recovery evidence is retained.
+
+Legacy untagged MySQL markers cannot be identified before their records arrive. After
+discovery, bounded restoration may repair air/fluid at the saved position after ledger,
+identity, expiry and region-owner checks. Solid replacements, successors and unavailable
+worlds/chunks remain pending; ordinary blocks are not globally protected. This is
+recoverable reconciliation, not uninterrupted physical protection during the pre-read
+interval. Paid, reserved, removed or expired graves are not automatically recreated.

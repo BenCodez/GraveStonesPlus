@@ -587,8 +587,14 @@ class GraveActionsTest {
             field(h.plugin, "brokenGraves", broken);
             doCallRealMethod().when(h.plugin).recreateBrokenGrave(any(), any(), anyBoolean());
 
+            var marker = mock(org.bukkit.block.Block.class); var chunk = mock(Chunk.class);
+            when(marker.getChunk()).thenReturn(chunk); when(chunk.isForceLoaded()).thenReturn(true);
+            when(chunk.getPersistentDataContainer()).thenReturn(mock(org.bukkit.persistence.PersistentDataContainer.class));
+            when(h.world.getBlockAt(any(Location.class))).thenReturn(marker);
             h.grave.createBrokenGrave(); h.drain();
             assertEquals(1, h.regionWork.size());
+            h.regionWork.remove().run(); h.drain();
+            assertTrue(h.active.isEmpty(), "list publication waits for actual marker mutation");
             h.regionWork.remove().run(); h.drain();
 
             assertFalse(h.grave.getGravesConfig().isDestroyed());

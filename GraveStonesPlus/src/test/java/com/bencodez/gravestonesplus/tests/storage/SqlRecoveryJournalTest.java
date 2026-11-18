@@ -359,4 +359,51 @@ class SqlRecoveryJournalTest {
             await(occupied); assertTrue(recovered.await(5, TimeUnit.SECONDS)); assertEquals(2, attempts.get()); journal.close();
         }
     }
+    @Test void fatalLivePublicationSettlesCommittedSuffixBeyondTheCurrentPass() throws Exception {
+        try (var io = new FeatureIO(64)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            var release = new CountDownLatch(1); var entered = new CountDownLatch(1);
+            var occupied = io.submit(() -> { entered.countDown(); try { assertTrue(release.await(5, TimeUnit.SECONDS)); } catch (InterruptedException e) { throw new AssertionError(e); } return true; });
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            var tickets = new ArrayList<SqlRecoveryJournal.Reservation>();
+            try {
+                for (int i = 0; i < 30; i++) { var ticket = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false); assertNotNull(ticket); tickets.add(ticket); }
+                Files.write(directory.resolve("0000000000000000002.sql.tmp"), new byte[]{1});
+                tickets.forEach(SqlRecoveryJournal.Reservation::commit);
+            } finally { release.countDown(); tickets.forEach(SqlRecoveryJournal.Reservation::close); }
+            await(occupied);
+            try {
+                for (int i = 0; i < tickets.size(); i++) {
+                    assertEquals(i == 0 ? SqlRecoveryJournal.Disposition.DURABLE : SqlRecoveryJournal.Disposition.HELD, await(tickets.get(i).durable()));
+                    var ticket = tickets.get(i); assertThrows(ExecutionException.class, () -> await(ticket.commit()));
+                }
+                assertFalse(journal.isReady()); verifyNoInteractions(backend);
+                assertTrue(Files.exists(directory.resolve("0000000000000000001.sql")));
+                assertArrayEquals(new byte[]{1}, Files.readAllBytes(directory.resolve("0000000000000000002.sql.tmp")));
+            } finally { journal.close(); }
+        }
+    }
+    @Test void fatalRetirementDuringCloseSettlesDurableSuccessorWithoutExecutingIt() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            var release = new CountDownLatch(1); var entered = new CountDownLatch(1);
+            var occupied = io.submit(() -> { entered.countDown(); try { assertTrue(release.await(5, TimeUnit.SECONDS)); } catch (InterruptedException e) { throw new AssertionError(e); } return true; });
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            var first = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false);
+            var second = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), true);
+            doAnswer(call -> {
+                Path file = directory.resolve("0000000000000000001.sql"); byte[] evidence = Files.readAllBytes(file);
+                Files.delete(file); Files.createDirectory(file); Files.write(file.resolve("preserved-record"), evidence); return null;
+            }).when(backend).upsertGrave(any(), anyBoolean());
+            try { first.commit(); second.commit(); journal.close(); }
+            finally { release.countDown(); first.close(); second.close(); }
+            await(occupied); io.close(); assertTrue(io.isTerminated());
+            assertEquals(SqlRecoveryJournal.Disposition.DURABLE, await(first.durable()));
+            assertEquals(SqlRecoveryJournal.Disposition.DURABLE, await(second.durable()));
+            assertThrows(ExecutionException.class, () -> await(first.commit())); assertThrows(ExecutionException.class, () -> await(second.commit()));
+            verify(backend, never()).updateExistingGrave(any(), anyBoolean());
+            assertTrue(Files.size(directory.resolve("0000000000000000001.sql/preserved-record")) > 0);
+            assertTrue(Files.size(directory.resolve("0000000000000000002.sql")) > 0);
+        }
+    }
 }

@@ -165,15 +165,7 @@ public final class SqlRecoveryJournal {
                     publish(entry);
                     synchronized (this) { entry.phase = Phase.DURABLE; }
                 } catch (IOException journalFailure) {
-                    synchronized (this) { healthy = false; }
-                    // Resolve the known-durable prefix even when a later publication is uncertain.
-                    for (Entry pending : prefix) {
-                        if (pending.phase == Phase.DURABLE) {
-                            notifyDurable(pending);
-                            if (closing) fail(pending, "Durable SQL transition retained across shutdown; acknowledgment unavailable.", false);
-                        }
-                        else fail(pending, "SQL recovery journal publication held; replay remains possible.", true);
-                    }
+                    settleFatal("SQL recovery publication held; replay remains possible.");
                     return;
                 }
             }
@@ -195,8 +187,7 @@ public final class SqlRecoveryJournal {
                         finally { release(entry); }
                     });
                 } catch (IOException journalFailure) {
-                    synchronized (this) { healthy = false; }
-                    fail(entry, "SQL completion journal retirement unavailable; retained for reconciliation.", false);
+                    settleFatal("SQL completion journal retirement held; replay remains possible.");
                     return;
                 } catch (RuntimeException | Error databaseFailure) {
                     blockedCycle.add(entry.identity);
@@ -214,6 +205,18 @@ public final class SqlRecoveryJournal {
             synchronized (this) { more |= retryRequested; }
             if (more) continueDrain();
         } finally { synchronized (this) { draining = false; } }
+    }
+    /** A fatal journal fault owns the whole accepted queue, not just the current bounded pass. */
+    private void settleFatal(String message) {
+        List<Entry> affected;
+        synchronized (this) {
+            healthy = false; cursor = 0; retryRequested = false; blockedCycle.clear();
+            affected = entries.values().stream().filter(entry -> entry.phase != Phase.RESERVED).toList();
+        }
+        for (Entry entry : affected) {
+            if (entry.phase == Phase.DURABLE) notifyDurable(entry);
+            fail(entry, message, entry.phase != Phase.DURABLE);
+        }
     }
     private void notifyDurable(Entry entry) {
         if (!entry.durableNotified) {

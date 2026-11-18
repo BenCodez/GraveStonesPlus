@@ -173,13 +173,13 @@ public final class SqlRecoveryJournal {
         public CompletableFuture<Disposition> durable() { return entry.durable.copy(); }
         /** Finalize once on the marker owner. Invalid preparation cancels only an unused late slot. */
         public boolean prepareRecreation(GravesConfig record) {
-            boolean finalizing = false, accepted = false;
+            FeatureIO.Admission cancelled = null;
             try {
                 synchronized (SqlRecoveryJournal.this) {
                     if (admission == null || !entry.late || entry.payload != null || entry.phase != Phase.RESERVED) return false;
-                    finalizing = true;
-                    if (fatal) return false;
+                    boolean accepted = false;
                     try {
+                        if (fatal) return false;
                         if (record == null || record.isDestroyed() || record.getDestroyedTime() != 0 || record.getExp() != 0
                                 || !Objects.toString(record.getPlayerName(), "").isEmpty()
                                 || !Objects.toString(record.getDeathMessage(), "").isEmpty()) return false;
@@ -199,8 +199,14 @@ public final class SqlRecoveryJournal {
                         entry.grave = prepared.grave; entry.payload = payload;
                         accepted = true; return true;
                     } catch (IOException | RuntimeException invalid) { return false; }
+                    finally {
+                        if (!accepted) {
+                            cancelled = admission; admission = null;
+                            entries.remove(entry.sequence, entry);
+                        }
+                    }
                 }
-            } finally { if (finalizing && !accepted) close(); }
+            } finally { if (cancelled != null) cancel(entry, cancelled); }
         }
         /** Consumes the reserved slot; the returned future acknowledges SQL, never merely RAM admission. */
         public CompletableFuture<Boolean> commit() {

@@ -170,4 +170,37 @@ class RecreationReservationTest {
         }
     }
 
+    @ParameterizedTest @ValueSource(booleans={false,true})
+    void failedPreparationOwnsCancellationBeforeAnotherPreparationCanWin(boolean error)throws Exception {
+        try(var io=new FeatureIO()) {
+            var settling=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(io));
+            doAnswer(call->{
+                var original=io.admit();if(original==null)return null;
+                var wrapped=mock(FeatureIO.Admission.class,org.mockito.AdditionalAnswers.delegatesTo(original));
+                doAnswer(unused->{settling.countDown();assertTrue(release.await(5,TimeUnit.SECONDS));original.close();return null;}).when(wrapped).close();
+                return wrapped;
+            }).when(proxy).admit();
+            var backend=mock(GraveStorageBackend.class);var journal=journal(proxy,backend,directory,177);var record=metadata();
+            var slot=spy(journal.reserveRecreation(record));assertNotNull(slot);
+            // On the old implementation, stop before close acquires the journal monitor.
+            doAnswer(call->{settling.countDown();assertTrue(release.await(5,TimeUnit.SECONDS));call.callRealMethod();return null;}).when(slot).close();
+            var invalid=spy(record);
+            if(error)doThrow(new AssertionError("synthetic preparation failure")).when(invalid).getDisplayUUID();
+            else invalid.setDestroyed(true);
+            var failed=new CompletableFuture<Boolean>();
+            Thread first=new Thread(()->{try{failed.complete(slot.prepareRecreation(invalid));}catch(Throwable failure){failed.completeExceptionally(failure);}},"synthetic-failed-preparation");
+            first.start();
+            try {
+                assertTrue(settling.await(3,TimeUnit.SECONDS));
+                assertFalse(slot.prepareRecreation(record),"failed preparation must already own cancellation while settlement is delayed");
+            }finally{release.countDown();first.join(3000);}
+            assertFalse(first.isAlive());
+            if(error)assertInstanceOf(AssertionError.class,assertThrows(ExecutionException.class,()->await(failed)).getCause());
+            else assertFalse(await(failed));
+            assertFalse(await(slot.commit()));assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(slot.durable()));
+            assertFalse(io.hasUnsubmittedAdmissions());assertEquals(0,files());verifyNoInteractions(backend);journal.close();
+        }
+    }
+
 }

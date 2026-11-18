@@ -38,7 +38,7 @@ public final class SqlRecoveryJournal {
     private long evidenceBytes;
     private long next, bytes, cursor;
     private final Set<String> blockedCycle = new HashSet<>();
-    private boolean healthy, closing, draining, initialized, retryRequested;
+    private boolean healthy, closing, draining, initialized, retryRequested, fatal;
     private static final class Entry {
         final long sequence;
         final Kind kind;
@@ -103,9 +103,15 @@ public final class SqlRecoveryJournal {
         /** Consumes the reserved slot; the returned future acknowledges SQL, never merely RAM admission. */
         public CompletableFuture<Boolean> commit() {
             FeatureIO.Admission ticket;
+            boolean held;
             synchronized (SqlRecoveryJournal.this) {
                 if (admission == null) return entry.completion.copy();
-                ticket = admission; admission = null; entry.phase = Phase.READY;
+                ticket = admission; admission = null; entry.phase = Phase.READY; held = fatal;
+            }
+            if (held) {
+                ticket.close();
+                fail(entry, "SQL journal is terminally held; accepted intent requires owner reconciliation.", true);
+                return entry.completion.copy();
             }
             ticket.submit(() -> true).whenComplete((value, failure) -> {
                 if (failure != null) fail(entry, "SQL recovery worker rejected an accepted transition.");
@@ -130,10 +136,10 @@ public final class SqlRecoveryJournal {
     }
     /** Explicit retry signal; never blocks a Bukkit/region owner and never loops on a failed backend. */
     public void wake() {
-        synchronized (this) { retryRequested = true; }
+        synchronized (this) { if (fatal) return; retryRequested = true; }
         continueDrain();
     }
-    private void continueDrain() { io.requestDrain(this::drain); }
+    private void continueDrain() { synchronized (this) { if (fatal) return; } io.requestDrain(this::drain); }
     public void close() {
         synchronized (this) {
             closing = true;
@@ -144,7 +150,7 @@ public final class SqlRecoveryJournal {
     /** Called on FeatureIO after accepted work, including its final shutdown drain. */
     public void drain() {
         if (!io.isOwnerThread()) throw new IllegalStateException("SQL recovery requires the feature owner");
-        synchronized (this) { if (draining || !initialized || (cursor == 0 && !retryRequested)) return; draining = true; }
+        synchronized (this) { if (fatal || draining || !initialized || (cursor == 0 && !retryRequested)) return; draining = true; }
         try {
             List<Entry> prefix = new ArrayList<>();
             synchronized (this) {
@@ -210,7 +216,7 @@ public final class SqlRecoveryJournal {
     private void settleFatal(String message) {
         List<Entry> affected;
         synchronized (this) {
-            healthy = false; cursor = 0; retryRequested = false; blockedCycle.clear();
+            healthy = false; fatal = true; cursor = 0; retryRequested = false; blockedCycle.clear();
             affected = entries.values().stream().filter(entry -> entry.phase != Phase.RESERVED).toList();
         }
         for (Entry entry : affected) {

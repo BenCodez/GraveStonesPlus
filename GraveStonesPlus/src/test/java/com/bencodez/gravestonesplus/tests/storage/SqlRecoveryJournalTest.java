@@ -406,4 +406,32 @@ class SqlRecoveryJournalTest {
             assertTrue(Files.size(directory.resolve("0000000000000000002.sql")) > 0);
         }
     }
+    @Test void fatalInstanceFencesExplicitAndShutdownRetriesAndSettlesIssuedReservations() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            var release = new CountDownLatch(1); var entered = new CountDownLatch(1); var attempts = new AtomicInteger();
+            var occupied = io.submit(() -> { entered.countDown(); try { assertTrue(release.await(5, TimeUnit.SECONDS)); } catch (InterruptedException e) { throw new AssertionError(e); } return true; });
+            assertTrue(entered.await(5, TimeUnit.SECONDS));
+            var first = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false);
+            var lateCommit = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false);
+            var lateCancel = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), true);
+            doAnswer(call -> {
+                attempts.incrementAndGet(); Path file = directory.resolve("0000000000000000001.sql");
+                byte[] evidence = Files.readAllBytes(file); Files.delete(file); Files.createDirectory(file);
+                Files.write(file.resolve("preserved-record"), evidence); return null;
+            }).when(backend).upsertGrave(any(), anyBoolean());
+            try {
+                first.commit(); release.countDown(); await(occupied);
+                assertThrows(ExecutionException.class, () -> await(first.commit())); assertFalse(journal.isReady());
+                journal.wake(); await(io.barrier()); assertEquals(1, attempts.get());
+                lateCommit.commit(); assertEquals(SqlRecoveryJournal.Disposition.HELD, await(lateCommit.durable()));
+                assertThrows(ExecutionException.class, () -> await(lateCommit.commit()));
+                lateCancel.close(); assertEquals(SqlRecoveryJournal.Disposition.CANCELLED, await(lateCancel.durable()));
+                assertFalse(await(lateCancel.commit())); journal.close(); journal.wake();
+            } finally { release.countDown(); first.close(); lateCommit.close(); lateCancel.close(); journal.close(); }
+            io.close(); assertTrue(io.isTerminated()); assertEquals(1, attempts.get());
+            assertFalse(Files.exists(directory.resolve("0000000000000000002.sql")));
+            assertTrue(Files.size(directory.resolve("0000000000000000001.sql/preserved-record")) > 0);
+        }
+    }
 }

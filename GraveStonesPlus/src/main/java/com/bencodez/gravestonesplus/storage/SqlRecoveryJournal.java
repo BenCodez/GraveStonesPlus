@@ -198,7 +198,7 @@ public final class SqlRecoveryJournal {
         try {
             List<Entry> prefix = new ArrayList<>(), publication = new ArrayList<>();
             synchronized (this) {
-                if (closing) cursor = 0;
+                // Continuations must retain pass progress through a held predecessor to the bulk barrier.
                 if (cursor == 0 && !bulkContinuing) { blockedCycle.clear(); retryRequested = false; }
                 int limit = closing ? entryLimit : 16;
                 boolean bulkBarrier = false;

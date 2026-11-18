@@ -243,4 +243,34 @@ class SqlManagerIntegrationTest {
             h.manager.close(); h.io.close(); assertTrue(h.io.isTerminated()); verify(h.backend,times(1)).close();
         }
     }
+    @Test void closingFailedSingleBeforeBulkSettlesBothWithoutStarvingShutdown() throws Exception {
+        try (var h = new Fixture(8,null)) {
+            var release = new CountDownLatch(1); var entered = new CountDownLatch(1);
+            var busy = h.io.submit(() -> { entered.countDown(); try { assertTrue(release.await(5,TimeUnit.SECONDS)); } catch(InterruptedException e) { throw new AssertionError(e); } return true; });
+            assertTrue(entered.await(5,TimeUnit.SECONDS));
+            doThrow(new IllegalStateException("synthetic persistent outage")).when(h.backend).updateExistingGrave(any(),anyBoolean());
+            var ticket = h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.UPDATE,record(1),false); assertNotNull(ticket);
+            var single = ticket.commit();
+            var bulk = h.manager.saveSnapshotFromObjects(List.of(grave(record(2))),List.of());
+            h.manager.close();
+            try {
+                release.countDown(); await(busy);
+                assertThrows(ExecutionException.class,()->await(single));
+                assertThrows(ExecutionException.class,()->await(bulk));
+                assertTrue(h.closed.await(5,TimeUnit.SECONDS));
+                assertFalse(h.io.hasUnsubmittedAdmissions());
+                verify(h.backend,never()).upsertGrave(any(),anyBoolean());
+                assertEquals(2,h.journal.records());
+            } finally {
+                release.countDown();
+                if(h.io.hasUnsubmittedAdmissions()) await(h.io.submit(() -> {
+                    try { var retire=SqlRecoveryJournal.class.getDeclaredMethod("retireAfterDrain"); retire.setAccessible(true); retire.invoke(h.journal.journal); }
+                    catch(ReflectiveOperationException error) { throw new AssertionError(error); }
+                    return true;
+                }));
+            }
+            h.io.close(); assertTrue(h.io.isTerminated()); verify(h.backend,times(1)).close();
+        }
+    }
+
 }

@@ -253,12 +253,20 @@ public final class SqlRecoveryJournal {
     }
     private void cancel(Entry entry, FeatureIO.Admission ticket) {
         // Removing a RESERVED barrier can expose accepted successors during shutdown.
-        wake();
-        ticket.close();
-        notifications.execute(() -> {
-            try { entry.durable.complete(Disposition.CANCELLED); entry.completion.complete(false); }
-            finally { release(entry); }
-        });
+        try { wake(); }
+        catch (RuntimeException | Error failure) {
+            settleFatal("SQL cancellation drain unavailable; accepted successors require reconciliation.");
+        } finally {
+            try { ticket.close(); }
+            catch (RuntimeException | Error failure) {
+                settleFatal("SQL cancellation wake unavailable after releasing its admission.");
+            } finally {
+                notifications.execute(() -> {
+                    try { entry.durable.complete(Disposition.CANCELLED); entry.completion.complete(false); }
+                    finally { release(entry); }
+                });
+            }
+        }
     }
     /** Explicit retry signal; never blocks a Bukkit/region owner and never loops on a failed backend. */
     public void wake() {

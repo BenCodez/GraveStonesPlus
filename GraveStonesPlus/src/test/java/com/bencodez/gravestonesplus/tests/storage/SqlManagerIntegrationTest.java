@@ -450,4 +450,35 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={0,1,2})
+    void cancellationSettlesDespiteDrainDispatchFailure(int mode)throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(h.io));
+            doThrow(new IllegalStateException("synthetic cancellation drain failure")).when(proxy).requestDrain(any(Runnable.class));
+            field(h.journal.journal,"io",proxy);
+            var record=record(1);var admission=h.manager.reserveRecreation(record,true);assertNotNull(admission);
+            var member=admission.getClass().getDeclaredField("slot");member.setAccessible(true);
+            var slot=spy((SqlRecoveryJournal.Reservation)member.get(admission));member.set(admission,slot);
+            if(mode==0)doThrow(new IllegalStateException("synthetic before-consumption failure")).when(slot).commit();
+            var ticketField=slot.getClass().getDeclaredField("admission");ticketField.setAccessible(true);
+            var issued=(FeatureIO.Admission)ticketField.get(slot);
+            try {
+                if(mode==2)assertDoesNotThrow(admission::close);
+                else {
+                    assertFalse(await(assertDoesNotThrow(admission::commit)));
+                    assertFalse(await(admission.commit()));assertTrue(admission.finish());
+                }
+                assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(admission.durable()));
+                assertFalse(h.io.hasUnsubmittedAdmissions());assertFalse(h.manager.isRecreationPending(GraveIdentity.of(record)));
+                verify(h.backend,never()).saveRecreatedGrave(any());
+            }finally {
+                field(h.journal.journal,"io",h.io);
+                // An old implementation can detach its ticket before the failing wake.
+                // Close that actual issued ticket explicitly for bounded red-test teardown.
+                issued.close();
+            }
+        }
+    }
+
 }

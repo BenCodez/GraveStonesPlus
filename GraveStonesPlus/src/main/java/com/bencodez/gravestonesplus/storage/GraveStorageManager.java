@@ -18,6 +18,65 @@ public class GraveStorageManager {
 	private DataStorageType type = DataStorageType.FLATFILE;
     private record Recovery(List<GravesConfig> active, List<GravesConfig> broken) { }
     private SqlRecoveryJournal sqlJournal;
+    private final java.util.Map<String, RecreationAdmission> recreations = new java.util.HashMap<>();
+    /** Pending native recreation must not be overwritten by an old bulk or removal snapshot. */
+    public synchronized boolean isRecreationPending(String identity) { return recreations.containsKey(identity); }
+    public synchronized RecreationAdmission reserveRecreation(GravesConfig grave, boolean marker) {
+        String identity = com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave);
+        if (identity == null || recreations.containsKey(identity) || recreations.size() >= 128
+                || !isMySQL() || backend == null || sqlJournal == null || closeRequested || backendClosed
+                || restorationLoading || !sqlJournal.isReady()) return null;
+        GravesConfig captured = metadataSnapshot(grave);
+        captured.setDestroyed(false); captured.setDestroyedTime(0);
+        // No-marker recovery must retain even a legacy unrecognized display value.
+        captured.setGraveDisplayType(grave.getGraveDisplayType());
+        var slot = marker ? sqlJournal.reserveRecreation(captured)
+                : sqlJournal.reserve(SqlRecoveryJournal.Kind.RECREATE, captured, false);
+        if (slot == null) return null;
+        try {
+            var admitted = new RecreationAdmission(identity, slot, marker);
+            recreations.put(identity, admitted); return admitted;
+        } catch (RuntimeException | Error failure) { slot.close(); throw failure; }
+    }
+    /** Holds the identity fence through SQL completion and the later location-owner publication. */
+    public final class RecreationAdmission implements AutoCloseable {
+        private final String identity;
+        private final SqlRecoveryJournal.Reservation slot;
+        private final boolean marker;
+        private boolean committed, released;
+        private java.util.concurrent.CompletableFuture<Boolean> sql;
+        private RecreationAdmission(String identity, SqlRecoveryJournal.Reservation slot, boolean marker) {
+            this.identity = identity; this.slot = slot; this.marker = marker;
+        }
+        public boolean prepare(GravesConfig finalMetadata) {
+            synchronized (GraveStorageManager.this) {
+                return !released && !committed && marker && slot.prepareRecreation(finalMetadata);
+            }
+        }
+        public java.util.concurrent.CompletableFuture<SqlRecoveryJournal.Disposition> durable() { return slot.durable(); }
+        public java.util.concurrent.CompletableFuture<Boolean> commit() {
+            synchronized (GraveStorageManager.this) {
+                if (released) return java.util.concurrent.CompletableFuture.completedFuture(false);
+                if (!committed) { committed = true; sql = slot.commit(); }
+                return sql.copy();
+            }
+        }
+        /** Only a terminal SQL result permits owner publication or failed-attempt cleanup. HELD stays fenced. */
+        public boolean finish() {
+            synchronized (GraveStorageManager.this) {
+                if (released || !committed || !sql.isDone() || sql.isCompletedExceptionally()) return false;
+                released = true; recreations.remove(identity, this); return true;
+            }
+        }
+        public void close() {
+            synchronized (GraveStorageManager.this) {
+                if (released || committed) return;
+                released = true; recreations.remove(identity, this);
+            }
+            slot.close();
+        }
+    }
+
 
     private Recovery retained;
     private Recovery latestPrepared;
@@ -317,7 +376,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
     public synchronized SqlRecoveryJournal.Reservation reserveSqlTransition(SqlRecoveryJournal.Kind kind,
             GravesConfig grave, boolean broken) {
         if (!isMySQL() || backend == null || sqlJournal == null || closeRequested || backendClosed || restorationLoading
-                || !sqlJournal.isReady()) return null;
+                || !sqlJournal.isReady() || recreations.containsKey(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave))) return null;
         GravesConfig captured = kind == SqlRecoveryJournal.Kind.UPSERT || kind == SqlRecoveryJournal.Kind.UPDATE || kind == SqlRecoveryJournal.Kind.REMOVE
                 ? snapshot(grave) : metadataSnapshot(grave);
         return sqlJournal.reserve(kind, captured, broken);
@@ -336,7 +395,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         });
     }
     private java.util.concurrent.CompletableFuture<Boolean> saveSqlSnapshot(List<Grave> active, List<Grave> broken) {
-        if (sqlJournal == null || closeRequested || backendClosed || restorationLoading || !sqlJournal.isReady())
+        if (sqlJournal == null || closeRequested || backendClosed || restorationLoading || !sqlJournal.isReady() || !recreations.isEmpty())
             return java.util.concurrent.CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException("SQL snapshot unavailable"));
         try {
             var activeRows = active == null ? List.<Grave>of() : copy(active);

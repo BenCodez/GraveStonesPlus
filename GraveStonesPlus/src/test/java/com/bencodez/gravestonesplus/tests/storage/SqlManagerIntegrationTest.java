@@ -316,4 +316,86 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @Test void recreationIdentityAndBulkFenceSurviveSqlAckUntilOwnerPublication()throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var record=record(1);record.setDestroyed(true);record.setDestroyedTime(2000);
+            String identity=GraveIdentity.of(record);
+            try(var admission=h.manager.reserveRecreation(record,true)) {
+                assertNotNull(admission);assertTrue(h.manager.isRecreationPending(identity));
+                assertNull(h.manager.reserveRecreation(record,true));
+                assertNull(h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.REMOVE,record,true));
+                assertThrows(ExecutionException.class,()->await(h.manager.saveSnapshotFromObjects(List.of(),List.of(grave(record)))));
+                assertTrue(record.isDestroyed());
+                // Build metadata for the exact identity without serializing the historical inventory.
+                var finalMetadata=new GravesConfig(record.getUuid(),"",record.getLocation(),new HashMap<>(),0,"",record.getTime(),false,0,
+                        UUID.randomUUID(),null,"DISPLAY_ENTITY");finalMetadata.setWorldId(record.getWorldId());
+                assertTrue(admission.prepare(finalMetadata));assertTrue(await(admission.commit()));
+                assertTrue(h.manager.isRecreationPending(identity));
+                assertThrows(ExecutionException.class,()->await(h.manager.saveSnapshotFromObjects(List.of(),List.of(grave(record)))));
+                assertTrue(admission.finish());assertFalse(h.manager.isRecreationPending(identity));
+            }
+            var second=record(2);second.setDestroyed(true);
+            try(var admission=h.manager.reserveRecreation(second,false)) {
+                assertNotNull(admission);assertTrue(await(admission.commit()));
+                assertTrue(h.manager.isRecreationPending(GraveIdentity.of(second)));
+                assertThrows(ExecutionException.class,()->await(h.manager.saveSnapshotFromObjects(List.of(),List.of(grave(second)))));
+                second.setDestroyed(false);second.setDestroyedTime(0);
+                assertTrue(admission.finish());assertFalse(h.manager.isRecreationPending(GraveIdentity.of(second)));
+                assertTrue(await(h.manager.saveSnapshotFromObjects(List.of(grave(second)),List.of())));
+            }
+        }
+    }
+    @Test void heldRecreationCannotReleaseIdentityOrAdmitASecondAttempt()throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var record=record(1);record.setDestroyed(true);String identity=GraveIdentity.of(record);
+            doThrow(new IllegalStateException("synthetic recreation outage")).when(h.backend).saveRecreatedGrave(any());
+            try(var admission=h.manager.reserveRecreation(record,false)) {
+                assertNotNull(admission);assertThrows(ExecutionException.class,()->await(admission.commit()));
+                assertEquals(SqlRecoveryJournal.Disposition.DURABLE,await(admission.durable()));
+                assertFalse(admission.finish());admission.close();
+                assertTrue(h.manager.isRecreationPending(identity));assertNull(h.manager.reserveRecreation(record,false));
+                assertEquals(1,h.journal.records());assertTrue(record.isDestroyed());
+            }
+        }
+    }
+    @Test void unusedRecreationAdmissionReleasesIdentityAndPreservesLegacyNoMarkerMetadata()throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var record=record(1);record.setDestroyed(true);record.setGraveDisplayType("legacy-".repeat(50));
+            record.setDisplayUUID(UUID.randomUUID());record.setInteractUUID(UUID.randomUUID());
+            var cancelled=h.manager.reserveRecreation(record,true);assertNotNull(cancelled);cancelled.close();
+            assertFalse(h.manager.isRecreationPending(GraveIdentity.of(record)));
+            try(var admission=h.manager.reserveRecreation(record,false)) {
+                assertNotNull(admission);assertTrue(await(admission.commit()));assertTrue(admission.finish());
+            }
+            var captured=org.mockito.ArgumentCaptor.forClass(GravesConfig.class);verify(h.backend).saveRecreatedGrave(captured.capture());
+            assertEquals(record.getGraveDisplayType(),captured.getValue().getGraveDisplayType());
+            assertEquals(record.getDisplayUUID(),captured.getValue().getDisplayUUID());assertEquals(record.getInteractUUID(),captured.getValue().getInteractUUID());
+            assertFalse(captured.getValue().isDestroyed());h.encoding.verifyNoInteractions();
+        }
+    }
+
+    @Test void recreationOwnerFenceHasAnIndependent128EntryCap()throws Exception {
+        try(var h=new Fixture(256,null)) {
+            var held=new ArrayList<GraveStorageManager.RecreationAdmission>();
+            try {
+                for(int i=0;i<128;i++){var admission=h.manager.reserveRecreation(record(i),false);assertNotNull(admission);held.add(admission);}
+                assertNull(h.manager.reserveRecreation(record(129),false));
+                held.remove(0).close();
+                var replacement=h.manager.reserveRecreation(record(130),false);assertNotNull(replacement);held.add(replacement);
+                verify(h.backend,never()).saveRecreatedGrave(any());h.encoding.verifyNoInteractions();
+            }finally{held.forEach(GraveStorageManager.RecreationAdmission::close);}
+        }
+    }
+    @Test void preissuedRecreationFinishesWhileStorageClosesAndRetainsOwnerFence()throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var record=record(1);
+            try(var admission=h.manager.reserveRecreation(record,false)) {
+                assertNotNull(admission);h.manager.close();await(h.io.barrier());verify(h.backend,never()).close();
+                assertTrue(await(admission.commit()));assertTrue(h.closed.await(5,TimeUnit.SECONDS));
+                assertTrue(h.manager.isRecreationPending(GraveIdentity.of(record)));assertTrue(admission.finish());
+                verify(h.backend,times(1)).saveRecreatedGrave(any());verify(h.backend,times(1)).close();
+            }
+        }
+    }
+
 }

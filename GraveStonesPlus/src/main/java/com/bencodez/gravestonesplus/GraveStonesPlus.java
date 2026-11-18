@@ -134,25 +134,30 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	}
 
 	public void removeGrave(Grave grave) {
-		if (grave == null || grave.getGravesConfig() == null) {
-			return;
-		}
-
-		// Remove from active list by key (not object identity)
-		removeFromListByKey(graves, grave);
-
-		// Add to broken list only once
-		if (!containsByKey(brokenGraves, grave)) {
-			brokenGraves.add(grave);
-		}
-
-		if (storageManager.isMySQL()) {
-			storageManager.updateExistingGrave(grave.getGravesConfig(), true);
-		} else {
-			storageManager.saveBrokenGravesFromObjects(brokenGraves);
-			storageManager.saveGravesFromObjects(graves);
-		}
-	}
+        if (grave == null || grave.getGravesConfig() == null) return;
+        if (storageManager.isMySQL()) {
+            var admitted = storageManager.reserveSqlTransition(
+                    com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.UPDATE, grave.getGravesConfig(), true);
+            if (admitted == null) throw new java.util.concurrent.RejectedExecutionException("SQL removal capacity unavailable; lists unchanged");
+            removeGrave(grave, admitted);
+        } else {
+            moveToBroken(grave);
+            storageManager.saveBrokenGravesFromObjects(brokenGraves);
+            storageManager.saveGravesFromObjects(graves);
+        }
+    }
+    /** Internal completion path for callers which reserved SQL capacity before payout.
+     * The durable claim ledger remains the recovery authority if this acknowledgment is held. */
+    public java.util.concurrent.CompletableFuture<Boolean> removeGrave(Grave grave,
+            com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation admitted) {
+        java.util.Objects.requireNonNull(admitted, "SQL removal admission");
+        moveToBroken(grave);
+        return admitted.commit();
+    }
+    private void moveToBroken(Grave grave) {
+        removeFromListByKey(graves, grave);
+        if (!containsByKey(brokenGraves, grave)) brokenGraves.add(grave);
+    }
 
     /**
      * Initiates asynchronous recreation. This legacy void method does not

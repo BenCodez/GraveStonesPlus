@@ -1469,6 +1469,17 @@ public class Grave {
     private static final class ClaimAttempt {
         final java.util.concurrent.CompletableFuture<ClaimResult> completion = new java.util.concurrent.CompletableFuture<>();
         boolean ownsClaim;
+        private com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sqlRemoval;
+        long destroyedAt;
+        private boolean sqlReleased;
+        synchronized boolean retainSql(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation ticket) {
+            if (completion.isDone()) { ticket.close(); return false; }
+            sqlRemoval = ticket; return true;
+        }
+        synchronized void releaseSql() {
+            if (sqlRemoval != null && !sqlReleased) { sqlReleased = true; sqlRemoval.close(); }
+        }
+        synchronized com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sqlRemoval() { return sqlRemoval; }
         private int actorDepth;
         private ClaimResult deferred;
         void finish(ClaimResult result) {
@@ -1485,6 +1496,7 @@ public class Grave {
     private java.util.concurrent.CompletableFuture<ClaimResult> startClaim(Player player,
             com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof, boolean nearby) {
         var attempt = new ClaimAttempt();
+        attempt.completion.whenComplete((result, failure) -> attempt.releaseSql());
         if (!observeLifecycle(attempt.completion, ClaimResult.HELD)) return attempt.completion.copy();
         if (player == null) attempt.finish(ClaimResult.DENIED);
         else {
@@ -1558,6 +1570,19 @@ public class Grave {
             captured = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig);
             evidence = GraveClaimLedger.evidence(captured);
         } catch (RuntimeException invalid) { finishUnreserved(attempt, ClaimResult.FAILED); return; }
+        // The claim ledger supplies durable owner evidence before payout. Reserve the
+        // eventual SQL completion now, before either inventory or experience changes.
+        var storage = plugin.getStorageManager();
+        if (storage != null && storage.isMySQL()) {
+            try {
+                GravesConfig removed = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(captured);
+                attempt.destroyedAt = System.currentTimeMillis();
+                removed.setDestroyed(true); removed.setDestroyedTime(attempt.destroyedAt);
+                var ticket = storage.reserveSqlTransition(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.UPDATE, removed, true);
+                if (ticket == null) { finishUnreserved(attempt, ClaimResult.FAILED); return; }
+                if (!attempt.retainSql(ticket)) { finishUnreserved(attempt, ClaimResult.HELD); return; }
+            } catch (RuntimeException rejected) { finishUnreserved(attempt, ClaimResult.FAILED); return; }
+        }
         Runnable reserve = () -> claimCallback(attempt, identity, () -> {
             if (attempt.completion.isDone() || !player.isOnline() || !plugin.isEnabled() || !plugin.isLiveGrave(this)
                     || !claimAllowed(player, proof) || nearby && !nearbyClaimAllowed(player)) {
@@ -1638,6 +1663,7 @@ public class Grave {
         return plugin.getGraveClaimLedger().isBlocked(identity) ? ClaimResult.HELD : ClaimResult.FAILED;
     }
     private void finishUnreserved(ClaimAttempt attempt, ClaimResult result) {
+        attempt.releaseSql();
         try {
             synchronized (this) {
                 if (attempt.ownsClaim) { attempt.ownsClaim = false; releaseClaim(); }
@@ -1672,13 +1698,18 @@ public class Grave {
     private void completeClaim(Player player, String identity, boolean displaced, ClaimAttempt attempt) {
         try {
             var paid = plugin.getGraveClaimLedger().paid(identity, player.getUniqueId());
-            remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(System.currentTimeMillis());
-            plugin.removeGrave(this);
+            remove = true; gravesConfig.setDestroyed(true);
+            gravesConfig.setDestroyedTime(attempt.destroyedAt == 0 ? System.currentTimeMillis() : attempt.destroyedAt);
+            var sql = attempt.sqlRemoval();
+            java.util.concurrent.CompletableFuture<Boolean> stored;
+            if (sql == null) { plugin.removeGrave(this); stored = java.util.concurrent.CompletableFuture.completedFuture(true); }
+            else stored = plugin.removeGrave(this, sql);
             plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
             plugin.getGraveNavigation().invalidate(identity); removeTimer(); scheduleMarkerCleanup();
             // Register only after the gameplay transition; disk completion alone
             // cannot advertise success before recipient/state mutations finish.
-            paid.whenComplete((saved, failure) -> {
+            paid.thenCombine(stored, (receipt, written) -> Boolean.TRUE.equals(receipt) && Boolean.TRUE.equals(written))
+                    .whenComplete((saved, failure) -> {
                 boolean acknowledged = failure == null && Boolean.TRUE.equals(saved);
                 if (!acknowledged) plugin.getLogger().severe("Grave payout completed but completion record could not be saved; durable reservation still prevents replay.");
                 attempt.finish(acknowledged ? ClaimResult.COMPLETED : ClaimResult.HELD);

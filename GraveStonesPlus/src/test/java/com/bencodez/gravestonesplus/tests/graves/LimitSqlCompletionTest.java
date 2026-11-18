@@ -76,4 +76,21 @@ class LimitSqlCompletionTest {
         }
     }
 
+    @Test void successfulGroundDeliveryOwnsSqlWhenRetirementOccursInsideDrop() throws Exception {
+        try(var h=new ClaimHarness()) {
+            var restoration=h.limitRestoration();var orb=h.groundWorld();
+            var storage=mock(GraveStorageManager.class);when(storage.isMySQL()).thenReturn(true);when(h.plugin.getStorageManager()).thenReturn(storage);
+            var ticket=mock(SqlRecoveryJournal.Reservation.class);when(storage.reserveSqlTransition(any(),any(),eq(true))).thenReturn(ticket);
+            var durable=new CompletableFuture<SqlRecoveryJournal.Disposition>();var written=new CompletableFuture<Boolean>();
+            when(ticket.durable()).thenReturn(durable);when(ticket.commit()).thenReturn(written);
+            when(h.plugin.removeGrave(eq(h.grave),same(ticket))).thenAnswer(call->{h.active.remove(h.grave);return ticket.commit();});
+            doAnswer(call->{h.retireAcknowledgments();verify(ticket,never()).close();return null;}).when(h.world).dropItem(any(),any());
+            h.grave.dropAndRemoveForLimit(h.owner);h.drainGround();
+            verify(ticket,times(1)).commit();verify(orb).setExperience(17);
+            durable.complete(SqlRecoveryJournal.Disposition.DURABLE);h.drainGround();written.complete(true);h.drainGround();
+            assertEquals(GraveClaimLedger.Restoration.PAID,ClaimHarness.await(h.ledger.restoration(h.identity())));
+            verify(h.world,times(1)).dropItem(any(),any());verify(ticket,times(1)).close();restoration.retire();
+        }
+    }
+
 }

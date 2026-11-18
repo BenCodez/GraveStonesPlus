@@ -264,4 +264,37 @@ class ClaimCompletionTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={0,1,2})
+    void deliveryOwnsSqlThroughRetirementAndAcknowledgedOverflow(int mode) throws Exception {
+        try(var h=new ClaimHarness()) {
+            var storage=mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            var ticket=mock(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation.class);
+            var durable=new CompletableFuture<com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition>();
+            var written=new CompletableFuture<Boolean>();when(ticket.commit()).thenReturn(written);when(ticket.durable()).thenReturn(durable);
+            when(storage.isMySQL()).thenReturn(true);when(h.plugin.getStorageManager()).thenReturn(storage);
+            when(storage.reserveSqlTransition(any(),any(),eq(true))).thenReturn(ticket);
+            when(h.plugin.removeGrave(eq(h.grave),same(ticket))).thenAnswer(call->{h.active.remove(h.grave);return ticket.commit();});
+            var overflow=new CompletableFuture<Void>();
+            if(mode==2) {
+                var occupied=mock(org.bukkit.inventory.ItemStack.class);var material=h.cloned.getType();when(occupied.getType()).thenReturn(material);
+                when(h.ownerInventory.getItem(4)).thenReturn(occupied);
+                when(h.ownerInventory.addItem(h.cloned)).thenReturn(new java.util.HashMap<>(java.util.Map.of(0,h.cloned)));
+                var type=h.plugin.getClass().getMethod("getFullInventoryHandler").getReturnType();
+                Object handler=mock(type,call->call.getMethod().getName().equals("giveItemAsync") ? overflow : org.mockito.Answers.RETURNS_DEFAULTS.answer(call));
+                doReturn(handler).when(h.plugin).getFullInventoryHandler();
+            } else if(mode==0) doAnswer(call->{h.retireAcknowledgments();verify(ticket,never()).close();return null;}).when(h.ownerInventory).setItem(eq(4),any());
+            else doAnswer(call->{h.retireAcknowledgments();verify(ticket,never()).close();return null;}).when(h.owner).giveExp(17);
+            var result=h.grave.claimAsync(h.owner).thenApply(outcome->{
+                assertFalse(Thread.holdsLock(h.grave));assertFalse(Thread.holdsLock(h.access));return outcome;
+            });h.drain();
+            if(mode==2) {h.retireAcknowledgments();verify(ticket,never()).close();overflow.complete(null);h.drain();}
+            verify(h.owner,times(1)).giveExp(17);verify(ticket,times(1)).commit();
+            assertEquals(ClaimResult.HELD,ClaimHarness.await(result));
+            durable.complete(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE);h.drain();written.complete(true);h.drain();
+            assertEquals(com.bencodez.gravestonesplus.graves.GraveClaimLedger.Restoration.PAID,ClaimHarness.await(h.ledger.restoration(h.identity())));
+            assertTrue(h.grave.getGravesConfig().isDestroyed());verify(ticket,times(1)).close();
+        }
+    }
+
 }

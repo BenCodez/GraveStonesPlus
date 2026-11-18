@@ -1320,16 +1320,19 @@ public class Grave {
                 if (sql == null) { releaseClaim(); return; }
             } else sql = null;
         } catch (RuntimeException rejected) { releaseClaim(); return; }
+        var sqlReleased = new java.util.concurrent.atomic.AtomicBoolean();
+        Runnable closeSql = () -> { if (sql != null && sqlReleased.compareAndSet(false, true)) sql.close(); };
         final GraveClaimLedger.LimitDelivery delivery;
         try { delivery = plugin.getGraveClaimLedger().admitLimitDelivery(identity, gravesConfig.getUuid()); }
-        catch (RuntimeException rejected) { if (sql != null) sql.close(); releaseClaim(); return; }
-        if (delivery == null) { if (sql != null) sql.close(); releaseClaim(); return; }
+        catch (RuntimeException rejected) { closeSql.run(); releaseClaim(); return; }
+        if (delivery == null) { closeSql.run(); releaseClaim(); return; }
         var lifecycle = new java.util.concurrent.CompletableFuture<Boolean>();
         lifecycle.whenComplete((value, failure) -> {
-            if (sql != null) sql.close();
-            if (!Boolean.TRUE.equals(value)) {
+            if (Boolean.TRUE.equals(value)) closeSql.run();
+            else {
                 var deferred = delivery.deferBeforeDelivery();
-                if (deferred != null) deferred.whenComplete((saved, error) -> releaseClaim());
+                if (deferred != null) { closeSql.run(); deferred.whenComplete((saved, error) -> releaseClaim()); }
+                // Otherwise the delivery actor owns the ticket until commit/terminal failure.
             }
         });
         if (!observeLifecycle(lifecycle, false)) return;
@@ -1400,7 +1403,7 @@ public class Grave {
                             });
                     } catch (RuntimeException interrupted) {
                         plugin.getLogger().severe("Grave ground payout interrupted after reservation; replay is blocked and exact contents/XP remain in recovery evidence.");
-                    } finally { if (payoutStarted) releaseClaim(); }
+                    } finally { if (payoutStarted) { closeSql.run(); releaseClaim(); } }
                     } catch (RuntimeException prePayoutFailure) {
                         // Payout exceptions are consumed by the inner non-replayable path.
                         // Only this pre-payout branch may return the ledger to QUEUED_LIMIT.
@@ -1544,9 +1547,18 @@ public class Grave {
         boolean ownsClaim;
         private com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sqlRemoval;
         long destroyedAt;
-        private boolean sqlReleased;
+        private boolean sqlReleased, deliveryOwned, retired;
+        synchronized boolean beginDelivery() {
+            if (retired || completion.isDone()) return false;
+            deliveryOwned = true; return true;
+        }
+        void retire() {
+            synchronized (this) { retired = true; if (!deliveryOwned) releaseSql(); }
+            finish(ClaimResult.HELD);
+        }
+        synchronized void releaseUnownedSql() { if (!deliveryOwned) releaseSql(); }
         synchronized boolean retainSql(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation ticket) {
-            if (completion.isDone()) { ticket.close(); return false; }
+            if (retired || completion.isDone()) { ticket.close(); return false; }
             sqlRemoval = ticket; return true;
         }
         synchronized void releaseSql() {
@@ -1556,7 +1568,10 @@ public class Grave {
         private int actorDepth;
         private ClaimResult deferred;
         void finish(ClaimResult result) {
-            synchronized (this) { if (actorDepth > 0) { deferred = result; return; } }
+            synchronized (this) {
+                if (retired) result = ClaimResult.HELD;
+                if (actorDepth > 0) { deferred = result; return; }
+            }
             completion.complete(result);
         }
         synchronized void enterActor() { actorDepth++; }
@@ -1569,8 +1584,10 @@ public class Grave {
     private java.util.concurrent.CompletableFuture<ClaimResult> startClaim(Player player,
             com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof, boolean nearby) {
         var attempt = new ClaimAttempt();
-        attempt.completion.whenComplete((result, failure) -> attempt.releaseSql());
-        if (!observeLifecycle(attempt.completion, ClaimResult.HELD)) return attempt.completion.copy();
+        var lifecycle = new java.util.concurrent.CompletableFuture<Boolean>();
+        lifecycle.whenComplete((value, failure) -> { if (!Boolean.TRUE.equals(value)) attempt.retire(); });
+        attempt.completion.whenComplete((result, failure) -> { attempt.releaseUnownedSql(); lifecycle.complete(true); });
+        if (!observeLifecycle(lifecycle, false)) return attempt.completion.copy();
         if (player == null) attempt.finish(ClaimResult.DENIED);
         else {
             Runnable admission = () -> {
@@ -1700,6 +1717,7 @@ public class Grave {
                             cancelClaim(identity, attempt); return;
                         }
                         try {
+                            if (!attempt.beginDelivery()) { cancelClaim(identity, attempt); return; }
                             var payout = GravePayout.select(captured.getItems(), plugin.getConfigFile().getPercentageDrops(), () -> ThreadLocalRandom.current().nextInt(100));
                             List<java.util.concurrent.CompletableFuture<Void>> overflow = new ArrayList<>();
                             boolean displaced = GravePayout.deliver(player, payout, captured.getExp(), item -> {
@@ -1805,6 +1823,7 @@ public class Grave {
                 } catch (RuntimeException retired) { plugin.getLogger().fine("Acknowledged grave payout feedback unavailable."); }
             });
         } finally {
+            attempt.releaseSql();
             synchronized (this) { if (attempt.ownsClaim) { attempt.ownsClaim = false; releaseClaim(); } }
         }
     }

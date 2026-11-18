@@ -25,6 +25,7 @@ final class ClaimHarness implements AutoCloseable {
     final PlayerInventory ownerInventory;
     final PluginManager events;
     final Queue<Runnable> entityWork;
+    final Queue<Runnable> regionWork;
     final List<Grave> active;
     final MockedStatic<Bukkit> bukkit;
     final Grave grave;
@@ -38,7 +39,7 @@ final class ClaimHarness implements AutoCloseable {
         io = field(delegate, "io"); access = field(delegate, "access"); ledger = field(delegate, "ledger");
         plugin = field(delegate, "plugin"); owner = field(delegate, "owner");
         ownerInventory = field(delegate, "ownerInventory"); events = field(delegate, "events");
-        entityWork = field(delegate, "entityWork"); active = field(delegate, "active");
+        entityWork = field(delegate, "entityWork"); regionWork = field(delegate, "regionWork"); active = field(delegate, "active");
         world = field(delegate, "world");
         bukkit = field(delegate, "bukkit"); grave = field(delegate, "grave"); cloned = field(delegate, "cloned");
     }

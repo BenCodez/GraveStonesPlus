@@ -141,6 +141,8 @@ public final class GraveMarkerCleanup {
         }, location); } catch (RuntimeException rejected) { plugin.getLogger().warning("Marker cleanup is durably retained while its region scheduler is unavailable."); }
     }
     private boolean cleanup(Marker marker, Location location) {
+        var storage = plugin.getStorageManager();
+        if (storage != null && storage.isRecreationPending(marker.id)) return false;
         GraveRestoration restoration = plugin.getGraveRestoration();
         if (restoration != null && (restoration.isLoading() || restoration.hasPending(marker.id))) return false;
         // Recreation can legitimately reuse the same logical identity. An old intent

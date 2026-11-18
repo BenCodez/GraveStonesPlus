@@ -388,6 +388,8 @@ public class Grave {
 
     private void reconcileSurvivingHologram(Entity entity, Location center, String identity) {
         if (!plugin.isEnabled()) return;
+        var storage = plugin.getStorageManager();
+        if (storage != null && storage.isRecreationPending(identity)) return;
         boolean display = "ITEM_DISPLAY".equals(entity.getType().name());
         if (entity.getType() != EntityType.ARMOR_STAND && !display) return;
         // Restoration may adopt this display after scheduling nearby cleanup. Recheck at
@@ -1194,6 +1196,10 @@ public class Grave {
 
     private void beginRecreationOnRegion(String identity, boolean createMarker,
             java.util.concurrent.CompletableFuture<Boolean> result) {
+        var storage = plugin.getStorageManager();
+        if (!createMarker && storage != null && storage.isMySQL()) {
+            beginSqlRecreationWithoutMarker(identity, result); return;
+        }
         final long previousDestroyedTime;
         final boolean previousRemove;
         boolean admitted;
@@ -1224,6 +1230,51 @@ public class Grave {
             }
             // Do not invoke integration continuations while holding a grave monitor.
             if (failure != null) result.completeExceptionally(failure); else result.complete(restored);
+        });
+    }
+
+    /** No native marker mutation: retain historical state until the ordered SQL transition acknowledges. */
+    private void beginSqlRecreationWithoutMarker(String identity,
+            java.util.concurrent.CompletableFuture<Boolean> result) {
+        final com.bencodez.gravestonesplus.storage.GraveStorageManager.RecreationAdmission admission;
+        final com.bencodez.gravestonesplus.storage.GraveStorageManager storage;
+        final java.util.UUID display, interact;
+        final String displayType;
+        synchronized (this) {
+            if (result.isDone() || !recreationStateAllowed(identity)) { result.complete(false); return; }
+            display = gravesConfig.getDisplayUUID(); interact = gravesConfig.getInteractUUID();
+            displayType = gravesConfig.getGraveDisplayType();
+            storage = plugin.getStorageManager();
+            admission = storage.reserveRecreation(gravesConfig, false);
+        }
+        if (admission == null) { result.complete(false); return; }
+        admission.commit().whenComplete((saved, failure) -> {
+            if (failure != null) {
+                // A committed intent may still replay. Never compensate or admit another attempt.
+                result.complete(false); return;
+            }
+            if (!Boolean.TRUE.equals(saved)) {
+                admission.finish(); result.complete(false); return;
+            }
+            try {
+                plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(gravesConfig.getLocation(), task -> {
+                    boolean published = false;
+                    try {
+                        synchronized (Grave.this) {
+                            if (!acknowledgmentsRetired && plugin.getStorageManager() == storage && recreationStateAllowed(identity)) {
+                                gravesConfig.setDisplayUUID(display); gravesConfig.setInteractUUID(interact);
+                                gravesConfig.setGraveDisplayType(displayType);
+                                markRecreated(); gravesConfig.setDestroyed(false); gravesConfig.setDestroyedTime(0);
+                                plugin.publishSqlRecreatedGrave(Grave.this);
+                                published = admission.finish();
+                            }
+                        }
+                    } finally { result.complete(published); }
+                }).whenComplete((unused, schedulingFailure) -> { if (schedulingFailure != null) result.complete(false); });
+            } catch (RuntimeException rejected) {
+                // SQL is acknowledged but location publication is still held for restart reconciliation.
+                result.complete(false);
+            }
         });
     }
 

@@ -178,6 +178,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			return java.util.concurrent.CompletableFuture.completedFuture(false);
 		}
 
+        if (!createMarker && storageManager.isMySQL()) return grave.recreateAsync(actor, false);
         var completion = grave.recreateAsync(actor, createMarker).thenCompose(restored -> {
         if (!restored) return java.util.concurrent.CompletableFuture.completedFuture(false);
 		if (!containsByKey(graves, grave)) {
@@ -200,6 +201,12 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		// must still move the lists and request persistence after recreation commits.
 		return completion.copy();
 	}
+
+    /** Called only after SQL acknowledgment on the recreation's location owner; no second storage admission. */
+    public void publishSqlRecreatedGrave(Grave grave) {
+        if (!containsByKey(graves, grave)) graves.add(grave);
+        removeFromListByKey(brokenGraves, grave);
+    }
 
 	private boolean containsByKey(List<Grave> list, Grave grave) {
 		if (list == null || grave == null || grave.getGravesConfig() == null
@@ -636,7 +643,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
     /** Eligibility reads only stored state; never probes blocks or loads chunks. */
     public boolean isLiveGrave(Grave grave) {
         if (grave == null || grave.isRemove() || grave.getGravesConfig().isDestroyed()
-                || com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()) == null) return false;
+                || com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()) == null
+                || storageManager != null && storageManager.isRecreationPending(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()))) return false;
         long deadline = grave.getExpiryDeadline();
         if (deadline > 0 && deadline <= System.currentTimeMillis()) return false;
         synchronized (graves) { return graves.contains(grave); }

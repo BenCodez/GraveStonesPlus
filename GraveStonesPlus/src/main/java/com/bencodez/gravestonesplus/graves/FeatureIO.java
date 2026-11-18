@@ -12,6 +12,7 @@ public final class FeatureIO implements AutoCloseable {
     private final Object lifecycle = new Object();
     private int reservations;
     private boolean closing;
+    private final java.util.concurrent.atomic.AtomicReference<Runnable> urgentDrain = new java.util.concurrent.atomic.AtomicReference<>();
     private final AtomicBoolean drainRequested = new AtomicBoolean();
     private volatile Runnable drainListener = () -> { };
     public FeatureIO() { this(128); }
@@ -74,9 +75,15 @@ public final class FeatureIO implements AutoCloseable {
             }
         }
     }
+    /** One storage owner may request bounded service even while ordinary feature work remains queued. */
+    public void requestDrain(Runnable service) { urgentDrain.set(java.util.Objects.requireNonNull(service)); requestDrain(); }
     public boolean isOwnerThread() { return Thread.currentThread() == owner; }
     public boolean hasQueuedWork() { return !worker.getQueue().isEmpty(); }
-    private void notifyDrain() { if (!hasQueuedWork()) drainListener.run(); }
+    private void notifyDrain() {
+        Runnable urgent = urgentDrain.getAndSet(null);
+        if (urgent != null) urgent.run();
+        else if (!hasQueuedWork()) drainListener.run();
+    }
     public boolean isTerminated() { return worker.isTerminated(); }
     @Override public void close() {
         if (Thread.currentThread() == owner) throw new IllegalStateException("Disk owner cannot wait for its own shutdown");

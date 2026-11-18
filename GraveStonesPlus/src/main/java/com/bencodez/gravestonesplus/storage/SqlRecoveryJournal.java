@@ -9,8 +9,16 @@ import java.util.concurrent.*;
 import java.util.function.Consumer;
 import com.bencodez.gravestonesplus.graves.FeatureIO;
 
-/** Bounded, ordered SQL obligations. Only the feature worker touches journal files or JDBC. */
+/** Bounded, ordered SQL obligations. Only the feature worker touches journal files or JDBC.
+ * This storage-only component cannot atomically commit a Minecraft inventory/world transition.
+ * Callers must supply owner-side identity/reconciliation before committing an obligation. Once
+ * committed it may replay even if observation fails; HELD never permits rollback or a second payout.
+ * Future continuations run on a bounded notification strand and must hand off without blocking.
+ */
 public final class SqlRecoveryJournal {
+    /** HELD may replay after repair/restart: the caller must retain ownership and must not restore/drop rewards.
+     * CANCELLED is possible only before commit and cannot replay. DURABLE is not an SQL acknowledgment. */
+    public enum Disposition { DURABLE, HELD, CANCELLED }
     public enum Kind { UPSERT, UPDATE, FLAG, DISPLAY, RECREATE }
     private enum Phase { RESERVED, READY, DURABLE }
     private static final int VERSION = 1;
@@ -30,7 +38,7 @@ public final class SqlRecoveryJournal {
     private long evidenceBytes;
     private long next, bytes, cursor;
     private final Set<String> blockedCycle = new HashSet<>();
-    private boolean healthy, closing, draining;
+    private boolean healthy, closing, draining, initialized, retryRequested;
     private static final class Entry {
         final long sequence;
         final Kind kind;
@@ -38,7 +46,7 @@ public final class SqlRecoveryJournal {
         final boolean broken;
         final byte[] payload;
         final String identity;
-        final CompletableFuture<Boolean> durable = new CompletableFuture<>();
+        final CompletableFuture<Disposition> durable = new CompletableFuture<>();
         boolean reported, durableNotified;
         final CompletableFuture<Boolean> completion = new CompletableFuture<>();
         Phase phase;
@@ -62,10 +70,11 @@ public final class SqlRecoveryJournal {
                 });
         notifications.allowCoreThreadTimeOut(true);
         io.submit(() -> { load(); return true; }).whenComplete((value, failure) -> {
-            synchronized (this) { healthy = failure == null; }
+            synchronized (this) { healthy = failure == null; initialized = failure == null; }
+            wake();
             notifications.execute(() -> {
                 try { loaded.complete(failure == null); }
-                finally { if (failure != null) report("SQL recovery journal unavailable; new SQL transitions are blocked."); wake(); }
+                finally { if (failure != null) report("SQL recovery journal unavailable; new SQL transitions are blocked."); }
             });
         });
     }
@@ -90,7 +99,7 @@ public final class SqlRecoveryJournal {
         private FeatureIO.Admission admission;
         private Reservation(Entry entry, FeatureIO.Admission admission) { this.entry = entry; this.admission = admission; }
         /** Acknowledges the order-safe journal publication, independently of SQL completion. */
-        public CompletableFuture<Boolean> durable() { return entry.durable.copy(); }
+        public CompletableFuture<Disposition> durable() { return entry.durable.copy(); }
         /** Consumes the reserved slot; the returned future acknowledges SQL, never merely RAM admission. */
         public CompletableFuture<Boolean> commit() {
             FeatureIO.Admission ticket;
@@ -101,6 +110,7 @@ public final class SqlRecoveryJournal {
             ticket.submit(() -> true).whenComplete((value, failure) -> {
                 if (failure != null) fail(entry, "SQL recovery worker rejected an accepted transition.");
             });
+            wake();
             return entry.completion.copy();
         }
         @Override public void close() {
@@ -112,14 +122,18 @@ public final class SqlRecoveryJournal {
             }
             ticket.close();
             notifications.execute(() -> {
-                try { entry.durable.complete(false); entry.completion.complete(false); }
+                try { entry.durable.complete(Disposition.CANCELLED); entry.completion.complete(false); }
                 finally { release(entry); }
             });
             wake();
         }
     }
     /** Explicit retry signal; never blocks a Bukkit/region owner and never loops on a failed backend. */
-    public void wake() { io.requestDrain(); }
+    public void wake() {
+        synchronized (this) { retryRequested = true; }
+        continueDrain();
+    }
+    private void continueDrain() { io.requestDrain(this::drain); }
     public void close() {
         synchronized (this) {
             closing = true;
@@ -130,11 +144,12 @@ public final class SqlRecoveryJournal {
     /** Called on FeatureIO after accepted work, including its final shutdown drain. */
     public void drain() {
         if (!io.isOwnerThread()) throw new IllegalStateException("SQL recovery requires the feature owner");
-        synchronized (this) { if (draining || !loaded.isDone() || !Boolean.TRUE.equals(loaded.getNow(false))) return; draining = true; }
+        synchronized (this) { if (draining || !initialized || (cursor == 0 && !retryRequested)) return; draining = true; }
         try {
             List<Entry> prefix = new ArrayList<>();
             synchronized (this) {
-                if (cursor == 0) blockedCycle.clear();
+                if (closing) cursor = 0;
+                if (cursor == 0) { blockedCycle.clear(); retryRequested = false; }
                 int limit = closing ? entryLimit : 16;
                 for (Entry entry : entries.values()) {
                     if (entry.sequence <= cursor) continue;
@@ -151,17 +166,23 @@ public final class SqlRecoveryJournal {
                     synchronized (this) { entry.phase = Phase.DURABLE; }
                 } catch (IOException journalFailure) {
                     synchronized (this) { healthy = false; }
-                    for (Entry pending : prefix) if (pending.phase != Phase.DURABLE)
-                        fail(pending, "SQL recovery journal publication unavailable; new transitions are blocked.", true);
+                    // Resolve the known-durable prefix even when a later publication is uncertain.
+                    for (Entry pending : prefix) {
+                        if (pending.phase == Phase.DURABLE) {
+                            notifyDurable(pending);
+                            if (closing) fail(pending, "Durable SQL transition retained across shutdown; acknowledgment unavailable.", false);
+                        }
+                        else fail(pending, "SQL recovery journal publication held; replay remains possible.", true);
+                    }
                     return;
                 }
             }
-            for (Entry entry : prefix) if (!entry.durableNotified) {
-                entry.durableNotified = true;
-                notifications.execute(() -> entry.durable.complete(true));
-            }
+            for (Entry entry : prefix) notifyDurable(entry);
             for (Entry entry : prefix) {
-                if (blockedCycle.contains(entry.identity)) continue;
+                if (blockedCycle.contains(entry.identity)) {
+                    fail(entry, "Durable SQL predecessor remains unresolved; successor retained without acknowledgment.", false);
+                    continue;
+                }
                 try {
                     boolean applied = true;
                     try { apply(entry); }
@@ -190,8 +211,15 @@ public final class SqlRecoveryJournal {
                 }
                 if (!more) { cursor = 0; blockedCycle.clear(); }
             }
-            if (more) wake();
+            synchronized (this) { more |= retryRequested; }
+            if (more) continueDrain();
         } finally { synchronized (this) { draining = false; } }
+    }
+    private void notifyDurable(Entry entry) {
+        if (!entry.durableNotified) {
+            entry.durableNotified = true;
+            notifications.execute(() -> entry.durable.complete(Disposition.DURABLE));
+        }
     }
     private synchronized void release(Entry entry) {
         outstanding--; bytes -= entry.payload.length;
@@ -205,7 +233,7 @@ public final class SqlRecoveryJournal {
         synchronized (this) { if (entry.reported) return; entry.reported = true; }
         notifications.execute(() -> {
             try {
-                if (publication) entry.durable.completeExceptionally(new IllegalStateException(message));
+                if (publication) entry.durable.complete(Disposition.HELD);
                 entry.completion.completeExceptionally(new IllegalStateException(message));
             } finally { report(message); }
         });
@@ -261,14 +289,10 @@ public final class SqlRecoveryJournal {
     }
     private void load() {
         try {
-            List<Path> created = new ArrayList<>();
-            for (Path path = directory; path != null && !Files.exists(path, LinkOption.NOFOLLOW_LINKS); path = path.getParent()) created.add(path);
             Files.createDirectories(directory);
             if (Files.isSymbolicLink(directory)) throw new IOException("Journal directory cannot be a symbolic link");
             // Persist each new directory's entry in its parent before acknowledging a journal record.
-            for (int i = created.size() - 1; i >= 0; i--) {
-                Path path = created.get(i); forcePath(path); if (path.getParent() != null) forcePath(path.getParent());
-            }
+            for (Path path = directory.toAbsolutePath(); path != null; path = path.getParent()) forcePath(path);
             List<Path> files = new ArrayList<>(), temporary = new ArrayList<>();
             int count = 0; long total = 0;
             try (DirectoryStream<Path> listing = Files.newDirectoryStream(directory)) {

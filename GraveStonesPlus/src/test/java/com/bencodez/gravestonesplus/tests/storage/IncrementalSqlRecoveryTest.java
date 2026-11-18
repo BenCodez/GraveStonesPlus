@@ -33,6 +33,7 @@ class IncrementalSqlRecoveryTest {
         final GraveStonesPlus plugin = mock(GraveStonesPlus.class);
         final GraveStorageBackend backend = mock(GraveStorageBackend.class);
         final GraveStorageManager manager;
+        final SqlJournalHarness journal;
         final org.mockito.MockedStatic<InventorySerializer> encoding = mockStatic(InventorySerializer.class);
         final AtomicInteger encodes = new AtomicInteger();
         final GravesConfig target = record(1);
@@ -40,7 +41,9 @@ class IncrementalSqlRecoveryTest {
             io = new FeatureIO(capacity);
             encoding.when(() -> InventorySerializer.encode(any())).thenAnswer(call -> {
                 assertSame(owner, Thread.currentThread(), "encoding must stay on the caller owner");
-                encodes.incrementAndGet(); return "prepared";
+                encodes.incrementAndGet();
+                java.util.Map<Integer, ItemStack> captured = call.getArgument(0);
+                return "prepared:" + (captured.isEmpty() ? 0 : captured.get(0).getAmount());
             });
             when(plugin.getFeatureIO()).thenReturn(io);
             when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
@@ -53,6 +56,7 @@ class IncrementalSqlRecoveryTest {
             when(plugin.brokenGraveSnapshot()).thenReturn(List.of(grave));
             manager = new GraveStorageManager(plugin);
             field(manager, "backend", backend); field(manager, "type", DataStorageType.MYSQL);
+            journal = new SqlJournalHarness(io, backend, manager);
         }
         CompletableFuture<?> operation(String operation) {
             return switch (operation) {
@@ -64,7 +68,7 @@ class IncrementalSqlRecoveryTest {
                 default -> throw new AssertionError(operation);
             };
         }
-        @Override public void close() { manager.close(); io.close(); encoding.close(); }
+        @Override public void close() throws Exception { try { journal.close(); } finally { encoding.close(); } }
     }
     @ParameterizedTest @ValueSource(strings = {"upsert", "update", "broken", "display", "recreate"})
     void healthyIncrementalWritesCaptureOnlyChangedInventory(String operation) throws Exception {
@@ -93,8 +97,9 @@ class IncrementalSqlRecoveryTest {
                 h.target.getItems().get(0).setAmount(99);
             } finally { release.countDown(); }
             await(blocking); await(result); await(h.io.barrier());
-            assertEquals(1, snapshots.size()); assertEquals(2, snapshots.getFirst().getItems().get(0).getAmount());
-            assertEquals(1, h.encodes.get(), "normal SQL write encoded more than its one input");
+            assertEquals(1, snapshots.size()); if (operation.equals("upsert") || operation.equals("update"))
+                assertEquals("prepared:2", SqlJournalHarness.encoded(snapshots.getFirst()));
+            assertEquals(operation.equals("upsert") || operation.equals("update") ? 1 : 0, h.encodes.get(), "only full SQL mutations encode their own input");
             verify(h.plugin, never()).activeGraveSnapshot(); verify(h.plugin, never()).brokenGraveSnapshot();
         }
     }
@@ -110,11 +115,14 @@ class IncrementalSqlRecoveryTest {
             when(h.plugin.brokenGraveSnapshot()).thenReturn(history);
             h.manager.beginRestoration(); h.manager.retainRestorationBatch(List.of(), records); h.manager.finishRestorationRetention();
             assertEquals(129, h.encodes.get()); h.encodes.set(0);
+            var written = new CountDownLatch(129);
+            doAnswer(call -> { written.countDown(); return null; }).when(h.backend).updateExistingGrave(any(), eq(true));
             for (var record : records) {
                 h.manager.restorationResolved(record);
                 h.manager.updateExistingGrave(record, true);
             }
             await(h.io.barrier());
+            waitFor(written);
             assertEquals(129, h.encodes.get(), "each historical transition must encode only its own record");
             verify(h.backend, times(129)).updateExistingGrave(any(), eq(true));
             verify(h.plugin, never()).activeGraveSnapshot(); verify(h.plugin, never()).brokenGraveSnapshot();
@@ -127,70 +135,56 @@ class IncrementalSqlRecoveryTest {
     @ParameterizedTest @ValueSource(strings = {"update", "display"})
     void failedOlderWriteCannotRetireNewerFullRecoveryCapture(String later) throws Exception {
         try (var h = new Fixture(4)) {
-            var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
-            var writes = new CopyOnWriteArrayList<String>();
-            var calls = new AtomicInteger();
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1); var latest = new CountDownLatch(1);
+            var writes = new CopyOnWriteArrayList<String>(); var calls = new AtomicInteger();
             doAnswer(call -> {
-                var captured = (GravesConfig) call.getArgument(0);
-                writes.add(captured.getItems().get(0).getAmount() + ":" + call.getArgument(1));
-                if (calls.incrementAndGet() == 1) {
-                    entered.countDown(); waitFor(release); throw new IllegalStateException("synthetic SQL failure");
-                }
-                assertNotSame(h.owner, Thread.currentThread()); return null;
+                writes.add("insert:" + SqlJournalHarness.encoded(call.getArgument(0)));
+                if (calls.incrementAndGet() == 1) { entered.countDown(); waitFor(release); throw new IllegalStateException("synthetic SQL failure"); }
+                return null;
             }).when(h.backend).upsertGrave(any(), anyBoolean());
+            doAnswer(call -> { writes.add("update:" + SqlJournalHarness.encoded(call.getArgument(0))); latest.countDown(); return null; })
+                    .when(h.backend).updateExistingGrave(any(), eq(true));
+            doAnswer(call -> { writes.add("display"); latest.countDown(); return null; }).when(h.backend).saveDisplayIdentity(any());
             h.manager.upsertGrave(h.target, false); waitFor(entered);
-            try {
-                h.target.setDestroyed(true); h.target.getItems().get(0).setAmount(7);
-                h.operation(later); h.target.getItems().get(0).setAmount(99);
-            } finally { release.countDown(); }
-            await(h.io.barrier());
-            assertEquals(List.of("2:false", "7:true"), writes);
-            assertEquals(2, h.encodes.get());
+            try { h.target.setDestroyed(true); h.target.getItems().get(0).setAmount(7); h.operation(later); h.target.getItems().get(0).setAmount(99); }
+            finally { release.countDown(); }
+            waitFor(latest);
+            assertEquals(List.of("insert:prepared:2", "insert:prepared:2", later.equals("update") ? "update:prepared:7" : "display"), writes);
+            assertEquals(later.equals("update") ? 2 : 1, h.encodes.get());
             verify(h.plugin, never()).activeGraveSnapshot(); verify(h.plugin, never()).brokenGraveSnapshot();
         }
     }
     @Test void newOwnerTransitionDuringRecoverySurvivesOlderAcknowledgement() throws Exception {
         try (var h = new Fixture(4)) {
-            var retryEntered = new CountDownLatch(1); var release = new CountDownLatch(1);
+            var firstFailed = new CountDownLatch(1); var retryEntered = new CountDownLatch(1); var release = new CountDownLatch(1); var latest = new CountDownLatch(1);
             var calls = new AtomicInteger(); var writes = new CopyOnWriteArrayList<String>();
             doAnswer(call -> {
-                var captured = (GravesConfig) call.getArgument(0);
-                writes.add(captured.getItems().get(0).getAmount() + ":" + call.getArgument(1));
+                writes.add("insert:" + SqlJournalHarness.encoded(call.getArgument(0)));
                 int number = calls.incrementAndGet();
-                if (number == 1) throw new IllegalStateException("synthetic SQL failure");
+                if (number == 1) { firstFailed.countDown(); throw new IllegalStateException("synthetic SQL failure"); }
                 if (number == 2) { retryEntered.countDown(); waitFor(release); }
-                assertNotSame(h.owner, Thread.currentThread()); return null;
+                return null;
             }).when(h.backend).upsertGrave(any(), anyBoolean());
-            h.manager.upsertGrave(h.target, false); waitFor(retryEntered);
-            try {
-                h.target.setDestroyed(true); h.target.getItems().get(0).setAmount(7);
-                h.manager.updateExistingGrave(h.target, true);
-                h.target.getItems().get(0).setAmount(99);
-            } finally { release.countDown(); }
-            await(h.io.barrier());
-            assertEquals(List.of("2:false", "2:false", "7:true"), writes);
-            verify(h.backend, never()).updateExistingGrave(any(), anyBoolean());
+            doAnswer(call -> { writes.add("update:" + SqlJournalHarness.encoded(call.getArgument(0))); latest.countDown(); return null; })
+                    .when(h.backend).updateExistingGrave(any(), eq(true));
+            h.manager.upsertGrave(h.target, false); waitFor(firstFailed); h.journal.journal.wake(); waitFor(retryEntered);
+            try { h.target.setDestroyed(true); h.target.getItems().get(0).setAmount(7); h.manager.updateExistingGrave(h.target, true); h.target.getItems().get(0).setAmount(99); }
+            finally { release.countDown(); }
+            waitFor(latest); assertEquals(List.of("insert:prepared:2", "insert:prepared:2", "update:prepared:7"), writes);
             assertEquals(2, h.encodes.get());
         }
     }
-    @Test void saturatedAdmissionRecoversOnlyPreparedMutationBeforeTerminalClose() throws Exception {
+    @Test void saturatedAdmissionRejectsWithoutConsumingCallerContentsOrCreatingRows() throws Exception {
         try (var h = new Fixture(1)) {
             var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
-            var first = h.io.submit(() -> { entered.countDown(); waitFor(release); return true; });
-            waitFor(entered);
+            var first = h.io.submit(() -> { entered.countDown(); waitFor(release); return true; }); waitFor(entered);
             var queued = h.io.submit(() -> true);
-            var saved = new CopyOnWriteArrayList<Integer>();
-            doAnswer(call -> {
-                assertNotSame(h.owner, Thread.currentThread());
-                saved.add(((GravesConfig) call.getArgument(0)).getItems().get(0).getAmount()); return null;
-            }).when(h.backend).upsertGrave(any(), anyBoolean());
             try {
-                h.manager.upsertGrave(h.target, false); h.target.getItems().get(0).setAmount(99);
-                h.manager.close(); h.manager.close();
+                assertThrows(RejectedExecutionException.class, () -> h.manager.upsertGrave(h.target, false));
+                assertEquals(2, h.target.getItems().get(0).getAmount()); h.manager.close(); h.manager.close();
             } finally { release.countDown(); }
             await(first); await(queued); h.io.close();
-            assertEquals(List.of(2), saved); verify(h.backend, times(1)).close();
-            var order = inOrder(h.backend); order.verify(h.backend).upsertGrave(any(), eq(false)); order.verify(h.backend).close();
+            verify(h.backend, never()).upsertGrave(any(), anyBoolean()); verify(h.backend, times(1)).close(); assertEquals(0, h.journal.records());
             verify(h.plugin, never()).activeGraveSnapshot(); verify(h.plugin, never()).brokenGraveSnapshot();
         }
     }
@@ -199,40 +193,33 @@ class IncrementalSqlRecoveryTest {
             var calls = new AtomicInteger();
             doAnswer(call -> {
                 assertNotSame(h.owner, Thread.currentThread()); calls.incrementAndGet();
-                assertEquals(2, ((GravesConfig) call.getArgument(0)).getItems().get(0).getAmount());
+                assertEquals("prepared:2", SqlJournalHarness.encoded(call.getArgument(0)));
                 throw new AssertionError("synthetic permanent backend failure");
             }).when(h.backend).upsertGrave(any(), anyBoolean());
             h.manager.upsertGrave(h.target, false); await(h.io.barrier());
             h.manager.close(); h.io.close();
             assertTrue(calls.get() >= 2 && calls.get() <= 4, "failed storage must not busy retry");
             verify(h.backend, times(1)).close();
-            var retained = GraveStorageManager.class.getDeclaredField("retained"); retained.setAccessible(true);
-            assertNotNull(retained.get(h.manager), "unflushed recovery must remain visible after terminal close");
+            assertEquals(1, h.journal.records(), "unacknowledged SQL must remain durable after terminal close");
             verify(h.plugin, never()).activeGraveSnapshot(); verify(h.plugin, never()).brokenGraveSnapshot();
         }
     }
     @ParameterizedTest @ValueSource(booleans = {false, true})
     void legacySqlListNoOpCannotReplacePendingBrokenContents(boolean brokenList) throws Exception {
         try (var h = new Fixture(4)) {
-            var stale = GraveStorageManager.snapshot(h.target);
-            var oldGrave = mock(Grave.class); when(oldGrave.getGravesConfig()).thenReturn(stale);
+            var stale = GraveStorageManager.snapshot(h.target); var oldGrave = mock(Grave.class); when(oldGrave.getGravesConfig()).thenReturn(stale);
             h.target.setDestroyed(true); h.target.getItems().get(0).setAmount(7);
-            var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
-            doAnswer(call -> { entered.countDown(); waitFor(release); throw new IllegalStateException("synthetic SQL failure"); })
-                    .when(h.backend).updateExistingGrave(any(), eq(true));
-            var saved = new CopyOnWriteArrayList<String>();
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1); var saved = new CountDownLatch(1); var calls = new AtomicInteger();
             doAnswer(call -> {
-                var captured = (GravesConfig) call.getArgument(0);
-                saved.add(captured.getItems().get(0).getAmount() + ":" + call.getArgument(1)); return null;
-            }).when(h.backend).upsertGrave(any(), anyBoolean());
+                assertEquals("prepared:7", SqlJournalHarness.encoded(call.getArgument(0)));
+                if (calls.incrementAndGet() == 1) { entered.countDown(); waitFor(release); throw new IllegalStateException("synthetic SQL failure"); }
+                saved.countDown(); return null;
+            }).when(h.backend).updateExistingGrave(any(), eq(true));
             h.manager.updateExistingGrave(h.target, true); waitFor(entered);
-            try {
-                if (brokenList) h.manager.saveBrokenGravesFromObjects(List.of(oldGrave));
-                else h.manager.saveGravesFromObjects(List.of(oldGrave));
-            } finally { release.countDown(); }
-            await(h.io.barrier());
-            assertEquals(List.of("7:true"), saved, "legacy SQL no-op must not replace a genuine transition");
-            verify(h.backend, never()).saveGraves(any()); verify(h.backend, never()).saveBrokenGraves(any());
+            try { if (brokenList) h.manager.saveBrokenGravesFromObjects(List.of(oldGrave)); else h.manager.saveGravesFromObjects(List.of(oldGrave)); }
+            finally { release.countDown(); }
+            h.journal.journal.wake(); waitFor(saved);
+            verify(h.backend, never()).upsertGrave(any(), anyBoolean()); verify(h.backend, never()).saveGraves(any()); verify(h.backend, never()).saveBrokenGraves(any());
         }
     }
     @Test void saturatedLegacySqlListsCannotCreateRecoveryRows() throws Exception {

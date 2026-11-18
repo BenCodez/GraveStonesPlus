@@ -17,12 +17,7 @@ public class GraveStorageManager {
 	private GraveStorageBackend backend;
 	private DataStorageType type = DataStorageType.FLATFILE;
     private record Recovery(List<GravesConfig> active, List<GravesConfig> broken) { }
-    private record SqlKey(java.util.UUID player, java.util.UUID world, long time, int x, int y, int z) { }
-    private record PreparedSql(SqlKey key, GravesConfig grave, boolean broken) { }
-    private static final Recovery SQL_RECOVERY = new Recovery(List.of(), List.of());
-    // Only outstanding SQL mutations: one latest owner-prepared value per identity.
-    // Existing, unchanged backend rows do not need to be recopied for recovery.
-    private final java.util.Map<SqlKey, PreparedSql> sqlPending = new java.util.LinkedHashMap<>();
+    private SqlRecoveryJournal sqlJournal;
 
     private Recovery retained;
     private Recovery latestPrepared;
@@ -94,6 +89,11 @@ public class GraveStorageManager {
 		}
 
 		backend.init();
+        if (isMySQL()) {
+            SqlRecoveryJournal journal = new SqlRecoveryJournal(plugin.getFeatureIO(), backend,
+                    new java.io.File(plugin.getDataFolder(), "sql-recovery").toPath(), message -> plugin.getLogger().severe(message));
+            synchronized (this) { sqlJournal = journal; }
+        }
 	}
 
 	/**
@@ -119,8 +119,21 @@ public class GraveStorageManager {
     public java.util.concurrent.CompletableFuture<RestorationRecords> loadMySQLForRestoration() {
         if (!(backend instanceof MySQLGraveStorageBackend sql))
             return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("MySQL backend unavailable"));
-        return plugin.getFeatureIO().submit(() ->
-                List.of(sql.loadDeferred(false), sql.loadDeferred(true))).thenCompose(raw -> {
+        SqlRecoveryJournal journal;
+        synchronized (this) {
+            if (closeRequested || backendClosed) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage is closing"));
+            journal = sqlJournal;
+        }
+        if (journal == null) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("SQL recovery unavailable"));
+        return journal.loaded().thenCompose(loaded -> {
+            if (!Boolean.TRUE.equals(loaded)) return java.util.concurrent.CompletableFuture.<List<List<java.util.function.Supplier<GravesConfig>>>>failedFuture(new IllegalStateException("SQL recovery unavailable"));
+            return plugin.getFeatureIO().submit(() -> {
+                synchronized (this) { if (closeRequested || backendClosed) throw new IllegalStateException("storage is closing"); }
+                journal.wake(); journal.drain();
+                if (!journal.isStorageReconciled()) throw new IllegalStateException("SQL replay remains unresolved");
+                return List.of(sql.loadDeferred(false), sql.loadDeferred(true));
+            });
+        }).thenCompose(raw -> {
             var result = new java.util.concurrent.CompletableFuture<RestorationRecords>();
             class Decode implements Runnable {
                 final List<GravesConfig> active = new ArrayList<>(), broken = new ArrayList<>();
@@ -157,12 +170,8 @@ public class GraveStorageManager {
 	 * @param broken broken flag
 	 */
 	public synchronized void setBroken(GravesConfig grave, boolean broken) {
-		if (backend != null && isMySQL()) {
-			GravesConfig snapshot = snapshot(grave);
-            PreparedSql prepared = rememberSql(snapshot, broken);
-            enqueue(() -> { backend.setBroken(snapshot, broken); acknowledgeSql(prepared, false); });
-		}
-	}
+        if (backend != null && isMySQL()) submitLegacySql(SqlRecoveryJournal.Kind.FLAG, grave, broken);
+    }
 
 	/**
 	 * Save active graves from Grave objects.
@@ -204,12 +213,8 @@ public class GraveStorageManager {
 	 * @param broken broken flag
 	 */
 	public synchronized void upsertGrave(GravesConfig grave, boolean broken) {
-		if (backend != null && isMySQL()) {
-			GravesConfig snapshot = snapshot(grave);
-            PreparedSql prepared = rememberSql(snapshot, broken);
-            enqueue(() -> { backend.upsertGrave(snapshot, broken); acknowledgeSql(prepared, false); });
-		}
-	}
+        if (backend != null && isMySQL()) submitLegacySql(SqlRecoveryJournal.Kind.UPSERT, grave, broken);
+    }
 
 /**
  * Update an existing grave row (no insert). Intended for state transitions such as removal.
@@ -218,12 +223,8 @@ public class GraveStorageManager {
  * @param broken broken flag
  */
 public synchronized void updateExistingGrave(GravesConfig grave, boolean broken) {
-	if (backend != null && isMySQL()) {
-		GravesConfig snapshot = snapshot(grave);
-        PreparedSql prepared = rememberSql(snapshot, broken);
-        enqueue(() -> { backend.updateExistingGrave(snapshot, broken); acknowledgeSql(prepared, false); });
-	}
-}
+        if (backend != null && isMySQL()) submitLegacySql(SqlRecoveryJournal.Kind.UPDATE, grave, broken);
+    }
 
 
 
@@ -254,43 +255,30 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 
     /** Capture on the marker owner, acknowledge metadata on the serial storage worker. */
     public synchronized java.util.concurrent.CompletableFuture<Boolean> saveDisplayIdentity(GravesConfig grave) {
-        if (backend == null || !isMySQL()) return java.util.concurrent.CompletableFuture.failedFuture(
-                new IllegalStateException("MySQL grave backend unavailable"));
-        GravesConfig captured = snapshot(grave);
-        PreparedSql prepared = rememberSql(captured, captured.isDestroyed());
-        return enqueueFuture(() -> { backend.saveDisplayIdentity(captured); acknowledgeSql(prepared, false); return true; });
+        SqlRecoveryJournal.Reservation admitted = reserveSqlTransition(SqlRecoveryJournal.Kind.DISPLAY, grave, false);
+        return admitted == null ? java.util.concurrent.CompletableFuture.failedFuture(
+                new java.util.concurrent.RejectedExecutionException("SQL transition capacity unavailable")) : admitted.commit();
     }
 
     /** Acknowledge this exact existing SQL row without rewriting or serializing its contents. */
     public synchronized java.util.concurrent.CompletableFuture<Boolean> saveRecreatedGrave(GravesConfig grave) {
-        if (backend == null || !isMySQL()) return java.util.concurrent.CompletableFuture.failedFuture(
-                new IllegalStateException("MySQL grave backend unavailable"));
-        GravesConfig captured = snapshot(grave);
-        PreparedSql prepared = rememberSql(captured, false);
-        return enqueueFuture(() -> { backend.saveRecreatedGrave(captured); acknowledgeSql(prepared, false); return true; });
+        SqlRecoveryJournal.Reservation admitted = reserveSqlTransition(SqlRecoveryJournal.Kind.RECREATE, grave, false);
+        return admitted == null ? java.util.concurrent.CompletableFuture.failedFuture(
+                new java.util.concurrent.RejectedExecutionException("SQL transition capacity unavailable")) : admitted.commit();
     }
 
 	public synchronized java.util.concurrent.CompletableFuture<Boolean> saveSnapshotFromObjects(
 			List<Grave> activeGraves, List<Grave> brokenGraves) {
+        if (isMySQL()) return saveSqlSnapshot(activeGraves, brokenGraves);
 		List<GravesConfig> active = snapshotObjects(activeGraves);
 		List<GravesConfig> broken = snapshotObjects(brokenGraves);
 		if (backend == null) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage backend unavailable"));
 		if (restorationLoading) {
-            rememberSql(active, false); rememberSql(broken, true);
             retained = recoverySnapshot(); return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("storage restoration pending"));
         }
 		List<GravesConfig> safeActive = preserving(active, false);
 		List<GravesConfig> safeBroken = preserving(broken, true);
-        if (isMySQL()) {
-            List<PreparedSql> prepared = new ArrayList<>(rememberSql(safeActive, false));
-            prepared.addAll(rememberSql(safeBroken, true));
-            return enqueueFuture(() -> {
-                for (GravesConfig grave : safeActive) backend.upsertGrave(grave, false);
-                for (GravesConfig grave : safeBroken) backend.upsertGrave(grave, true);
-                acknowledgeSql(prepared, false);
-                return true;
-            });
-        }
+
 		return enqueueFuture(() -> { backend.saveSnapshot(safeActive, safeBroken); return true; });
 	}
 
@@ -310,6 +298,9 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		// FeatureIO invokes the drain listener after all admitted work has run,
 		// including its final bounded shutdown drain when the queue is saturated.
 		closeRequested = true;
+        if (isMySQL() && sqlJournal != null) {
+            sqlJournal.close(); plugin.getFeatureIO().requestDrain(this::flushRetained); return;
+        }
 		com.bencodez.gravestonesplus.graves.FeatureIO.Admission wake = plugin.getFeatureIO().admit();
 		if (wake != null) wake.submit(() -> null);
 	}
@@ -322,30 +313,48 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                 grave.getDisplayUUID(), grave.getInteractUUID(), grave.getGraveDisplayType());
         copy.setWorldId(grave.getWorldId()); copy.prepareItemsForStorage(); return copy;
     }
-    /** Caller already captured/encoded this record on its owner; do not inspect other graves. */
-    private PreparedSql rememberSql(GravesConfig grave, boolean broken) {
-        if (!isMySQL() || closeRequested || backendClosed) return null;
-        var location = grave.getLocation();
-        SqlKey key = new SqlKey(grave.getUuid(), grave.getWorldId(), grave.getTime(),
-                location.getBlockX(), location.getBlockY(), location.getBlockZ());
-        PreparedSql prepared = new PreparedSql(key, grave, broken);
-        sqlPending.put(key, prepared);
-        return prepared;
+    /** Reserve before changing gameplay state. Null is a definitive pre-admission rejection. */
+    public synchronized SqlRecoveryJournal.Reservation reserveSqlTransition(SqlRecoveryJournal.Kind kind,
+            GravesConfig grave, boolean broken) {
+        if (!isMySQL() || backend == null || sqlJournal == null || closeRequested || backendClosed || restorationLoading
+                || !sqlJournal.isReady()) return null;
+        GravesConfig captured = kind == SqlRecoveryJournal.Kind.UPSERT || kind == SqlRecoveryJournal.Kind.UPDATE
+                ? snapshot(grave) : metadataSnapshot(grave);
+        return sqlJournal.reserve(kind, captured, broken);
     }
-    private List<PreparedSql> rememberSql(List<GravesConfig> records, boolean broken) {
-        if (!isMySQL() || closeRequested || backendClosed) return List.of();
-        List<PreparedSql> prepared = new ArrayList<>(records.size());
-        for (GravesConfig grave : records) prepared.add(rememberSql(grave, broken));
-        return prepared;
+    private static GravesConfig metadataSnapshot(GravesConfig grave) {
+        GravesConfig copy = new GravesConfig(grave.getUuid(), "", grave.getLocation().clone(), new java.util.HashMap<>(),
+                0, "", grave.getTime(), grave.isDestroyed(), grave.getDestroyedTime(),
+                grave.getDisplayUUID(), grave.getInteractUUID(), grave.getGraveDisplayType());
+        copy.setWorldId(grave.getWorldId()); return copy;
     }
-    private synchronized void acknowledgeSql(PreparedSql prepared, boolean recovery) {
-        // A partial/older write may not have persisted all fields. Once recovery is
-        // required, only a full recovery upsert can retire the latest prepared value.
-        if (prepared != null && (recovery || retained == null && !recovering)
-                && sqlPending.get(prepared.key()) == prepared) sqlPending.remove(prepared.key());
+    private void submitLegacySql(SqlRecoveryJournal.Kind kind, GravesConfig grave, boolean broken) {
+        var admitted = reserveSqlTransition(kind, grave, broken);
+        if (admitted == null) throw new java.util.concurrent.RejectedExecutionException("SQL transition capacity unavailable; caller retains original state");
+        admitted.commit().whenComplete((saved, failure) -> {
+            if (failure != null) plugin.getLogger().severe("SQL transition remains held for storage reconciliation.");
+        });
     }
-    private void acknowledgeSql(List<PreparedSql> prepared, boolean recovery) {
-        for (PreparedSql record : prepared) acknowledgeSql(record, recovery);
+    private java.util.concurrent.CompletableFuture<Boolean> saveSqlSnapshot(List<Grave> active, List<Grave> broken) {
+        List<SqlRecoveryJournal.Reservation> admitted = new ArrayList<>();
+        try {
+            for (boolean historical : List.of(false, true)) {
+                List<Grave> source = historical ? broken : active;
+                if (source == null) continue;
+                for (Grave grave : copy(source)) {
+                    if (grave == null || grave.getGravesConfig() == null) continue;
+                    var ticket = reserveSqlTransition(SqlRecoveryJournal.Kind.UPSERT, grave.getGravesConfig(), historical);
+                    if (ticket == null) throw new java.util.concurrent.RejectedExecutionException("SQL snapshot capacity unavailable");
+                    admitted.add(ticket);
+                }
+            }
+        } catch (RuntimeException | Error rejected) {
+            admitted.forEach(SqlRecoveryJournal.Reservation::close);
+            return java.util.concurrent.CompletableFuture.failedFuture(rejected);
+        }
+        List<java.util.concurrent.CompletableFuture<Boolean>> writes = admitted.stream().map(SqlRecoveryJournal.Reservation::commit).toList();
+        return java.util.concurrent.CompletableFuture.allOf(writes.toArray(java.util.concurrent.CompletableFuture[]::new))
+                .thenApply(unused -> writes.stream().allMatch(write -> Boolean.TRUE.equals(write.join()))).copy();
     }
 
     /** Retain one latest authoritative snapshot when admission fails, rather than
@@ -391,7 +400,6 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		return result;
 	}
     private Recovery recoverySnapshot() {
-        if (isMySQL()) return SQL_RECOVERY;
         List<GravesConfig> active = new ArrayList<>(), broken = new ArrayList<>();
         for (Grave grave : plugin.activeGraveSnapshot()) active.add(snapshot(grave.getGravesConfig()));
         for (Grave grave : plugin.brokenGraveSnapshot()) broken.add(snapshot(grave.getGravesConfig()));
@@ -399,9 +407,27 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
     }
     /** Runs only on the serial disk owner after older admitted work has drained. */
     private void flushRetained() {
+        SqlRecoveryJournal journal;
+        boolean sql;
+        synchronized (this) {
+            if (backendClosed) return;
+            sql = isMySQL(); journal = sqlJournal;
+        }
+        if (sql) {
+            if (journal == null) {
+                closeBackendIfRequested(true); return;
+            }
+            journal.drain();
+            boolean close;
+            synchronized (this) {
+                close = closeRequested && journal.isLoadComplete() && !journal.hasUncommittedReservations()
+                        && !plugin.getFeatureIO().hasUnsubmittedAdmissions() && !plugin.getFeatureIO().hasQueuedWork();
+            }
+            if (close) { journal.retireAfterDrain(); closeBackendIfRequested(true); }
+            return;
+        }
         while (true) {
             Recovery recovery;
-            List<PreparedSql> sqlRecovery = null;
             boolean loading;
             synchronized (this) {
                 if (backendClosed) return;
@@ -410,8 +436,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                 if (!loading || closeRequested) retained = null;
                 recovering = recovery != null;
                 if (recovery != null) {
-                    if (isMySQL()) sqlRecovery = List.copyOf(sqlPending.values());
-                    else recovery = new Recovery(preserving(recovery.active(), false), preserving(recovery.broken(), true));
+                    recovery = new Recovery(preserving(recovery.active(), false), preserving(recovery.broken(), true));
                 }
             }
             if (loading && recovery == null) {
@@ -424,15 +449,8 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
             }
             boolean failed = false;
             try {
-                if (isMySQL()) {
-                    for (PreparedSql prepared : sqlRecovery) {
-                        backend.upsertGrave(prepared.grave(), prepared.broken());
-                        acknowledgeSql(prepared, true);
-                    }
-                } else {
-                    if (loading) backend.saveStartupSnapshot(recovery.active(), recovery.broken());
-                    else backend.saveSnapshot(recovery.active(), recovery.broken());
-                }
+                if (loading) backend.saveStartupSnapshot(recovery.active(), recovery.broken());
+                else backend.saveSnapshot(recovery.active(), recovery.broken());
             } catch (RuntimeException | Error failure) {
                 synchronized (this) { if (retained == null) retained = recovery; }
                 failed = true;
@@ -453,13 +471,13 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         GraveStorageBackend toClose;
         synchronized (this) {
             if (!closeRequested || backendClosed || (!recoveryFailed && retained != null) || recovering
-                    || plugin.getFeatureIO().hasQueuedWork()) return;
+                    || plugin.getFeatureIO().hasQueuedWork() || plugin.getFeatureIO().hasUnsubmittedAdmissions()) return;
             backendClosed = true;
             toClose = backend;
         }
         try {
             if (toClose != null) toClose.close();
-        } catch (RuntimeException failure) {
+        } catch (RuntimeException | Error failure) {
             // The terminal close is intentionally at-most-once. The worker's
             // bounded shutdown must not keep retrying a backend that rejected it.
             plugin.getLogger().severe("Grave backend close failed after storage drain.");

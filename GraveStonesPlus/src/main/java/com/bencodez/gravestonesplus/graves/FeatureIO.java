@@ -77,12 +77,13 @@ public final class FeatureIO implements AutoCloseable {
     }
     /** One storage owner may request bounded service even while ordinary feature work remains queued. */
     public void requestDrain(Runnable service) { urgentDrain.set(java.util.Objects.requireNonNull(service)); requestDrain(); }
+    public boolean hasUnsubmittedAdmissions() { synchronized (lifecycle) { return reservations != 0; } }
     public boolean isOwnerThread() { return Thread.currentThread() == owner; }
     public boolean hasQueuedWork() { return !worker.getQueue().isEmpty(); }
     private void notifyDrain() {
         Runnable urgent = urgentDrain.getAndSet(null);
         if (urgent != null) urgent.run();
-        else if (!hasQueuedWork()) drainListener.run();
+        if (!hasQueuedWork()) drainListener.run();
     }
     public boolean isTerminated() { return worker.isTerminated(); }
     @Override public void close() {

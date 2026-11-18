@@ -38,7 +38,7 @@ public final class SqlRecoveryJournal {
     private long evidenceBytes;
     private long next, bytes, cursor;
     private final Set<String> blockedCycle = new HashSet<>();
-    private boolean healthy, closing, draining, initialized, retryRequested, fatal;
+    private boolean healthy, closing, draining, initialized, retryRequested, fatal, loadComplete;
     private static final class Entry {
         final long sequence;
         final Kind kind;
@@ -70,7 +70,7 @@ public final class SqlRecoveryJournal {
                 });
         notifications.allowCoreThreadTimeOut(true);
         io.submit(() -> { load(); return true; }).whenComplete((value, failure) -> {
-            synchronized (this) { healthy = failure == null; initialized = failure == null; }
+            synchronized (this) { healthy = failure == null; initialized = failure == null; loadComplete = true; }
             wake();
             notifications.execute(() -> {
                 try { loaded.complete(failure == null); }
@@ -80,6 +80,16 @@ public final class SqlRecoveryJournal {
     }
     public CompletableFuture<Boolean> loaded() { return loaded.copy(); }
     public synchronized boolean isReady() { return healthy && !closing; }
+    synchronized boolean isLoadComplete() { return loadComplete; }
+    synchronized boolean isStorageReconciled() { return initialized && healthy && entries.isEmpty(); }
+    synchronized boolean hasUncommittedReservations() {
+        return entries.values().stream().anyMatch(entry -> entry.phase == Phase.RESERVED);
+    }
+    /** Backend teardown is terminal even if durable outage records remain for the next instance. */
+    void retireAfterDrain() {
+        if (!io.isOwnerThread()) throw new IllegalStateException("SQL retirement requires the feature owner");
+        settleFatal("SQL backend retired; remaining durable intents require restart reconciliation.");
+    }
     /** Record must already be detached and encoded on its Bukkit/Folia owner. */
     public synchronized Reservation reserve(Kind kind, GravesConfig record, boolean broken) {
         if (!healthy || closing || outstanding + evidenceEntries >= entryLimit || next == Long.MAX_VALUE) return null;

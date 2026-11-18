@@ -385,22 +385,25 @@ class GraveActionsTest {
             assertEquals(replacement, h.grave.getExpiryDeadline()); assertTrue(h.plugin.isLiveGrave(h.grave));
         }
     }
-    @Test void saturatedMysqlAdmissionRetainsLatestDeathSnapshotForDrainAndShutdown() throws Exception {
+    @Test void saturatedMysqlAdmissionRejectsWithoutConsumingCallerContents() throws Exception {
         try (Harness h = new Harness()) {
             FeatureIO small = new FeatureIO(1); when(h.plugin.getFeatureIO()).thenReturn(small);
-            when(h.plugin.brokenGraveSnapshot()).thenReturn(List.of());
             var backend = mock(com.bencodez.gravestonesplus.storage.GraveStorageBackend.class);
             var manager = new com.bencodez.gravestonesplus.storage.GraveStorageManager(h.plugin);
             java.lang.reflect.Field backendField = manager.getClass().getDeclaredField("backend"); backendField.setAccessible(true); backendField.set(manager, backend);
             java.lang.reflect.Field typeField = manager.getClass().getDeclaredField("type"); typeField.setAccessible(true); typeField.set(manager, com.bencodez.gravestonesplus.storage.DataStorageType.MYSQL);
-            var entered = new java.util.concurrent.CountDownLatch(1); var release = new java.util.concurrent.CountDownLatch(1);
-            var busy = small.submit(() -> { entered.countDown(); try { release.await(3, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException e) { throw new RuntimeException(e); } return true; });
-            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS)); var queued = small.submit(() -> true);
-            manager.upsertGrave(h.grave.getGravesConfig(), false); verify(backend, never()).upsertGrave(any(), anyBoolean());
-            release.countDown(); FeaturePersistenceTest.await(busy); FeaturePersistenceTest.await(queued); small.close();
-            org.mockito.ArgumentCaptor<GravesConfig> written = org.mockito.ArgumentCaptor.forClass(GravesConfig.class);
-            verify(backend).upsertGrave(written.capture(), eq(false)); assertEquals(h.grave.getGravesConfig().getUuid(), written.getValue().getUuid());
-            assertEquals(17, written.getValue().getExp()); assertEquals(Set.of(4), written.getValue().getItems().keySet());
+            try (var journal = new com.bencodez.gravestonesplus.tests.storage.SqlJournalHarness(small,backend,manager)) {
+                var entered = new java.util.concurrent.CountDownLatch(1); var release = new java.util.concurrent.CountDownLatch(1);
+                var busy = small.submit(() -> { entered.countDown(); try { release.await(3, java.util.concurrent.TimeUnit.SECONDS); } catch (InterruptedException e) { throw new RuntimeException(e); } return true; });
+                assertTrue(entered.await(2,java.util.concurrent.TimeUnit.SECONDS)); var queued = small.submit(() -> true);
+                try {
+                    assertThrows(java.util.concurrent.RejectedExecutionException.class, () -> manager.upsertGrave(h.grave.getGravesConfig(),false));
+                    assertEquals(17,h.grave.getGravesConfig().getExp()); assertEquals(Set.of(4),h.grave.getGravesConfig().getItems().keySet());
+                    verify(backend,never()).upsertGrave(any(),anyBoolean());
+                } finally { release.countDown(); }
+                FeaturePersistenceTest.await(busy); FeaturePersistenceTest.await(queued);
+                assertEquals(0,journal.records()); verify(backend,never()).upsertGrave(any(),anyBoolean());
+            }
         }
     }
 

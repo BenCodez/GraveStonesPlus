@@ -119,15 +119,17 @@ class MySQLRestorationOwnershipTest {
             else h.storage.upsertGrave(config, false);
             h.io.barrier().get(3, TimeUnit.SECONDS);
 
-            var retained = GraveStorageManager.class.getDeclaredField("retained"); retained.setAccessible(true);
-            synchronized (h.storage) { assertNotNull(retained.get(h.storage), "failed SQL must retain the captured grave"); }
+            assertEquals(1, h.journal.records(), "failed SQL must retain its durable command");
             verify(h.statement, atLeastOnce()).close(); verify(h.connection, atLeastOnce()).close();
-            doReturn(1).when(h.statement).executeUpdate();
-            h.io.barrier().get(3, TimeUnit.SECONDS);
-            synchronized (h.storage) { assertNull(retained.get(h.storage), "confirmed same-identity recovery can retire the snapshot"); }
+            var confirmed = new CountDownLatch(1);
+            doAnswer(call -> { confirmed.countDown(); return 1; }).when(h.statement).executeUpdate();
+            h.journal.journal.wake(); assertTrue(confirmed.await(3, TimeUnit.SECONDS));
             verify(h.statement, atLeast(2)).executeUpdate();
             var replay = org.mockito.ArgumentCaptor.forClass(GravesConfig.class);
-            verify(h.table, atLeastOnce()).upsertGraveChecked(replay.capture(), eq(update));
+            if (update) {
+                verify(h.table, atLeast(2)).updateExistingGraveChecked(replay.capture(), eq(true));
+                verify(h.table, never()).upsertGraveChecked(any(), anyBoolean());
+            } else verify(h.table, atLeast(2)).upsertGraveChecked(replay.capture(), eq(false));
             for (var captured : replay.getAllValues()) {
                 assertEquals(config.getUuid(), captured.getUuid()); assertEquals(42L, captured.getTime());
                 assertEquals(update, captured.isDestroyed(), "recovery must not revive a broken transition");
@@ -203,9 +205,11 @@ class MySQLRestorationOwnershipTest {
         final ResultSet rows = mock(ResultSet.class);
         final MySQLGraveStorageBackend backend = mock(MySQLGraveStorageBackend.class);
         final GraveStorageManager storage;
+        final com.bencodez.gravestonesplus.tests.storage.SqlJournalHarness journal;
         final UUID player = UUID.randomUUID(), world = UUID.randomUUID();
         Fixture() throws Exception {
             when(plugin.getFeatureIO()).thenReturn(io); when(plugin.getBukkitScheduler()).thenReturn(scheduler);
+            when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
             when(plugin.isEnabled()).thenReturn(true);
             doAnswer(call -> { ownerTasks.add(call.getArgument(1)); return null; })
                     .when(scheduler).runTask(eq(plugin), any(Runnable.class));
@@ -224,6 +228,7 @@ class MySQLRestorationOwnershipTest {
             doCallRealMethod().when(backend).loadDeferred(anyBoolean());
             storage = new GraveStorageManager(plugin);
             field(storage, GraveStorageManager.class, "backend", backend);
+            journal = new com.bencodez.gravestonesplus.tests.storage.SqlJournalHarness(io, backend, storage);
             when(rows.next()).thenReturn(true, false, false);
             when(rows.getString("player_uuid")).thenReturn(player.toString());
             when(rows.getString("world_uuid")).thenReturn(world.toString());
@@ -231,7 +236,7 @@ class MySQLRestorationOwnershipTest {
             when(rows.getInt("x")).thenReturn(11); when(rows.getInt("y")).thenReturn(64);
             when(rows.getInt("z")).thenReturn(-9); when(rows.getLong("time")).thenReturn(42L);
         }
-        public void close() { io.close(); }
+        public void close() throws Exception { journal.close(); }
     }
     private static GravesConfig recreated(Fixture h) {
         GravesConfig grave = mock(GravesConfig.class);
@@ -300,7 +305,8 @@ class MySQLRestorationOwnershipTest {
         for (int rows : List.of(0, 2)) try (var h = new Fixture()) {
             recreation(h); when(h.statement.executeUpdate()).thenReturn(rows);
             when(h.rows.next()).thenReturn(false);
-            assertThrows(ExecutionException.class, () -> h.storage.saveRecreatedGrave(recreated(h)).get(3, TimeUnit.SECONDS));
+            if (rows == 0) assertFalse(h.storage.saveRecreatedGrave(recreated(h)).get(3, TimeUnit.SECONDS));
+            else assertThrows(ExecutionException.class, () -> h.storage.saveRecreatedGrave(recreated(h)).get(3, TimeUnit.SECONDS));
             verify(h.statement, times(rows == 0 ? 2 : 1)).close(); verify(h.connection).close();
         }
     }

@@ -73,7 +73,7 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
-                <version>3.5.0</version>
+                <version>3.5.1</version>
                 <configuration>
                     <archive>
                         <manifestEntries>
@@ -286,7 +286,7 @@
         <dependency>
             <groupId>me.chancesd.pvpmanager</groupId>
             <artifactId>pvpmanager</artifactId>
-            <version>4.0.9</version>
+            <version>4.0.30</version>
             <scope>provided</scope>
         </dependency>
         <dependency>
@@ -397,7 +397,7 @@
                     <plugin>
                         <groupId>org.apache.maven.plugins</groupId>
                         <artifactId>maven-jar-plugin</artifactId>
-                        <version>3.5.0</version>
+                        <version>3.5.1</version>
                         <configuration>
                             <archive>
                                 <manifestEntries>

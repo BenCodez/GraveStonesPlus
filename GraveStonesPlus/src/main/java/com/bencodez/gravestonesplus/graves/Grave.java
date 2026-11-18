@@ -1322,16 +1322,20 @@ public class Grave {
         } catch (RuntimeException rejected) { releaseClaim(); return; }
         var sqlReleased = new java.util.concurrent.atomic.AtomicBoolean();
         Runnable closeSql = () -> { if (sql != null && sqlReleased.compareAndSet(false, true)) sql.close(); };
+        final GraveClaimLedger.PaidPublication terminalPaid = sql == null ? null
+                : plugin.getGraveClaimLedger().admitPaid(identity, gravesConfig.getUuid());
+        if (sql != null && terminalPaid == null) { closeSql.run(); releaseClaim(); return; }
+        Runnable closePaid = () -> { if (terminalPaid != null) terminalPaid.close(); };
         final GraveClaimLedger.LimitDelivery delivery;
         try { delivery = plugin.getGraveClaimLedger().admitLimitDelivery(identity, gravesConfig.getUuid()); }
-        catch (RuntimeException rejected) { closeSql.run(); releaseClaim(); return; }
-        if (delivery == null) { closeSql.run(); releaseClaim(); return; }
+        catch (RuntimeException rejected) { closeSql.run(); closePaid.run(); releaseClaim(); return; }
+        if (delivery == null) { closeSql.run(); closePaid.run(); releaseClaim(); return; }
         var lifecycle = new java.util.concurrent.CompletableFuture<Boolean>();
         lifecycle.whenComplete((value, failure) -> {
             if (Boolean.TRUE.equals(value)) closeSql.run();
             else {
                 var deferred = delivery.deferBeforeDelivery();
-                if (deferred != null) { closeSql.run(); deferred.whenComplete((saved, error) -> releaseClaim()); }
+                if (deferred != null) { closeSql.run(); closePaid.run(); deferred.whenComplete((saved, error) -> releaseClaim()); }
                 // Otherwise the delivery actor owns the ticket until commit/terminal failure.
             }
         });
@@ -1345,7 +1349,7 @@ public class Grave {
             try {
                 plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(captured.getLocation(), task -> {
                     if (!started.compareAndSet(false, true)) return;
-                    boolean payoutStarted = false;
+                    boolean payoutStarted = false, receiptStarted = false;
                     try {
                     if (lifecycle.isDone()) return;
                     Location loc = captured.getLocation();
@@ -1360,7 +1364,7 @@ public class Grave {
                     if (event.isCancelled()) {
                         limitPayoutPending = false;
                         var cancelled = delivery.cancelBeforeDelivery();
-                        if (cancelled != null) cancelled.whenComplete((value, error) -> releaseClaim());
+                        if (cancelled != null) { closePaid.run(); cancelled.whenComplete((value, error) -> releaseClaim()); }
                         return;
                     }
                     // Listeners may run until the deadline or change the time limit.
@@ -1368,7 +1372,7 @@ public class Grave {
                     if (!plugin.isLiveGrave(this)) {
                         limitPayoutPending = false;
                         var cancelled = delivery.cancelBeforeDelivery();
-                        if (cancelled != null) cancelled.whenComplete((value, error) -> releaseClaim());
+                        if (cancelled != null) { closePaid.run(); cancelled.whenComplete((value, error) -> releaseClaim()); }
                         return;
                     }
                     if (!plugin.isEnabled() || !loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) {
@@ -1386,8 +1390,10 @@ public class Grave {
                         else stored = plugin.removeGrave(this, sql);
                         var paid = sql == null ? plugin.getGraveClaimLedger().paid(identity, gravesConfig.getUuid())
                                 : sql.durable().thenCompose(disposition -> disposition == com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE
-                                    ? plugin.getGraveClaimLedger().paid(identity, gravesConfig.getUuid())
+                                    ? terminalPaid.commit()
                                     : java.util.concurrent.CompletableFuture.completedFuture(false));
+                        paid.whenComplete((value, error) -> closePaid.run());
+                        receiptStarted = true;
                         plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
                         plugin.getGraveNavigation().invalidate(identity); removeTimer(); cleanupMarker();
                         Player recipient = limitRecipient.get(); limitRecipient.clear();
@@ -1403,7 +1409,7 @@ public class Grave {
                             });
                     } catch (RuntimeException interrupted) {
                         plugin.getLogger().severe("Grave ground payout interrupted after reservation; replay is blocked and exact contents/XP remain in recovery evidence.");
-                    } finally { if (payoutStarted) { closeSql.run(); releaseClaim(); } }
+                    } finally { if (payoutStarted) { closeSql.run(); if (!receiptStarted) closePaid.run(); releaseClaim(); } }
                     } catch (RuntimeException prePayoutFailure) {
                         // Payout exceptions are consumed by the inner non-replayable path.
                         // Only this pre-payout branch may return the ledger to QUEUED_LIMIT.
@@ -1546,6 +1552,7 @@ public class Grave {
         final java.util.concurrent.CompletableFuture<ClaimResult> completion = new java.util.concurrent.CompletableFuture<>();
         boolean ownsClaim;
         private com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sqlRemoval;
+        private GraveClaimLedger.PaidPublication terminalPaid;
         long destroyedAt;
         java.util.UUID recipientId;
         String successMessage = "", displacedMessage = "";
@@ -1555,10 +1562,17 @@ public class Grave {
             deliveryOwned = true; return true;
         }
         void retire() {
-            synchronized (this) { retired = true; if (!deliveryOwned) releaseSql(); }
+            synchronized (this) { retired = true; if (!deliveryOwned) releaseAdmissions(); }
             finish(ClaimResult.HELD);
         }
-        synchronized void releaseUnownedSql() { if (!deliveryOwned) releaseSql(); }
+        synchronized void releaseUnownedSql() { if (!deliveryOwned) releaseAdmissions(); }
+        synchronized boolean retainPaid(GraveClaimLedger.PaidPublication paid) {
+            if (retired || completion.isDone()) { paid.close(); return false; }
+            terminalPaid = paid; return true;
+        }
+        synchronized void releasePaid() { if (terminalPaid != null) terminalPaid.close(); }
+        synchronized void releaseAdmissions() { releaseSql(); releasePaid(); }
+        synchronized GraveClaimLedger.PaidPublication paidPublication() { return terminalPaid; }
         synchronized boolean retainSql(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation ticket) {
             if (retired || completion.isDone()) { ticket.close(); return false; }
             sqlRemoval = ticket; return true;
@@ -1673,6 +1687,9 @@ public class Grave {
                 var ticket = storage.reserveSqlTransition(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.UPDATE, removed, true);
                 if (ticket == null) { finishUnreserved(attempt, ClaimResult.FAILED); return; }
                 if (!attempt.retainSql(ticket)) { finishUnreserved(attempt, ClaimResult.HELD); return; }
+                var paid = plugin.getGraveClaimLedger().admitPaid(identity, recipient);
+                if (paid == null) { finishUnreserved(attempt, ClaimResult.FAILED); return; }
+                if (!attempt.retainPaid(paid)) { finishUnreserved(attempt, ClaimResult.HELD); return; }
             } catch (RuntimeException rejected) { finishUnreserved(attempt, ClaimResult.FAILED); return; }
         }
         Runnable reserve = () -> claimCallback(attempt, identity, () -> {
@@ -1762,7 +1779,7 @@ public class Grave {
         return plugin.getGraveClaimLedger().isBlocked(identity) ? ClaimResult.HELD : ClaimResult.FAILED;
     }
     private void finishUnreserved(ClaimAttempt attempt, ClaimResult result) {
-        attempt.releaseSql();
+        attempt.releaseAdmissions();
         try {
             synchronized (this) {
                 if (attempt.ownsClaim) { attempt.ownsClaim = false; releaseClaim(); }
@@ -1775,10 +1792,12 @@ public class Grave {
         catch (RuntimeException rejected) { finishUnreserved(attempt, ClaimResult.HELD); }
     }
     private void finishOverflowClaim(Player player, String identity, boolean displaced, Throwable deliveryFailure, ClaimAttempt attempt) {
-        if (deliveryFailure == null && attempt.sqlRemoval() != null) {
-            // All native/overflow effects are acknowledged. The prepared SQL and
-            // owner receipt need no further player admission or Bukkit reads.
-            claimCallback(attempt, identity, () -> completeClaim(player, identity, displaced, attempt));
+        if (attempt.sqlRemoval() != null) {
+            // The prepared terminal path needs no player admission or Bukkit reads.
+            claimCallback(attempt, identity, () -> {
+                if (deliveryFailure == null) completeClaim(player, identity, displaced, attempt);
+                else finishUnreserved(attempt, ClaimResult.HELD);
+            });
             return;
         }
         var started = new java.util.concurrent.atomic.AtomicBoolean();
@@ -1801,6 +1820,7 @@ public class Grave {
         } catch (RuntimeException rejected) { retired.run(); }
     }
     private void completeClaim(Player player, String identity, boolean displaced, ClaimAttempt attempt) {
+        boolean receiptStarted = false;
         try {
             java.util.UUID recipientId = attempt.recipientId;
             synchronized (this) {
@@ -1815,8 +1835,10 @@ public class Grave {
             // publication is HELD, RESERVED keeps the exact evidence for reconciliation.
             var paid = sql == null ? plugin.getGraveClaimLedger().paid(identity, recipientId)
                     : sql.durable().thenCompose(disposition -> disposition == com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE
-                        ? plugin.getGraveClaimLedger().paid(identity, recipientId)
+                        ? attempt.paidPublication().commit()
                         : java.util.concurrent.CompletableFuture.completedFuture(false));
+            paid.whenComplete((value, failure) -> attempt.releasePaid());
+            receiptStarted = true;
             final String successMessage = attempt.successMessage;
             final String displacedMessage = displaced ? attempt.displacedMessage : "";
             plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
@@ -1838,6 +1860,7 @@ public class Grave {
             });
         } finally {
             attempt.releaseSql();
+            if (!receiptStarted) attempt.releasePaid();
             synchronized (this) { if (attempt.ownsClaim) { attempt.ownsClaim = false; releaseClaim(); } }
         }
     }

@@ -179,8 +179,38 @@ public final class GraveClaimLedger {
             if (saved) synchronized (this) { pending.remove(grave); } return saved;
         });
     }
+    /** Reserve the terminal receipt before delivery; this admission remains usable during shutdown. */
+    public PaidPublication admitPaid(String grave, UUID recipient) {
+        if (grave == null || recipient == null || !isReady()) return null;
+        FeatureIO.Admission admission = state.admit();
+        if (admission == null) return null;
+        try { return new PaidPublication(grave, recipient, admission); }
+        catch (RuntimeException | Error failure) { admission.close(); throw failure; }
+    }
+    public final class PaidPublication implements AutoCloseable {
+        private final String grave;
+        private final UUID recipient;
+        private FeatureIO.Admission admission;
+        private CompletableFuture<Boolean> result;
+        private PaidPublication(String grave, UUID recipient, FeatureIO.Admission admission) {
+            this.grave = grave; this.recipient = recipient; this.admission = admission;
+        }
+        public synchronized CompletableFuture<Boolean> commit() {
+            if (result != null) return result.copy();
+            if (admission == null) return CompletableFuture.completedFuture(false);
+            FeatureIO.Admission ticket = admission; admission = null;
+            try { result = paid(grave, recipient, ticket); }
+            catch (RuntimeException | Error failure) { ticket.close(); result = CompletableFuture.failedFuture(failure); }
+            return result.copy();
+        }
+        @Override public synchronized void close() { if (admission != null) { admission.close(); admission = null; } }
+    }
     public CompletableFuture<Boolean> paid(String grave, UUID recipient) {
-        return state.update(next -> {
+        FeatureIO.Admission admission = state.admit();
+        return admission == null ? CompletableFuture.completedFuture(false) : paid(grave, recipient, admission);
+    }
+    private CompletableFuture<Boolean> paid(String grave, UUID recipient, FeatureIO.Admission admission) {
+        return state.update(admission, next -> {
             String existing = next.get(grave);
             if (existing == null || !(existing.equals("RESERVED:" + recipient)
                     || existing.startsWith("RESERVED:" + recipient + ":") || existing.equals("PAID:" + recipient))) return false;

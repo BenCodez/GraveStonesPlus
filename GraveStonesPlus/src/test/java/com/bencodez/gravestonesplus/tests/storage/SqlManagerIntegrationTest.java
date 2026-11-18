@@ -432,7 +432,7 @@ class SqlManagerIntegrationTest {
             if(consumed)assertEquals(SqlRecoveryJournal.Disposition.DURABLE,await(admission.durable()));
         }
     }
-    @Test void synchronousJournalDispatchFailureReleasesConsumedWorkerTicketAndRetainsIntent()throws Exception {
+    @Test void synchronousJournalDispatchFailureReleasesTicketAndHoldsRamIntentForReconciliation()throws Exception {
         try(var h=new Fixture(8,null)) {
             var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
             var busy=h.io.submit(()->{entered.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}return true;});
@@ -446,7 +446,10 @@ class SqlManagerIntegrationTest {
                 assertFalse(admission.finish());assertTrue(h.manager.isRecreationPending(GraveIdentity.of(record)));
                 assertEquals(SqlRecoveryJournal.Disposition.HELD,await(admission.durable()));
             }finally{field(h.journal.journal,"io",h.io);release.countDown();await(busy);}
-            h.journal.journal.wake();await(h.io.barrier());verify(h.backend,times(1)).saveRecreatedGrave(any());
+            h.journal.journal.wake();await(h.io.barrier());verify(h.backend,never()).saveRecreatedGrave(any());
+            assertFalse(h.journal.journal.isReady());assertEquals(0,h.journal.records());
+            var entries=h.journal.journal.getClass().getDeclaredField("entries");entries.setAccessible(true);
+            assertEquals(1,((Map<?,?>)entries.get(h.journal.journal)).size(),"RAM-only intent is held, not advertised as restart-durable");
         }
     }
 
@@ -478,6 +481,55 @@ class SqlManagerIntegrationTest {
                 // Close that actual issued ticket explicitly for bounded red-test teardown.
                 issued.close();
             }
+        }
+    }
+
+    @Test void cancellationFatalWaitsForInFlightSqlBeforeSettlingItsSuccessor()throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            doAnswer(call->{entered.countDown();assertTrue(release.await(5,TimeUnit.SECONDS));return null;}).when(h.backend).saveRecreatedGrave(any());
+            var first=h.manager.reserveRecreation(record(1),false);assertNotNull(first);var firstResult=first.commit();
+            assertTrue(entered.await(3,TimeUnit.SECONDS));
+            var cancel=h.manager.reserveRecreation(record(2),true);assertNotNull(cancel);
+            var following=h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.FLAG,record(3),true);assertNotNull(following);var followingResult=following.commit();
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(h.io));
+            doThrow(new IllegalStateException("synthetic concurrent cancellation dispatch failure")).when(proxy).requestDrain(any(Runnable.class));
+            field(h.journal.journal,"io",proxy);
+            try {
+                cancel.close();assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(cancel.durable()));
+                assertFalse(firstResult.isDone(),"fatal settlement must wait for the active SQL owner");
+            }finally{field(h.journal.journal,"io",h.io);release.countDown();}
+            assertTrue(await(firstResult));assertThrows(ExecutionException.class,()->await(followingResult));
+            assertEquals(SqlRecoveryJournal.Disposition.HELD,await(following.durable()));
+            verify(h.backend,times(1)).saveRecreatedGrave(any());verify(h.backend,never()).setBroken(any(),anyBoolean());
+            assertFalse(h.io.hasUnsubmittedAdmissions());assertTrue(first.finish());
+        }
+    }
+    @Test void bulkTicketWakeFaultDoesNotSkipFatalSettlementOfLaterEntries()throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(h.io));
+            doAnswer(call->{
+                var issued=h.io.admit();if(issued==null)return null;
+                var ticket=mock(FeatureIO.Admission.class,org.mockito.AdditionalAnswers.delegatesTo(issued));
+                doAnswer(unused->{issued.close();throw new IllegalStateException("synthetic bulk close wake failure");}).when(ticket).close();
+                return ticket;
+            }).when(proxy).admit();
+            field(h.journal.journal,"io",proxy);
+            var bulk=h.journal.journal.reserveBulk(List.of(new SqlRecoveryJournal.BulkRow(GraveStorageManager.snapshot(record(1)),false)).iterator());assertNotNull(bulk);
+            field(h.journal.journal,"io",h.io);
+            var cancel=h.manager.reserveRecreation(record(2),true);assertNotNull(cancel);
+            var later=h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.FLAG,record(3),true);assertNotNull(later);
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var busy=h.io.submit(()->{entered.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}return true;});assertTrue(entered.await(3,TimeUnit.SECONDS));
+            var bulkResult=bulk.commit();var laterResult=later.commit();
+            doThrow(new IllegalStateException("synthetic cancellation dispatch failure")).when(proxy).requestDrain(any(Runnable.class));field(h.journal.journal,"io",proxy);
+            try {
+                assertDoesNotThrow(cancel::close);
+                assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(cancel.durable()));
+                assertThrows(ExecutionException.class,()->await(bulkResult));assertThrows(ExecutionException.class,()->await(laterResult));
+                assertEquals(SqlRecoveryJournal.Disposition.HELD,await(bulk.durable()));assertEquals(SqlRecoveryJournal.Disposition.HELD,await(later.durable()));
+            }finally{field(h.journal.journal,"io",h.io);release.countDown();await(busy);}
+            assertFalse(h.io.hasUnsubmittedAdmissions());verify(h.backend,never()).upsertGrave(any(),anyBoolean());verify(h.backend,never()).setBroken(any(),anyBoolean());
         }
     }
 

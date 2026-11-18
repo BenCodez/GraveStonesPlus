@@ -41,6 +41,8 @@ public final class SqlRecoveryJournal {
     private long next, bytes, cursor;
     private final Set<String> blockedCycle = new HashSet<>();
     private boolean healthy, closing, draining, initialized, retryRequested, fatal, loadComplete, bulkContinuing;
+    private boolean fatalSettled;
+    private String fatalMessage;
     private static final class Entry {
         final long sequence;
         final Kind kind;
@@ -236,7 +238,8 @@ public final class SqlRecoveryJournal {
                 });
             } catch (RuntimeException | Error failure) {
                 try { ticket.close(); }
-                finally { fail(entry, "SQL recovery dispatch failed after accepting a transition.", entry.phase != Phase.DURABLE); }
+                catch (RuntimeException | Error releaseFailure) { report("SQL dispatch admission wake failed after release."); }
+                finally { settleFatal("SQL recovery dispatch failed after accepting a transition."); }
             }
             return entry.completion.copy();
         }
@@ -303,7 +306,9 @@ public final class SqlRecoveryJournal {
                 }
             }
             // Persist the entire bounded order-safe prefix before JDBC or user notifications.
-            for (Entry entry : publication) if (entry.phase != Phase.DURABLE) {
+            for (Entry entry : publication) {
+                if (settleRequestedFatal()) return;
+                if (entry.phase == Phase.DURABLE) continue;
                 try {
                     publish(entry);
                     synchronized (this) { entry.phase = Phase.DURABLE; }
@@ -312,8 +317,10 @@ public final class SqlRecoveryJournal {
                     return;
                 }
             }
+            if (settleRequestedFatal()) return;
             for (Entry entry : publication) notifyDurable(entry);
             for (Entry entry : prefix) {
+                if (settleRequestedFatal()) return;
                 if (blockedCycle.contains(entry.identity)) {
                     fail(entry, "Durable SQL predecessor remains unresolved; successor retained without acknowledgment.", false);
                     continue;
@@ -324,7 +331,10 @@ public final class SqlRecoveryJournal {
                     if (prior) { holdBulkAndSuccessors(entry, "Bulk SQL predecessor remains held; snapshot retained."); pauseBulk(); return; }
                     try {
                         int end = Math.min(entry.rows.size(), entry.nextRow + 16);
-                        while (entry.nextRow < end) { apply(entry.rows.get(entry.nextRow)); entry.nextRow++; }
+                        while (entry.nextRow < end) {
+                            if (settleRequestedFatal()) return;
+                            apply(entry.rows.get(entry.nextRow)); entry.nextRow++;
+                        }
                         if (entry.nextRow < entry.rows.size()) {
                             synchronized (this) { cursor = entry.sequence - 1; bulkContinuing = true; }
                             continueDrain(); return;
@@ -363,7 +373,16 @@ public final class SqlRecoveryJournal {
             }
             synchronized (this) { more |= retryRequested; }
             if (more) continueDrain();
-        } finally { synchronized (this) { draining = false; } }
+        } finally {
+            synchronized (this) { draining = false; }
+            settleRequestedFatal();
+        }
+    }
+    /** Only the drain owner settles an externally requested fault while a pass is active. */
+    private boolean settleRequestedFatal() {
+        String message;
+        synchronized (this) { if (!fatal) return false; message = fatalMessage; }
+        settleFatal(message); return true;
     }
     private void holdBulkAndSuccessors(Entry bulk, String message) {
         releaseBulkTicket(bulk);
@@ -374,7 +393,8 @@ public final class SqlRecoveryJournal {
     private void releaseBulkTicket(Entry entry) {
         FeatureIO.Admission ticket;
         synchronized (this) { ticket = entry.bulkTicket; entry.bulkTicket = null; }
-        if (ticket != null) ticket.close();
+        if (ticket != null) try { ticket.close(); }
+        catch (RuntimeException | Error failure) { report("SQL bulk admission wake failed after release; remaining observers still settle."); }
     }
     private void pauseBulk() {
         boolean retry;
@@ -385,7 +405,11 @@ public final class SqlRecoveryJournal {
     private void settleFatal(String message) {
         List<Entry> affected;
         synchronized (this) {
-            healthy = false; fatal = true; cursor = 0; bulkContinuing = false; retryRequested = false; blockedCycle.clear();
+            healthy = false; fatal = true;
+            if (fatalMessage == null) fatalMessage = message;
+            if (fatalSettled || draining && !io.isOwnerThread()) return;
+            fatalSettled = true;
+            cursor = 0; bulkContinuing = false; retryRequested = false; blockedCycle.clear();
             affected = entries.values().stream().filter(entry -> entry.phase != Phase.RESERVED).toList();
         }
         for (Entry entry : affected) {

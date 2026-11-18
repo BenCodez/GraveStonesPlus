@@ -19,6 +19,8 @@ public class GraveStorageManager {
     private record Recovery(List<GravesConfig> active, List<GravesConfig> broken) { }
     private SqlRecoveryJournal sqlJournal;
     private final java.util.Map<String, RecreationAdmission> recreations = new java.util.HashMap<>();
+    private int markerBindings;
+    public synchronized boolean hasPendingRecreationMarkers() { return markerBindings != 0; }
     /** Pending native recreation must not be overwritten by an old bulk or removal snapshot. */
     public synchronized boolean isRecreationPending(String identity) { return recreations.containsKey(identity); }
     public synchronized RecreationAdmission reserveRecreation(GravesConfig grave, boolean marker) {
@@ -34,9 +36,16 @@ public class GraveStorageManager {
                 : sqlJournal.reserve(SqlRecoveryJournal.Kind.RECREATE, captured, false);
         if (slot == null) return null;
         try {
-            var admitted = new RecreationAdmission(identity, slot, marker);
+            var admitted = new RecreationAdmission(identity, slot, marker, captured);
             recreations.put(identity, admitted); return admitted;
         } catch (RuntimeException | Error failure) { slot.close(); throw failure; }
+    }
+    /** Immutable exact-position native ownership, bounded by the existing 128-entry admission map. */
+    public record RecreationMarkerBinding(java.util.UUID world, int x, int y, int z,
+            java.util.UUID token, org.bukkit.Material material) { }
+    public synchronized RecreationMarkerBinding pendingRecreationMarker(String identity) {
+        var attempt = recreations.get(identity);
+        return attempt == null || attempt.released ? null : attempt.markerBinding;
     }
     /** Holds the identity fence through SQL completion and the later location-owner publication. */
     public final class RecreationAdmission implements AutoCloseable {
@@ -44,9 +53,23 @@ public class GraveStorageManager {
         private final SqlRecoveryJournal.Reservation slot;
         private final boolean marker;
         private boolean committed, released, cancelledBeforeCommit;
+        private final java.util.UUID world;
+        private final int x, y, z;
+        private RecreationMarkerBinding markerBinding;
         private java.util.concurrent.CompletableFuture<Boolean> sql;
-        private RecreationAdmission(String identity, SqlRecoveryJournal.Reservation slot, boolean marker) {
+        private RecreationAdmission(String identity, SqlRecoveryJournal.Reservation slot, boolean marker, GravesConfig captured) {
             this.identity = identity; this.slot = slot; this.marker = marker;
+            world = captured.getWorldId(); x = captured.getLocation().getBlockX();
+            y = captured.getLocation().getBlockY(); z = captured.getLocation().getBlockZ();
+        }
+        /** Bind once before native effects; neither cancellation nor retirement transfers this token. */
+        public boolean bindMarker(java.util.UUID token, org.bukkit.Material material) {
+            synchronized (GraveStorageManager.this) {
+                if (!marker || released || committed || markerBinding != null || token == null || material == null
+                        || !java.util.Set.of(org.bukkit.Material.CHEST, org.bukkit.Material.PLAYER_HEAD,
+                                org.bukkit.Material.BARRIER).contains(material)) return false;
+                markerBinding = new RecreationMarkerBinding(world, x, y, z, token, material); markerBindings++; return true;
+            }
         }
         public boolean prepare(GravesConfig finalMetadata) {
             synchronized (GraveStorageManager.this) {
@@ -76,7 +99,9 @@ public class GraveStorageManager {
         public boolean finish() {
             synchronized (GraveStorageManager.this) {
                 if (released || !committed || !sql.isDone() || sql.isCompletedExceptionally()) return false;
-                released = true; recreations.remove(identity, this); return true;
+                released = true; recreations.remove(identity, this);
+                if (markerBinding != null) markerBindings--;
+                return true;
             }
         }
         public boolean isCancelledBeforeCommit() {
@@ -96,6 +121,7 @@ public class GraveStorageManager {
             synchronized (GraveStorageManager.this) {
                 if (released || committed) return;
                 released = true; recreations.remove(identity, this);
+                if (markerBinding != null) markerBindings--;
             }
             slot.close();
         }

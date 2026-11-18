@@ -403,7 +403,9 @@ class RecoveryCompletionTest {
             assertFalse(FeaturePersistenceTest.await(h.plugin.recreateBrokenGrave(h.grave, h.helper)));
             h.grave.createBrokenGrave(); h.drain();
             assertTrue(h.active.isEmpty()); assertTrue(h.grave.getGravesConfig().isDestroyed());
-            assertTrue(h.regionWork.isEmpty()); verifyNoInteractions(storage);
+            assertTrue(h.regionWork.isEmpty());
+            // Backend selection is read-only; archived history still denies every admission and mutation.
+            verify(storage, atLeastOnce()).isMySQL(); verifyNoMoreInteractions(storage);
             verify(h.world, never()).getBlockAt(anyInt(), anyInt(), anyInt());
             verify(h.world, never()).getChunkAt(anyInt(), anyInt());
         }

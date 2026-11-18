@@ -253,6 +253,7 @@ public class GraveBlockProtectionListener implements Listener {
 			return false;
 		}
 
+        if (com.bencodez.gravestonesplus.graves.PendingRecreationMarker.protects(plugin, block)) return true;
         var restoration = plugin.getGraveRestoration();
         if (restoration != null && restoration.protectsPendingMarker(block)) return true;
 
@@ -312,6 +313,9 @@ public class GraveBlockProtectionListener implements Listener {
 			return;
 		}
 
+        // A provisional recreation has no published tile/claim state to reconstruct.
+        // Never let the generic identity-only repair act on its attempt token.
+        if (com.bencodez.gravestonesplus.graves.PendingRecreationMarker.protects(plugin, block)) return;
         Grave original = getGrave(block);
         var restoration = plugin.getGraveRestoration();
         String identity = original != null ? GraveIdentity.of(original.getGravesConfig())
@@ -320,6 +324,7 @@ public class GraveBlockProtectionListener implements Listener {
 		plugin.getBukkitScheduler().runTask(plugin, () -> {
             if (!plugin.isEnabled() || identity == null || !block.getWorld().isChunkLoaded(block.getX() >> 4, block.getZ() >> 4)
                     || GraveMarkerCleanup.hasConflictingIdentity(plugin, block, identity)) return;
+            if (com.bencodez.gravestonesplus.graves.PendingRecreationMarker.hasAttemptTag(plugin, block)) return;
             Grave current = getGrave(block);
             boolean live = current != null && !current.isRemove() && !current.getGravesConfig().isDestroyed()
                     && identity.equals(GraveIdentity.of(current.getGravesConfig())) && current.isGrave(block);

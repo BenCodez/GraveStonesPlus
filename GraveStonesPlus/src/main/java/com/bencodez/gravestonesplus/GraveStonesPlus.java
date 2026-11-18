@@ -102,6 +102,26 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
     @Getter private com.bencodez.gravestonesplus.graves.FeatureIO featureIO;
     private volatile CompletableFuture<Void> pendingReload;
     private volatile boolean reloadRetired;
+    private java.util.Set<Runnable> recreationAttempts;
+    /** Runtime ownership includes historical objects outside the current grave lists. */
+    public synchronized boolean registerRecreationAttempt(Runnable retirement) {
+        if (reloadRetired || !isEnabled()) return false;
+        if (recreationAttempts == null) recreationAttempts = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        return recreationAttempts.size() < 128 && recreationAttempts.add(retirement);
+    }
+    public synchronized void unregisterRecreationAttempt(Runnable retirement) {
+        if (recreationAttempts != null) recreationAttempts.remove(retirement);
+    }
+    public void retireRecreationAttempts() {
+        java.util.List<Runnable> attempts;
+        synchronized (this) {
+            reloadRetired = true;
+            attempts = recreationAttempts == null ? java.util.List.of() : java.util.List.copyOf(recreationAttempts);
+            if (recreationAttempts != null) recreationAttempts.clear();
+        }
+        attempts.forEach(Runnable::run);
+    }
+
     @Getter private com.bencodez.gravestonesplus.graves.GraveMarkerCleanup markerCleanup;
     @Getter private com.bencodez.gravestonesplus.graves.GraveRestoration graveRestoration;
     @Getter private com.bencodez.gravestonesplus.graves.GraveClaimLedger graveClaimLedger;
@@ -178,7 +198,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			return java.util.concurrent.CompletableFuture.completedFuture(false);
 		}
 
-        if (!createMarker && storageManager.isMySQL()) return grave.recreateAsync(actor, false);
+        if (storageManager.isMySQL()) return grave.recreateAsync(actor, createMarker);
         var completion = grave.recreateAsync(actor, createMarker).thenCompose(restored -> {
         if (!restored) return java.util.concurrent.CompletableFuture.completedFuture(false);
 		if (!containsByKey(graves, grave)) {
@@ -204,8 +224,27 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
     /** Called only after SQL acknowledgment on the recreation's location owner; no second storage admission. */
     public void publishSqlRecreatedGrave(Grave grave) {
-        if (!containsByKey(graves, grave)) graves.add(grave);
-        removeFromListByKey(brokenGraves, grave);
+        publishSqlRecreation(grave, () -> true);
+    }
+    /** The acceptance callback contains only the lifecycle check and already-admitted terminal acknowledgment. */
+    public boolean publishSqlRecreatedGrave(Grave grave, java.util.function.BooleanSupplier accept) {
+        return publishSqlRecreation(grave, accept);
+    }
+    private boolean publishSqlRecreation(Grave grave, java.util.function.BooleanSupplier accept) {
+        // Snapshot only matching references: publication failure must not leave a historical grave in the active list.
+        String identity = buildGraveKey(grave);
+        java.util.List<Grave> priorActive = snapshot(graves).stream().filter(value -> value != null && value.getGravesConfig() != null && identity.equals(buildGraveKey(value))).toList();
+        java.util.List<Grave> priorBroken = snapshot(brokenGraves).stream().filter(value -> value != null && value.getGravesConfig() != null && identity.equals(buildGraveKey(value))).toList();
+        try {
+            if (!containsByKey(graves, grave)) graves.add(grave);
+            removeFromListByKey(brokenGraves, grave);
+            if (!accept.getAsBoolean()) throw new java.util.concurrent.CancellationException("Recreation publication retired");
+            return true;
+        } catch (RuntimeException | Error failure) {
+            removeFromListByKey(graves, grave); removeFromListByKey(brokenGraves, grave);
+            graves.addAll(priorActive); brokenGraves.addAll(priorBroken);
+            throw failure;
+        }
     }
 
 	private boolean containsByKey(List<Grave> list, Grave grave) {
@@ -375,6 +414,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
             if (reload != null) reload.completeExceptionally(new IllegalStateException("Grave reload lifecycle retired"));
         }
 
+        retireRecreationAttempts();
         for (Grave grave : activeGraveSnapshot()) grave.retireAcknowledgments();
         for (Grave grave : brokenGraveSnapshot()) grave.retireAcknowledgments();
 		if (graveRestoration != null) graveRestoration.retire();

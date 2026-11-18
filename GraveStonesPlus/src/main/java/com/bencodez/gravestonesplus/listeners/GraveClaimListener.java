@@ -323,6 +323,7 @@ public class GraveClaimListener implements Listener {
 	}
 
     private boolean isPendingMarker(Block block) {
+        if (com.bencodez.gravestonesplus.graves.PendingRecreationMarker.protects(plugin, block)) return true;
         var restoration = plugin.getGraveRestoration();
         return restoration != null && restoration.protectsPendingMarker(block);
     }

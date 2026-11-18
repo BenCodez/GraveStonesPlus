@@ -53,6 +53,7 @@ public class Grave {
 
     private final java.util.Map<java.util.concurrent.CompletableFuture<?>, Runnable> acknowledgments = new java.util.IdentityHashMap<>();
     private boolean acknowledgmentsRetired;
+    private PhysicalRecreation physicalRecreation;
     private synchronized <T> boolean observeLifecycle(java.util.concurrent.CompletableFuture<T> future, T retired) {
         if (acknowledgmentsRetired || acknowledgments.size() >= 128) { future.complete(retired); return false; }
         acknowledgments.put(future, () -> future.complete(retired));
@@ -62,10 +63,14 @@ public class Grave {
     /** Lifecycle retirement acknowledges uncertainty, without replaying or cancelling durable payouts. */
     public void retireAcknowledgments() {
         java.util.List<Runnable> pending;
+        PhysicalRecreation nativeAttempt;
         synchronized (this) {
             acknowledgmentsRetired = true;
+            nativeAttempt = physicalRecreation;
+            if (nativeAttempt != null) nativeAttempt.retire();
             pending = java.util.List.copyOf(acknowledgments.values()); acknowledgments.clear();
         }
+        if (nativeAttempt != null) nativeAttempt.marker.revokeDisplayOnOwner();
         pending.forEach(Runnable::run);
     }
 
@@ -1197,8 +1202,10 @@ public class Grave {
     private void beginRecreationOnRegion(String identity, boolean createMarker,
             java.util.concurrent.CompletableFuture<Boolean> result) {
         var storage = plugin.getStorageManager();
-        if (!createMarker && storage != null && storage.isMySQL()) {
-            beginSqlRecreationWithoutMarker(identity, result); return;
+        if (storage != null && storage.isMySQL()) {
+            if (createMarker) beginSqlPhysicalRecreation(identity, result);
+            else beginSqlRecreationWithoutMarker(identity, result);
+            return;
         }
         final long previousDestroyedTime;
         final boolean previousRemove;
@@ -1232,6 +1239,128 @@ public class Grave {
             // Do not invoke integration continuations while holding a grave monitor.
             if (failure != null) result.completeExceptionally(failure); else result.complete(restored);
         });
+    }
+
+    /** Register and reserve together; no native call or observer continuation runs under this gate. */
+    private void beginSqlPhysicalRecreation(String identity, java.util.concurrent.CompletableFuture<Boolean> result) {
+        PhysicalRecreation attempt = null;
+        synchronized (this) {
+            if (!result.isDone() && !acknowledgmentsRetired && recreationStateAllowed(identity) && physicalRecreation == null) {
+                var storage = plugin.getStorageManager();
+                var admission = storage.reserveRecreation(gravesConfig, true);
+                if (admission != null) {
+                    try {
+                        attempt = new PhysicalRecreation(identity, storage, admission, getStoredDisplayTypeOrDefault(), result);
+                        if (plugin.registerRecreationAttempt(attempt)) physicalRecreation = attempt;
+                        else { admission.close(); attempt = null; }
+                    } catch (RuntimeException | Error failure) { admission.close(); result.complete(false); return; }
+                }
+            }
+        }
+        if (attempt == null) result.complete(false); else attempt.create();
+    }
+
+    private final class PhysicalRecreation implements Runnable {
+        final String identity;
+        final com.bencodez.gravestonesplus.storage.GraveStorageManager storage;
+        final com.bencodez.gravestonesplus.storage.GraveStorageManager.RecreationAdmission admission;
+        final RecreationNativeMarker marker;
+        final java.util.concurrent.CompletableFuture<Boolean> result;
+        boolean retired;
+        PhysicalRecreation(String identity, com.bencodez.gravestonesplus.storage.GraveStorageManager storage,
+                com.bencodez.gravestonesplus.storage.GraveStorageManager.RecreationAdmission admission,
+                GraveDisplayType type, java.util.concurrent.CompletableFuture<Boolean> result) {
+            this.identity = identity; this.storage = storage; this.admission = admission; this.result = result;
+            marker = new RecreationNativeMarker(plugin, Grave.this, admission, type);
+        }
+        void retire() { retired = true; marker.retire(); }
+        @Override public void run() {
+            synchronized (Grave.this) { retire(); }
+            marker.revokeDisplayOnOwner();
+            result.complete(false);
+        }
+        boolean eligible() {
+            return !retired && !acknowledgmentsRetired && physicalRecreation == this
+                    && plugin.getStorageManager() == storage && recreationStateAllowed(identity);
+        }
+        void create() {
+            try {
+                if (!marker.createOnLocation()) { cancelAndClean(); return; }
+                java.util.concurrent.CompletableFuture<Boolean> sql;
+                synchronized (Grave.this) {
+                    if (!eligible()) { marker.retire(); sql = null; }
+                    else sql = marker.commitSql();
+                }
+                if (sql == null) { clean(); return; }
+                sql.whenComplete((saved, failure) -> {
+                    if (failure != null) { hold(); return; }
+                    if (!Boolean.TRUE.equals(saved)) { location(this::clean); return; }
+                    marker.adoptDisplayOnOwner().whenComplete((adopted, error) -> {
+                        if (error != null || !Boolean.TRUE.equals(adopted)) { hold(); return; }
+                        location(this::publish);
+                    });
+                });
+            } catch (RuntimeException | Error failure) { cancelAndClean(); }
+        }
+        void cancelAndClean() { synchronized (Grave.this) { retire(); } clean(); }
+        void clean() {
+            marker.rollbackOnLocation().whenComplete((cleaned, error) -> {
+                if (error == null && Boolean.TRUE.equals(cleaned)) {
+                    synchronized (Grave.this) {
+                        if (admission.finish()) { physicalRecreation = null; plugin.unregisterRecreationAttempt(this); }
+                    }
+                }
+                result.complete(false);
+            });
+        }
+        void location(Runnable action) {
+            try {
+                plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(gravesConfig.getLocation(), task -> action.run())
+                        .whenComplete((unused, failure) -> { if (failure != null) hold(); });
+            } catch (RuntimeException | Error rejected) { hold(); }
+        }
+        void hold() {
+            synchronized (Grave.this) { retire(); }
+            marker.revokeDisplayOnOwner();
+            result.complete(false);
+        }
+        void publish() {
+            boolean allowed;
+            synchronized (Grave.this) { allowed = eligible() && marker.hasAdoptionAcknowledgment(); }
+            if (!allowed) { hold(); return; }
+            // Native reads and metadata callbacks can retire this actor; never hold the grave gate across them.
+            try { if (!marker.preparePublicationOnLocation()) { hold(); return; } }
+            catch (RuntimeException | Error failure) { hold(); return; }
+            boolean published = false;
+            synchronized (Grave.this) {
+                if (eligible() && marker.hasAdoptionAcknowledgment()) {
+                    var oldDisplay = gravesConfig.getDisplayUUID(); var oldInteract = gravesConfig.getInteractUUID();
+                    var oldType = gravesConfig.getGraveDisplayType(); long oldTime = gravesConfig.getDestroyedTime();
+                    var oldEntity = itemDisplay; boolean oldRemove = remove;
+                    try {
+                        gravesConfig.setDisplayUUID(marker.displayId()); gravesConfig.setInteractUUID(null);
+                        gravesConfig.setGraveDisplayType(marker.displayType()); itemDisplay = marker.display();
+                        gravesConfig.setDestroyed(false); gravesConfig.setDestroyedTime(0); remove = false;
+                        markRecreated();
+                        published = plugin.publishSqlRecreatedGrave(Grave.this, () -> !retired && !acknowledgmentsRetired
+                                && physicalRecreation == this && plugin.isEnabled() && plugin.getStorageManager() == storage
+                                && marker.hasAdoptionAcknowledgment() && admission.finish());
+                        physicalRecreation = null; plugin.unregisterRecreationAttempt(this);
+                    } catch (RuntimeException | Error failure) {
+                        gravesConfig.setDisplayUUID(oldDisplay); gravesConfig.setInteractUUID(oldInteract); gravesConfig.setGraveDisplayType(oldType);
+                        gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(oldTime); remove = oldRemove; itemDisplay = oldEntity;
+                    }
+                }
+            }
+            if (!published) { hold(); return; }
+            // Live metadata/list protection now owns the marker. Never remove provisional protection on a failed publication.
+            try { marker.completePublicationOnLocation(); }
+            catch (RuntimeException | Error failure) { /* Keep the surviving tag; the acknowledged live grave remains authoritative. */ }
+            result.complete(true);
+            try { plugin.getBukkitScheduler().runTask(plugin, () -> {
+                if (plugin.isLiveGrave(Grave.this)) createHologram();
+            }, gravesConfig.getLocation()); } catch (RuntimeException rejected) { /* Cosmetic only. */ }
+        }
     }
 
     /** No native marker mutation: retain historical state until the ordered SQL transition acknowledges. */

@@ -592,4 +592,32 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @Test void bulkContinuationFaultSettlesReadySuccessorAcrossReservedBarrier()throws Exception {
+        try(var io=new FeatureIO(8);var encoding=mockStatic(InventorySerializer.class)) {
+            encoding.when(()->InventorySerializer.encode(any())).thenReturn("synthetic-bulk-items");
+            var backend=mock(GraveStorageBackend.class);var journal=new SqlRecoveryJournal(io,backend,directory,ignored->{});
+            assertTrue(await(journal.loaded()));await(io.barrier());
+            var first=journal.reserveRecreation(record(1));assertNotNull(first);
+            var rows=new ArrayList<SqlRecoveryJournal.BulkRow>();
+            for(int i=0;i<17;i++)rows.add(new SqlRecoveryJournal.BulkRow(GraveStorageManager.snapshot(record(i+2)),false));
+            var bulk=journal.reserveBulk(rows.iterator());assertNotNull(bulk);
+            var second=journal.reserveRecreation(record(20));assertNotNull(second);
+            var following=journal.reserve(SqlRecoveryJournal.Kind.FLAG,record(21),true);assertNotNull(following);
+            var bulkResult=bulk.commit();var followingResult=following.commit();await(io.barrier());verifyNoInteractions(backend);
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(io));var continuation=new CountDownLatch(1);
+            doAnswer(call->{if(io.isOwnerThread()){continuation.countDown();throw new IllegalStateException("synthetic bulk continuation dispatch failure");}io.requestDrain(call.getArgument(0));return null;}).when(proxy).requestDrain(any(Runnable.class));
+            field(journal,"io",proxy);
+            try {
+                first.close();assertTrue(continuation.await(3,TimeUnit.SECONDS));
+                assertThrows(ExecutionException.class,()->await(bulkResult));
+                assertThrows(ExecutionException.class,()->await(followingResult));
+                assertEquals(SqlRecoveryJournal.Disposition.DURABLE,await(bulk.durable()));
+                assertEquals(SqlRecoveryJournal.Disposition.HELD,await(following.durable()));
+                assertFalse(second.durable().isDone(),"accepted observers must settle before the later reservation is released");
+                assertFalse(journal.isReady());verify(backend,times(16)).upsertGrave(any(),eq(false));verify(backend,never()).setBroken(any(),anyBoolean());
+            }finally{field(journal,"io",io);second.close();journal.close();}
+            assertFalse(io.hasUnsubmittedAdmissions());
+        }
+    }
+
 }

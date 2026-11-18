@@ -336,12 +336,12 @@ public final class SqlRecoveryJournal {
                             if (settleRequestedFatal()) return;
                             apply(entry.rows.get(entry.nextRow)); entry.nextRow++;
                         }
-                        if (entry.nextRow < entry.rows.size()) {
-                            synchronized (this) { cursor = entry.sequence - 1; bulkContinuing = true; }
-                            continueDrain(); return;
-                        }
                     } catch (RuntimeException | Error failure) {
                         holdBulkAndSuccessors(entry, "Bulk SQL snapshot retained for ordered recovery."); pauseBulk(); return;
+                    }
+                    if (entry.nextRow < entry.rows.size()) {
+                        synchronized (this) { cursor = entry.sequence - 1; bulkContinuing = true; }
+                        continueDrain(); return;
                     }
                 }
                 try {

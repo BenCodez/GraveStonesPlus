@@ -297,4 +297,48 @@ class ClaimCompletionTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={0,1,2,3,4})
+    void capturedSqlCompletionDoesNotRequireRecipientReadmissionAfterOverflow(int mode) throws Exception {
+        try(var h=new ClaimHarness()) {
+            var storage=mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            var ticket=mock(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation.class);
+            when(storage.isMySQL()).thenReturn(true);when(h.plugin.getStorageManager()).thenReturn(storage);
+            when(storage.reserveSqlTransition(any(),any(),eq(true))).thenReturn(ticket);
+            when(ticket.commit()).thenReturn(CompletableFuture.completedFuture(true));
+            when(ticket.durable()).thenReturn(CompletableFuture.completedFuture(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE));
+            when(h.plugin.removeGrave(eq(h.grave),same(ticket))).thenAnswer(call->{h.active.remove(h.grave);return ticket.commit();});
+            var overflow=new CompletableFuture<Void>();var occupied=mock(org.bukkit.inventory.ItemStack.class);var material=h.cloned.getType();
+            when(occupied.getType()).thenReturn(material);when(h.ownerInventory.getItem(4)).thenReturn(occupied);
+            when(h.ownerInventory.addItem(h.cloned)).thenReturn(new java.util.HashMap<>(java.util.Map.of(0,h.cloned)));
+            var type=h.plugin.getClass().getMethod("getFullInventoryHandler").getReturnType();
+            Object handler=mock(type,call->call.getMethod().getName().equals("giveItemAsync") ? overflow : org.mockito.Answers.RETURNS_DEFAULTS.answer(call));
+            doReturn(handler).when(h.plugin).getFullInventoryHandler();
+            var result=h.grave.claimAsync(h.owner);h.drain();verify(h.owner).giveExp(17);verify(ticket,never()).commit();
+            var platform=h.plugin.getBukkitScheduler().getFoliaLib().getImpl();clearInvocations(platform);
+            if(mode==0 || mode==4) doAnswer(call->CompletableFuture.completedFuture(com.bencodez.simpleapi.folialib.enums.EntityTaskResult.ENTITY_RETIRED))
+                    .when(platform).runAtEntityWithFallback(any(org.bukkit.entity.Entity.class),any(),any(Runnable.class));
+            if(mode==1) doThrow(new java.util.concurrent.RejectedExecutionException("synthetic recipient scheduler rejection"))
+                    .when(platform).runAtEntityWithFallback(any(org.bukkit.entity.Entity.class),any(),any(Runnable.class));
+            if(mode==2) when(h.owner.isOnline()).thenReturn(false);
+            if(mode==3) when(h.plugin.isEnabled()).thenReturn(false);
+            Thread actor=Thread.currentThread();
+            doAnswer(call->{assertSame(actor,Thread.currentThread(),"recipient UUID must be captured before off-owner finalization");return h.grave.getGravesConfig().getUuid();})
+                    .when(h.owner).getUniqueId();
+            Thread acknowledged=new Thread(()->{
+                if(mode==4) overflow.completeExceptionally(new IllegalStateException("synthetic unacknowledged overflow"));else overflow.complete(null);
+            },"synthetic-overflow-ack");acknowledged.start();acknowledged.join(3000);assertFalse(acknowledged.isAlive());h.drain();
+            if(mode==4) {
+                assertEquals(ClaimResult.HELD,ClaimHarness.await(result));verify(ticket,never()).commit();
+                assertEquals(com.bencodez.gravestonesplus.graves.GraveClaimLedger.Restoration.RESERVED,ClaimHarness.await(h.ledger.restoration(h.identity())));
+            } else {
+                assertEquals(ClaimResult.COMPLETED,ClaimHarness.await(result));verify(ticket,times(1)).commit();
+                assertEquals(com.bencodez.gravestonesplus.graves.GraveClaimLedger.Restoration.PAID,ClaimHarness.await(h.ledger.restoration(h.identity())));
+                verify(platform,never()).runAtEntityWithFallback(any(org.bukkit.entity.Entity.class),any(),any(Runnable.class));
+                assertTrue(h.grave.getGravesConfig().isDestroyed());assertFalse(h.active.contains(h.grave));
+            }
+            verify(ticket,times(1)).close();verify(h.owner,times(1)).giveExp(17);
+        }
+    }
+
 }

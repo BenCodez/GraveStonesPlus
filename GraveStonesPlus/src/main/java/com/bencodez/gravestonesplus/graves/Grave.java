@@ -1547,6 +1547,8 @@ public class Grave {
         boolean ownsClaim;
         private com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sqlRemoval;
         long destroyedAt;
+        java.util.UUID recipientId;
+        String successMessage = "", displacedMessage = "";
         private boolean sqlReleased, deliveryOwned, retired;
         synchronized boolean beginDelivery() {
             if (retired || completion.isDone()) return false;
@@ -1695,6 +1697,7 @@ public class Grave {
     }
     private void reserveClaim(Player player, com.bencodez.gravestonesplus.breaking.PlayerBreakManager.CompletedBreak proof,
             boolean nearby, String identity, java.util.UUID recipient, GravesConfig captured, String evidence, ClaimAttempt attempt) {
+        attempt.recipientId = recipient;
         try { plugin.getGraveClaimLedger().reserve(identity, recipient, evidence).whenComplete((saved, failure) -> {
             var started = new java.util.concurrent.atomic.AtomicBoolean();
             Runnable retired = () -> {
@@ -1717,6 +1720,11 @@ public class Grave {
                             cancelClaim(identity, attempt); return;
                         }
                         try {
+                            boolean owner = isOwner(player);
+                            attempt.successMessage = owner || plugin.getConfigFile().isBreakOtherGravesSendMessage()
+                                    ? MessageAPI.colorize(owner ? plugin.getConfigFile().getFormatGraveBroke()
+                                        : MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBrokeOther(), "player", gravesConfig.getPlayerName())) : "";
+                            attempt.displacedMessage = MessageAPI.colorize(plugin.getConfigFile().getFormatItemsNotInGrave());
                             if (!attempt.beginDelivery()) { cancelClaim(identity, attempt); return; }
                             var payout = GravePayout.select(captured.getItems(), plugin.getConfigFile().getPercentageDrops(), () -> ThreadLocalRandom.current().nextInt(100));
                             List<java.util.concurrent.CompletableFuture<Void>> overflow = new ArrayList<>();
@@ -1767,6 +1775,12 @@ public class Grave {
         catch (RuntimeException rejected) { finishUnreserved(attempt, ClaimResult.HELD); }
     }
     private void finishOverflowClaim(Player player, String identity, boolean displaced, Throwable deliveryFailure, ClaimAttempt attempt) {
+        if (deliveryFailure == null && attempt.sqlRemoval() != null) {
+            // All native/overflow effects are acknowledged. The prepared SQL and
+            // owner receipt need no further player admission or Bukkit reads.
+            claimCallback(attempt, identity, () -> completeClaim(player, identity, displaced, attempt));
+            return;
+        }
         var started = new java.util.concurrent.atomic.AtomicBoolean();
         Runnable retired = () -> {
             if (started.compareAndSet(false, true)) finishUnreserved(attempt, ClaimResult.HELD);
@@ -1788,9 +1802,11 @@ public class Grave {
     }
     private void completeClaim(Player player, String identity, boolean displaced, ClaimAttempt attempt) {
         try {
-            java.util.UUID recipientId = player.getUniqueId();
-            remove = true; gravesConfig.setDestroyed(true);
-            gravesConfig.setDestroyedTime(attempt.destroyedAt == 0 ? System.currentTimeMillis() : attempt.destroyedAt);
+            java.util.UUID recipientId = attempt.recipientId;
+            synchronized (this) {
+                remove = true; gravesConfig.setDestroyed(true);
+                gravesConfig.setDestroyedTime(attempt.destroyedAt == 0 ? System.currentTimeMillis() : attempt.destroyedAt);
+            }
             var sql = attempt.sqlRemoval();
             java.util.concurrent.CompletableFuture<Boolean> stored;
             if (sql == null) { plugin.removeGrave(this); stored = java.util.concurrent.CompletableFuture.completedFuture(true); }
@@ -1801,10 +1817,8 @@ public class Grave {
                     : sql.durable().thenCompose(disposition -> disposition == com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE
                         ? plugin.getGraveClaimLedger().paid(identity, recipientId)
                         : java.util.concurrent.CompletableFuture.completedFuture(false));
-            final String successMessage = isOwner(player) || plugin.getConfigFile().isBreakOtherGravesSendMessage()
-                    ? MessageAPI.colorize(isOwner(player) ? plugin.getConfigFile().getFormatGraveBroke()
-                        : MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBrokeOther(), "player", gravesConfig.getPlayerName())) : "";
-            final String displacedMessage = displaced ? MessageAPI.colorize(plugin.getConfigFile().getFormatItemsNotInGrave()) : "";
+            final String successMessage = attempt.successMessage;
+            final String displacedMessage = displaced ? attempt.displacedMessage : "";
             plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
             plugin.getGraveNavigation().invalidate(identity); removeTimer(); scheduleMarkerCleanup();
             // Register only after the gameplay transition; disk completion alone

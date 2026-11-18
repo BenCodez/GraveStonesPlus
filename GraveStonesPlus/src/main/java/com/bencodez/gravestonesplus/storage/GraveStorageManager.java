@@ -43,7 +43,7 @@ public class GraveStorageManager {
         private final String identity;
         private final SqlRecoveryJournal.Reservation slot;
         private final boolean marker;
-        private boolean committed, released;
+        private boolean committed, released, cancelledBeforeCommit;
         private java.util.concurrent.CompletableFuture<Boolean> sql;
         private RecreationAdmission(String identity, SqlRecoveryJournal.Reservation slot, boolean marker) {
             this.identity = identity; this.slot = slot; this.marker = marker;
@@ -77,6 +77,19 @@ public class GraveStorageManager {
             synchronized (GraveStorageManager.this) {
                 if (released || !committed || !sql.isDone() || sql.isCompletedExceptionally()) return false;
                 released = true; recreations.remove(identity, this); return true;
+            }
+        }
+        public boolean isCancelledBeforeCommit() {
+            synchronized (GraveStorageManager.this) { return cancelledBeforeCommit; }
+        }
+        /** Cancel unused SQL capacity during native retirement, retaining identity ownership until cleanup is acknowledged. */
+        public boolean cancelRetainingFence() {
+            synchronized (GraveStorageManager.this) {
+                if (released || committed) return false;
+                sql = new java.util.concurrent.CompletableFuture<>(); committed = true; cancelledBeforeCommit = true;
+                try { slot.close(); sql.complete(false); }
+                catch (RuntimeException | Error failure) { sql.completeExceptionally(failure); }
+                return true;
             }
         }
         public void close() {
@@ -369,6 +382,9 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 		// including its final bounded shutdown drain when the queue is saturated.
 		closeRequested = true;
         if (isMySQL() && sqlJournal != null) {
+            // Physical attempts may own historical objects outside the plugin's list snapshots.
+            // Cancel their unused SQL tickets before worker shutdown; native cleanup keeps its fence.
+            for (var attempt : List.copyOf(recreations.values())) if (attempt.marker) attempt.cancelRetainingFence();
             sqlJournal.close(); plugin.getFeatureIO().requestDrain(this::flushRetained); return;
         }
 		com.bencodez.gravestonesplus.graves.FeatureIO.Admission wake = plugin.getFeatureIO().admit();

@@ -620,4 +620,62 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void nativeRetirementCancelsUnusedSqlButRetainsIdentityUntilCleanup(boolean prepared)throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var record=record(1);record.setDestroyed(true);String identity=GraveIdentity.of(record);
+            var admission=h.manager.reserveRecreation(record,true);assertNotNull(admission);
+            if(prepared) {
+                var metadata=new GravesConfig(record.getUuid(),"",record.getLocation(),new HashMap<>(),0,"",record.getTime(),false,0,UUID.randomUUID(),null,"DISPLAY_ENTITY");metadata.setWorldId(record.getWorldId());
+                assertTrue(admission.prepare(metadata));
+            }
+            assertTrue(admission.cancelRetainingFence());assertTrue(admission.isCancelledBeforeCommit());assertFalse(admission.cancelRetainingFence());admission.close();
+            assertFalse(await(admission.commit()));assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(admission.durable()));
+            assertTrue(h.manager.isRecreationPending(identity));assertNull(h.manager.reserveRecreation(record,true));assertFalse(h.io.hasUnsubmittedAdmissions());
+            assertEquals(0,h.journal.records());assertTrue(record.isDestroyed());verify(h.backend,never()).saveRecreatedGrave(any());
+            assertTrue(admission.finish());assertFalse(h.manager.isRecreationPending(identity));assertFalse(await(admission.commit()));
+        }
+    }
+    @Test void nativeRetirementCannotCancelAnAlreadyCommittedSqlTransition()throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var busy=h.io.submit(()->{entered.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}return true;});assertTrue(entered.await(3,TimeUnit.SECONDS));
+            var admission=h.manager.reserveRecreation(record(1),false);assertNotNull(admission);var result=admission.commit();
+            try{assertFalse(admission.cancelRetainingFence());assertFalse(result.isDone());}
+            finally{release.countDown();await(busy);}
+            assertTrue(await(result));assertTrue(admission.finish());verify(h.backend,times(1)).saveRecreatedGrave(any());
+        }
+    }
+    @Test void cancelledNativeAttemptAllowsWorkerShutdownBeforeItsOwnerCleanupFinishes()throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var record=record(1);var admission=h.manager.reserveRecreation(record,true);assertNotNull(admission);
+            h.manager.close();var closing=new Thread(h.io::close,"synthetic-native-retirement-close");closing.start();
+            try {
+                assertTrue(admission.isCancelledBeforeCommit());assertFalse(admission.cancelRetainingFence());closing.join(3000);assertFalse(closing.isAlive());assertTrue(h.io.isTerminated());
+                assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(admission.durable()));assertFalse(await(admission.commit()));
+                assertTrue(h.manager.isRecreationPending(GraveIdentity.of(record)));assertTrue(h.closed.await(3,TimeUnit.SECONDS));
+                assertTrue(admission.finish());assertFalse(h.manager.isRecreationPending(GraveIdentity.of(record)));
+                verify(h.backend,times(1)).close();verify(h.backend,never()).saveRecreatedGrave(any());
+            }finally{admission.cancelRetainingFence();closing.join(3000);}
+        }
+    }
+
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void prepareSelfCancellationStillRetainsNativeFenceThroughStorageClose(boolean error)throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var record=record(1);var admission=h.manager.reserveRecreation(record,true);assertNotNull(admission);
+            var metadata=new GravesConfig(record.getUuid(),"",record.getLocation(),new HashMap<>(),0,"",record.getTime(),false,0,UUID.randomUUID(),null,"DISPLAY_ENTITY");metadata.setWorldId(record.getWorldId());
+            if(error) {
+                var failing=spy(metadata);doThrow(new AssertionError("synthetic final metadata capture error")).when(failing).getDisplayUUID();
+                assertThrows(AssertionError.class,()->admission.prepare(failing));
+            }else {metadata.setWorldId(UUID.randomUUID());assertFalse(admission.prepare(metadata));}
+            assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(admission.durable()));
+            h.manager.close();assertTrue(admission.isCancelledBeforeCommit());assertFalse(await(admission.commit()));
+            assertTrue(h.manager.isRecreationPending(GraveIdentity.of(record)));assertFalse(h.io.hasUnsubmittedAdmissions());
+            assertTrue(h.closed.await(3,TimeUnit.SECONDS));assertTrue(admission.finish());verify(h.backend,never()).saveRecreatedGrave(any());
+        }
+    }
+
 }

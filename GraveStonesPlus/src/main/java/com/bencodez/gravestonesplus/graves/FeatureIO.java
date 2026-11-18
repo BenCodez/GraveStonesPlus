@@ -12,14 +12,15 @@ public final class FeatureIO implements AutoCloseable {
     private final Object lifecycle = new Object();
     private int reservations;
     private boolean closing;
+    private final AtomicBoolean drainRequested = new AtomicBoolean();
     private volatile Runnable drainListener = () -> { };
     public FeatureIO() { this(128); }
     public FeatureIO(int capacity) {
         this.capacity = new Semaphore(capacity + 1);
         worker = new ThreadPoolExecutor(1, 1, 0L, TimeUnit.MILLISECONDS,
-                // One physical queue slot per admission, even while the old worker
-                // frame finishes a drain after releasing its logical admission.
-                new ArrayBlockingQueue<>(capacity + 1), r -> {
+                // One physical slot per admission plus a coalesced internal drain wake,
+                // even while the old frame releases its logical admission.
+                new ArrayBlockingQueue<>(capacity + 2), r -> {
                     Thread t = new Thread(r, "gsp-feature-io"); t.setDaemon(false); owner = t; return t;
                 }, new ThreadPoolExecutor.AbortPolicy());
     }
@@ -49,7 +50,10 @@ public final class FeatureIO implements AutoCloseable {
             return result;
         }
         @Override public void close() {
-            if (used.compareAndSet(false, true)) synchronized (lifecycle) { capacity.release(); reservations--; lifecycle.notifyAll(); }
+            if (used.compareAndSet(false, true)) {
+                synchronized (lifecycle) { capacity.release(); reservations--; lifecycle.notifyAll(); }
+                requestDrain();
+            }
         }
     }
     public <T> CompletableFuture<T> submit(Supplier<T> action) {
@@ -59,6 +63,18 @@ public final class FeatureIO implements AutoCloseable {
     public CompletableFuture<Void> barrier() { return submit(() -> null); }
     /** One storage owner flushes its coalesced recovery snapshot after older work. */
     public void onDrain(Runnable listener) { drainListener = listener; }
+    /** Coalesced internal wake does not consume a ticket reserved by a gameplay caller. */
+    public void requestDrain() {
+        synchronized (lifecycle) {
+            if (closing || worker.isShutdown() || !drainRequested.compareAndSet(false, true)) return;
+            try { worker.execute(() -> { drainRequested.set(false); notifyDrain(); }); }
+            catch (RejectedExecutionException full) {
+                // Accepted queued work guarantees its final idle drain.
+                drainRequested.set(false);
+            }
+        }
+    }
+    public boolean isOwnerThread() { return Thread.currentThread() == owner; }
     public boolean hasQueuedWork() { return !worker.getQueue().isEmpty(); }
     private void notifyDrain() { if (!hasQueuedWork()) drainListener.run(); }
     public boolean isTerminated() { return worker.isTerminated(); }

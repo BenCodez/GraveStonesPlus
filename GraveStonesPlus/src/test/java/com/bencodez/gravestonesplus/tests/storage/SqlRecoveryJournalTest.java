@@ -35,7 +35,7 @@ class SqlRecoveryJournalTest {
             var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
             var record = prepared(); var ticket = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, true);
             assertNotNull(ticket); assertTrue(await(ticket.commit())); await(io.barrier());
-            verify(backend).updateExistingGrave(same(record), eq(true)); verify(backend, never()).upsertGrave(any(), anyBoolean());
+            verify(backend).updateExistingGrave(any(GravesConfig.class), eq(true)); verify(backend, never()).upsertGrave(any(), anyBoolean());
             try (var files = Files.list(directory)) { assertEquals(0, files.count()); }
         }
     }
@@ -68,7 +68,7 @@ class SqlRecoveryJournalTest {
             var display = journal.reserve(SqlRecoveryJournal.Kind.DISPLAY, record, false);
             var flag = journal.reserve(SqlRecoveryJournal.Kind.FLAG, record, true);
             assertFalse(await(display.commit())); assertTrue(await(flag.commit()));
-            verify(backend).saveDisplayIdentity(same(record)); verify(backend).setBroken(same(record), eq(true));
+            verify(backend).saveDisplayIdentity(any(GravesConfig.class)); verify(backend).setBroken(any(GravesConfig.class), eq(true));
             verify(backend, never()).upsertGrave(any(), anyBoolean());
         }
     }
@@ -76,10 +76,12 @@ class SqlRecoveryJournalTest {
         try (var io = new FeatureIO(300)) {
             var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend); var record = prepared();
             var held = new ArrayList<SqlRecoveryJournal.Reservation>();
-            for (int i = 0; i < 256; i++) { var reservation = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, true); assertNotNull(reservation); held.add(reservation); }
-            assertNull(journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, true));
-            held.removeFirst().close(); var replacement = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, true); assertNotNull(replacement);
-            replacement.close(); held.forEach(SqlRecoveryJournal.Reservation::close); await(io.barrier());
+            try {
+                for (int i = 0; i < 256; i++) { var reservation = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, true); assertNotNull(reservation); held.add(reservation); }
+                assertNull(journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, true));
+            } finally { held.forEach(SqlRecoveryJournal.Reservation::close); }
+            for (var cancelled : held) assertFalse(await(cancelled.commit()));
+            await(io.barrier());
             verifyNoInteractions(backend);
         }
     }
@@ -112,9 +114,10 @@ class SqlRecoveryJournalTest {
             var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend); var record = prepared();
             var held = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, false);
             var later = journal.reserve(SqlRecoveryJournal.Kind.FLAG, record, true);
-            later.commit(); await(io.barrier()); verifyNoInteractions(backend);
-            held.close(); await(io.barrier()); assertTrue(await(later.commit()));
-            verify(backend).setBroken(same(record), eq(true));
+            try { later.commit(); await(io.barrier()); verifyNoInteractions(backend); }
+            finally { held.close(); }
+            await(io.barrier()); assertTrue(await(later.commit()));
+            verify(backend).setBroken(any(GravesConfig.class), eq(true));
         }
     }
     @Test void corruptedRecoveryEntryBlocksStartupRatherThanReplayingChangedValues() throws Exception {
@@ -129,6 +132,158 @@ class SqlRecoveryJournalTest {
             var backend = mock(GraveStorageBackend.class);
             var journal = new SqlRecoveryJournal(io, backend, directory, ignored -> {});
             assertFalse(await(journal.loaded())); assertFalse(journal.isReady()); verifyNoInteractions(backend);
+        }
+    }
+    @Test void durablePrefixIsPublishedBeforeAnyBlockedJdbcCall() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1);
+            var occupied = io.submit(() -> { try { release.await(5, TimeUnit.SECONDS); } catch (InterruptedException e) { throw new AssertionError(e); } return true; });
+            var first = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false);
+            var second = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), true);
+            var jdbcRelease = new CountDownLatch(1);
+            doAnswer(call -> { entered.countDown(); assertTrue(jdbcRelease.await(5, TimeUnit.SECONDS)); throw new IllegalStateException("synthetic outage"); })
+                    .when(backend).upsertGrave(any(), anyBoolean());
+            try {
+                first.commit(); second.commit(); release.countDown(); assertTrue(entered.await(5, TimeUnit.SECONDS));
+                assertTrue(await(first.durable())); assertTrue(await(second.durable()));
+                try (var files = Files.list(directory)) { assertEquals(2, files.count()); }
+            } finally { release.countDown(); jdbcRelease.countDown(); }
+            await(occupied); await(io.barrier()); journal.close();
+        }
+    }
+    @Test void reservedPredecessorFencesSuccessorDurabilityUntilItsCancellation() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend); var record = prepared();
+            var first = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, record, false);
+            var later = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, true);
+            try {
+                later.commit(); await(io.barrier());
+                assertFalse(later.durable().isDone()); try (var files = Files.list(directory)) { assertEquals(0, files.count()); }
+            } finally { first.close(); }
+            assertTrue(await(later.durable())); assertTrue(await(later.commit()));
+            verify(backend, never()).upsertGrave(any(), anyBoolean());
+        }
+    }
+    @Test void firstExecutionUsesImmutableWireCapture() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend); var record = prepared();
+            var ticket = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, record, false);
+            UUID identity = record.getDisplayUUID(); record.setDestroyed(true); record.setDisplayUUID(UUID.randomUUID());
+            doAnswer(call -> {
+                GravesConfig captured = call.getArgument(0); assertFalse(captured.isDestroyed()); assertEquals(identity, captured.getDisplayUUID());
+                var encoded = GravesConfig.class.getDeclaredMethod("encodedItemsForStorage"); encoded.setAccessible(true);
+                assertEquals("synthetic-encoded", encoded.invoke(captured)); return null;
+            }).when(backend).updateExistingGrave(any(), anyBoolean());
+            assertTrue(await(ticket.commit()));
+        }
+    }
+    @Test void completeTemporaryFileIsRecoveredAndPartialFileIsPreservedWithoutBlockingStartup() throws Exception {
+        try (var io = new FeatureIO(4)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            doThrow(new IllegalStateException("synthetic outage")).when(backend).upsertGrave(any(), anyBoolean());
+            var ticket = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false); ticket.commit(); await(ticket.durable()); await(io.barrier()); journal.close();
+        }
+        Path original; try (var files = Files.list(directory)) { original = files.findFirst().orElseThrow(); }
+        Files.move(original, original.resolveSibling(original.getFileName() + ".tmp"));
+        Path partial = directory.resolve("0000000000000000002.sql.tmp"); Files.write(partial, new byte[]{1,2,3});
+        try (var io = new FeatureIO(4)) {
+            var backend = mock(GraveStorageBackend.class); journal(io, backend); await(io.barrier());
+            verify(backend).upsertGrave(any(), eq(false));
+            assertArrayEquals(new byte[]{1,2,3}, Files.readAllBytes(partial.resolveSibling(partial.getFileName() + ".incomplete")));
+            try (var files = Files.list(directory)) { assertEquals(1, files.count()); }
+        }
+    }
+    @Test void renamedValidPayloadCannotChangeItsSequence() throws Exception {
+        try (var io = new FeatureIO(4)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            doThrow(new IllegalStateException("synthetic outage")).when(backend).upsertGrave(any(), anyBoolean());
+            var ticket = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false); ticket.commit(); await(ticket.durable()); await(io.barrier()); journal.close();
+        }
+        Path original; try (var files = Files.list(directory)) { original = files.findFirst().orElseThrow(); }
+        Files.move(original, directory.resolve("0000000000000000009.sql"));
+        try (var io = new FeatureIO(4)) {
+            var backend = mock(GraveStorageBackend.class); var journal = new SqlRecoveryJournal(io, backend, directory, ignored -> {});
+            assertFalse(await(journal.loaded())); verifyNoInteractions(backend);
+        }
+    }
+    @Test void externalThreadCannotExecuteSqlDrain() throws Exception {
+        try (var io = new FeatureIO(4)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            assertThrows(IllegalStateException.class, journal::drain); verifyNoInteractions(backend);
+        }
+    }
+    @Test void byteBudgetRejectsBeforeEntryLimitAndOversizeEncodingCannotReserve() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class);
+            var constructor = SqlRecoveryJournal.class.getDeclaredConstructor(FeatureIO.class, GraveStorageBackend.class, Path.class, java.util.function.Consumer.class, int.class, long.class);
+            constructor.setAccessible(true);
+            var journal = constructor.newInstance(io, backend, directory, (java.util.function.Consumer<String>) ignored -> {}, 4, 256L);
+            io.onDrain(journal::drain); assertTrue(await(journal.loaded()));
+            var first = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), false); assertNotNull(first);
+            SqlRecoveryJournal.Reservation overflow = null;
+            try { overflow = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), false); assertNull(overflow); }
+            finally { if (overflow != null) overflow.close(); first.close(); }
+            verifyNoInteractions(backend);
+        }
+    }
+    @Test void blockedDurabilityObserverCannotBlockJdbcOrOwnItsThread() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            var release = new CountDownLatch(1); var observer = new CountDownLatch(1); var sql = new CountDownLatch(2);
+            doAnswer(call -> { sql.countDown(); return null; }).when(backend).updateExistingGrave(any(), eq(false));
+            var first = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), false);
+            first.durable().thenRun(() -> {
+                assertFalse(io.isOwnerThread()); observer.countDown();
+                try { assertTrue(release.await(5, TimeUnit.SECONDS)); } catch (InterruptedException e) { throw new AssertionError(e); }
+            });
+            try {
+                first.commit(); assertTrue(observer.await(5, TimeUnit.SECONDS));
+                var second = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), false); assertNotNull(second); second.commit();
+                assertTrue(sql.await(5, TimeUnit.SECONDS)); verify(backend, times(2)).updateExistingGrave(any(), eq(false));
+            } finally { release.countDown(); }
+        }
+    }
+    @Test void throwingDiagnosticDoesNotBreakOtherIdentityAcknowledgments() throws Exception {
+        try (var io = new FeatureIO(8)) {
+            var backend = mock(GraveStorageBackend.class);
+            var journal = new SqlRecoveryJournal(io, backend, directory, ignored -> { throw new AssertionError("synthetic diagnostic failure"); });
+            io.onDrain(journal::drain); assertTrue(await(journal.loaded()));
+            doThrow(new IllegalStateException("synthetic outage")).when(backend).upsertGrave(any(), anyBoolean());
+            var first = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false);
+            var second = journal.reserve(SqlRecoveryJournal.Kind.UPDATE, prepared(), false);
+            first.commit(); assertTrue(await(second.commit()));
+            assertThrows(ExecutionException.class, () -> await(first.commit()));
+        }
+    }
+    @Test void oversizeStringIsRejectedWithoutLeakingAnAdmission() throws Exception {
+        try (var io = new FeatureIO(1)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend); var original = prepared();
+            var large = new GravesConfig(original.getUuid(), "Synthetic", original.getLocation(), new HashMap<>(), 0,
+                    "x".repeat(1_048_577), original.getTime(), false, 0, null, null, "CHEST");
+            large.setWorldId(original.getWorldId());
+            assertNull(journal.reserve(SqlRecoveryJournal.Kind.DISPLAY, large, false));
+            await(io.barrier()); verifyNoInteractions(backend);
+        }
+    }
+    @Test void boundedPassesContinueDurableAdmissionWithoutBusyRetryingAnOutage() throws Exception {
+        try (var io = new FeatureIO(64)) {
+            var backend = mock(GraveStorageBackend.class); var journal = journal(io, backend);
+            var calls = new AtomicInteger();
+            doAnswer(call -> { calls.incrementAndGet(); throw new IllegalStateException("synthetic outage"); })
+                    .when(backend).upsertGrave(any(), anyBoolean());
+            var release = new CountDownLatch(1);
+            var occupied = io.submit(() -> { try { assertTrue(release.await(5, TimeUnit.SECONDS)); } catch (InterruptedException e) { throw new AssertionError(e); } return true; });
+            var tickets = new ArrayList<SqlRecoveryJournal.Reservation>();
+            try {
+                for (int i = 0; i < 33; i++) {
+                    var ticket = journal.reserve(SqlRecoveryJournal.Kind.UPSERT, prepared(), false); assertNotNull(ticket); tickets.add(ticket);
+                }
+                tickets.forEach(SqlRecoveryJournal.Reservation::commit);
+            } finally { release.countDown(); tickets.forEach(SqlRecoveryJournal.Reservation::close); }
+            await(occupied);
+            for (var ticket : tickets) { assertTrue(await(ticket.durable())); assertThrows(ExecutionException.class, () -> await(ticket.commit())); }
+            assertEquals(33, calls.get(), "one outage must not create a self-scheduled retry loop"); journal.close();
         }
     }
 }

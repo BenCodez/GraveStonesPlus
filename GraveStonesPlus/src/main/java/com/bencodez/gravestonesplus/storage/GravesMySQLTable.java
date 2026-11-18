@@ -273,6 +273,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
                 + qi("interact_uuid") + "=? WHERE " + qi("player_uuid") + "=? AND "
                 + qi("world_uuid") + "=? AND " + qi("x") + "=? AND " + qi("y") + "=? AND "
                 + qi("z") + "=? AND " + qi("time") + "=? AND " + qi("broken") + "=0 AND " + qi("destroyed") + "=0;";
+        boolean acknowledged;
         try (Connection connection = mysql.getConnectionManager().getConnection();
                 PreparedStatement statement = connection.prepareStatement(sql)) {
             if (!connection.getAutoCommit()) throw new SQLException("Display repair requires an auto-commit connection");
@@ -281,10 +282,11 @@ public class GravesMySQLTable extends AbstractSqlTable {
             statement.setString(3, grave.getUuid().toString()); statement.setString(4, grave.getWorldId().toString());
             statement.setInt(5, grave.getLocation().getBlockX()); statement.setInt(6, grave.getLocation().getBlockY());
             statement.setInt(7, grave.getLocation().getBlockZ()); statement.setLong(8, grave.getTime());
-            if (statement.executeUpdate() != 1) throw new SQLException("Active grave display identity was not acknowledged");
+            acknowledged = acknowledgeMetadata(connection, grave, false, statement.executeUpdate());
         } catch (SQLException failure) {
             throw new IllegalStateException("Failed to persist grave display identity", failure);
         }
+        if (!acknowledged) throw new SqlConditionNotMet();
     }
 
     /** Restore existing metadata with one checked statement; contents/XP are unchanged. */
@@ -297,6 +299,7 @@ public class GravesMySQLTable extends AbstractSqlTable {
                 + qi("grave_display_type") + "=? WHERE " + qi("player_uuid") + "=? AND "
                 + qi("world_uuid") + "=? AND " + qi("x") + "=? AND " + qi("y") + "=? AND "
                 + qi("z") + "=? AND " + qi("time") + "=?;";
+        boolean acknowledged;
         try (Connection connection = mysql.getConnectionManager().getConnection();
                 PreparedStatement statement = connection.prepareStatement(sql)) {
             if (!connection.getAutoCommit()) throw new SQLException("Recreation requires an auto-commit connection");
@@ -312,9 +315,55 @@ public class GravesMySQLTable extends AbstractSqlTable {
             statement.setInt(10, grave.getLocation().getBlockY());
             statement.setInt(11, grave.getLocation().getBlockZ());
             statement.setLong(12, grave.getTime());
-            if (statement.executeUpdate() != 1) throw new SQLException("Existing grave row was not acknowledged");
+            acknowledged = acknowledgeMetadata(connection, grave, true, statement.executeUpdate());
         } catch (SQLException failure) {
             throw new IllegalStateException("Failed to persist recreated grave", failure);
+        }
+        if (!acknowledged) throw new SqlConditionNotMet();
+    }
+
+    /** Zero affected rows may mean unchanged values; confirm only this operation's fields, never contents. */
+    private boolean acknowledgeMetadata(Connection connection, GravesConfig grave, boolean recreation, int changed)
+            throws SQLException {
+        if (changed == 1) return true;
+        if (changed != 0) throw new SQLException("Grave metadata write affected an unexpected number of rows");
+        java.util.Map<String, Object> expected = new java.util.LinkedHashMap<>();
+        expected.put("display_uuid", grave.getDisplayUUID() == null ? null : grave.getDisplayUUID().toString());
+        expected.put("interact_uuid", grave.getInteractUUID() == null ? null : grave.getInteractUUID().toString());
+        expected.put("broken", 0);
+        expected.put("destroyed", recreation && grave.isDestroyed() ? 1 : 0);
+        if (recreation) {
+            expected.put("destroyed_time", grave.getDestroyedTime());
+            expected.put("grave_display_type", safeString(grave.getGraveDisplayType()));
+        }
+        String columns = expected.keySet().stream().map(column -> qi(column)).collect(java.util.stream.Collectors.joining(", "));
+        String sql = "SELECT " + columns + " FROM " + qi(tableName) + " WHERE " + qi("player_uuid") + "=? AND "
+                + qi("world_uuid") + "=? AND " + qi("x") + "=? AND " + qi("y") + "=? AND " + qi("z") + "=? AND " + qi("time") + "=? LIMIT 2;";
+        try (PreparedStatement query = connection.prepareStatement(sql)) {
+            query.setString(1, grave.getUuid().toString()); query.setString(2, grave.getWorldId().toString());
+            query.setInt(3, grave.getLocation().getBlockX()); query.setInt(4, grave.getLocation().getBlockY());
+            query.setInt(5, grave.getLocation().getBlockZ()); query.setLong(6, grave.getTime());
+            try (ResultSet row = query.executeQuery()) {
+                if (!row.next()) return false;
+                boolean matched = true;
+                if (!recreation) {
+                    long broken = row.getLong("broken"); boolean nullBroken = row.wasNull();
+                    long destroyed = row.getLong("destroyed"); boolean nullDestroyed = row.wasNull();
+                    if (nullBroken || nullDestroyed || broken != 0 || destroyed != 0) {
+                        if (row.next()) throw new SQLException("Duplicate SQL grave identity");
+                        return false;
+                    }
+                }
+                for (var field : expected.entrySet()) {
+                    if (field.getValue() instanceof Number number) {
+                        long actual = row.getLong(field.getKey());
+                        matched &= !row.wasNull() && actual == number.longValue();
+                    } else matched &= java.util.Objects.equals(field.getValue(), row.getString(field.getKey()));
+                }
+                if (row.next()) throw new SQLException("Duplicate SQL grave identity");
+                if (!matched) throw new SQLException("Grave metadata state could not be reconciled after zero affected rows");
+                return true;
+            }
         }
     }
 

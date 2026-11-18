@@ -265,12 +265,12 @@ class MySQLRestorationOwnershipTest {
             else assertThrows(ExecutionException.class, () -> saved.get(3, TimeUnit.SECONDS));
             verify(h.statement).setString(1, display.toString()); verify(h.statement).setString(3, h.player.toString());
             verify(h.statement).setString(4, h.world.toString()); verify(h.statement).setLong(8, 42L);
-            var sql = org.mockito.ArgumentCaptor.forClass(String.class); verify(h.connection).prepareStatement(sql.capture());
-            assertTrue(sql.getValue().replace("`", "").replace("\"", "").contains("broken=0 AND destroyed=0"), sql.getValue());
-            String assignments = sql.getValue().split(" WHERE ")[0];
+            var sql = org.mockito.ArgumentCaptor.forClass(String.class); verify(h.connection, times(affected == 0 ? 2 : 1)).prepareStatement(sql.capture());
+            assertTrue(sql.getAllValues().getFirst().replace("`", "").replace("\"", "").contains("broken=0 AND destroyed=0"), sql.getAllValues().getFirst());
+            String assignments = sql.getAllValues().getFirst().split(" WHERE ")[0];
             assertFalse(assignments.contains("items_encoded")); assertFalse(assignments.contains("`exp`"));
             assertFalse(assignments.contains("`broken`")); assertFalse(assignments.contains("`destroyed`"));
-            verify(h.statement).close(); verify(h.connection).close();
+            verify(h.statement, times(affected == 0 ? 2 : 1)).close(); verify(h.connection).close();
         }
     }
     @Test void recreationWaitsForTheExactExistingRowWriteAndPreservesContents() throws Exception {
@@ -299,8 +299,9 @@ class MySQLRestorationOwnershipTest {
     @Test void recreationDoesNotAcknowledgeMissingOrMultipleRows() throws Exception {
         for (int rows : List.of(0, 2)) try (var h = new Fixture()) {
             recreation(h); when(h.statement.executeUpdate()).thenReturn(rows);
+            when(h.rows.next()).thenReturn(false);
             assertThrows(ExecutionException.class, () -> h.storage.saveRecreatedGrave(recreated(h)).get(3, TimeUnit.SECONDS));
-            verify(h.statement).close(); verify(h.connection).close();
+            verify(h.statement, times(rows == 0 ? 2 : 1)).close(); verify(h.connection).close();
         }
     }
     @Test void recreationSurfacesSqlFailureAndClosesResources() throws Exception {

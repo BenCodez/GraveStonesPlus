@@ -133,4 +133,28 @@ class SqlRecreationOwnerTest {
         }
     }
 
+    @Test void queuedNativeRecreationCannotMutateWhileNoMarkerSqlIsPending()throws Exception {
+        try(var h=new ClaimHarness()) {
+            var backend=mock(GraveStorageBackend.class);var manager=manager(h,backend);var broken=install(h,manager);
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            doAnswer(call->{entered.countDown();assertTrue(release.await(5,TimeUnit.SECONDS));return null;}).when(backend).saveRecreatedGrave(any());
+            try(var journal=new SqlJournalHarness(h.io,backend,manager,directory)) {
+                var noMarker=h.plugin.recreateBrokenGrave(h.grave,null,false);h.drain();assertEquals(1,h.regionWork.size());
+                var nativeAttempt=h.grave.recreateAsync(null,true);h.drain();assertEquals(2,h.regionWork.size());
+                h.regionWork.remove().run();
+                try {
+                    assertTrue(entered.await(3,TimeUnit.SECONDS));
+                    h.regionWork.remove().run();
+                    assertTrue(h.grave.getGravesConfig().isDestroyed(),"competing native callback must not clear historical state");
+                    assertFalse(ClaimHarness.await(nativeAttempt));assertTrue(h.regionWork.isEmpty());
+                    assertTrue(h.active.isEmpty());assertEquals(List.of(h.grave),broken);assertTrue(manager.isRecreationPending(h.identity()));
+                    verify(h.world,never()).getBlockAt(anyInt(),anyInt(),anyInt());
+                }finally{release.countDown();}
+                h.drain();runRegion(h);h.drain();assertTrue(ClaimHarness.await(noMarker));
+                assertFalse(h.grave.getGravesConfig().isDestroyed());assertEquals(List.of(h.grave),h.active);assertTrue(broken.isEmpty());
+                assertFalse(manager.isRecreationPending(h.identity()));verify(backend,times(1)).saveRecreatedGrave(any());
+            }
+        }
+    }
+
 }

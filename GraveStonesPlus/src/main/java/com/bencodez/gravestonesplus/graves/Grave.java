@@ -1204,7 +1204,8 @@ public class Grave {
         final boolean previousRemove;
         boolean admitted;
         synchronized (this) {
-            admitted = !result.isDone() && recreationStateAllowed(identity);
+            admitted = !result.isDone() && recreationStateAllowed(identity)
+                    && (storage == null || !storage.isRecreationPending(identity));
             previousDestroyedTime = gravesConfig.getDestroyedTime(); previousRemove = remove;
             if (admitted) { markRecreated(); gravesConfig.setDestroyed(false); gravesConfig.setDestroyedTime(0); }
         }

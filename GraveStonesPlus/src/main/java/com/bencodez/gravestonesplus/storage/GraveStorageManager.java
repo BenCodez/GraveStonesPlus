@@ -336,25 +336,20 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         });
     }
     private java.util.concurrent.CompletableFuture<Boolean> saveSqlSnapshot(List<Grave> active, List<Grave> broken) {
-        List<SqlRecoveryJournal.Reservation> admitted = new ArrayList<>();
+        if (sqlJournal == null || closeRequested || backendClosed || restorationLoading || !sqlJournal.isReady())
+            return java.util.concurrent.CompletableFuture.failedFuture(new java.util.concurrent.RejectedExecutionException("SQL snapshot unavailable"));
         try {
-            for (boolean historical : List.of(false, true)) {
-                List<Grave> source = historical ? broken : active;
-                if (source == null) continue;
-                for (Grave grave : copy(source)) {
-                    if (grave == null || grave.getGravesConfig() == null) continue;
-                    var ticket = reserveSqlTransition(SqlRecoveryJournal.Kind.UPSERT, grave.getGravesConfig(), historical);
-                    if (ticket == null) throw new java.util.concurrent.RejectedExecutionException("SQL snapshot capacity unavailable");
-                    admitted.add(ticket);
-                }
-            }
-        } catch (RuntimeException | Error rejected) {
-            admitted.forEach(SqlRecoveryJournal.Reservation::close);
-            return java.util.concurrent.CompletableFuture.failedFuture(rejected);
-        }
-        List<java.util.concurrent.CompletableFuture<Boolean>> writes = admitted.stream().map(SqlRecoveryJournal.Reservation::commit).toList();
-        return java.util.concurrent.CompletableFuture.allOf(writes.toArray(java.util.concurrent.CompletableFuture[]::new))
-                .thenApply(unused -> writes.stream().allMatch(write -> Boolean.TRUE.equals(write.join()))).copy();
+            var activeRows = active == null ? List.<Grave>of() : copy(active);
+            var brokenRows = broken == null ? List.<Grave>of() : copy(broken);
+            var rows = java.util.stream.Stream.concat(
+                    activeRows.stream().filter(grave -> grave != null && grave.getGravesConfig() != null)
+                        .map(grave -> new SqlRecoveryJournal.BulkRow(snapshot(grave.getGravesConfig()), false)),
+                    brokenRows.stream().filter(grave -> grave != null && grave.getGravesConfig() != null)
+                        .map(grave -> new SqlRecoveryJournal.BulkRow(snapshot(grave.getGravesConfig()), true))).iterator();
+            var admitted = sqlJournal.reserveBulk(rows);
+            return admitted == null ? java.util.concurrent.CompletableFuture.failedFuture(
+                    new java.util.concurrent.RejectedExecutionException("SQL snapshot capacity unavailable")) : admitted.commit();
+        } catch (RuntimeException | Error rejected) { return java.util.concurrent.CompletableFuture.failedFuture(rejected); }
     }
 
     /** Retain one latest authoritative snapshot when admission fails, rather than

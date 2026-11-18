@@ -19,10 +19,11 @@ public final class SqlRecoveryJournal {
     /** HELD may replay after repair/restart: the caller must retain ownership and must not restore/drop rewards.
      * CANCELLED is possible only before commit and cannot replay. DURABLE is not an SQL acknowledgment. */
     public enum Disposition { DURABLE, HELD, CANCELLED }
-    public enum Kind { UPSERT, UPDATE, FLAG, DISPLAY, RECREATE }
+    public enum Kind { UPSERT, UPDATE, FLAG, DISPLAY, RECREATE, BULK }
     private enum Phase { RESERVED, READY, DURABLE }
     private static final int VERSION = 1;
     private static final int MAX_RECORD = 1_048_576;
+    private static final int MAX_FILE = 64 * 1_048_576;
     private static final int MAX_ENTRIES = 256;
     private static final long MAX_BYTES = 64L * 1_048_576;
     private final FeatureIO io;
@@ -38,7 +39,7 @@ public final class SqlRecoveryJournal {
     private long evidenceBytes;
     private long next, bytes, cursor;
     private final Set<String> blockedCycle = new HashSet<>();
-    private boolean healthy, closing, draining, initialized, retryRequested, fatal, loadComplete;
+    private boolean healthy, closing, draining, initialized, retryRequested, fatal, loadComplete, bulkContinuing;
     private static final class Entry {
         final long sequence;
         final Kind kind;
@@ -46,17 +47,26 @@ public final class SqlRecoveryJournal {
         final boolean broken;
         final byte[] payload;
         final String identity;
+        final List<Entry> rows;
+        int nextRow;
+        FeatureIO.Admission bulkTicket;
         final CompletableFuture<Disposition> durable = new CompletableFuture<>();
         boolean reported, durableNotified;
         final CompletableFuture<Boolean> completion = new CompletableFuture<>();
         Phase phase;
         Entry(long sequence, Kind kind, GravesConfig grave, boolean broken, byte[] payload, Phase phase) {
             this.sequence = sequence; this.kind = kind; this.grave = grave; this.broken = broken;
-            this.payload = payload; this.phase = phase;
+            this.payload = payload; this.phase = phase; this.rows = List.of();
             identity = grave.getUuid() + ":" + grave.getWorldId() + ":" + grave.getTime() + ":"
                     + grave.getLocation().getBlockX() + ":" + grave.getLocation().getBlockY() + ":" + grave.getLocation().getBlockZ();
         }
+            Entry(long sequence, byte[] payload, List<Entry> rows, Phase phase) {
+            this.sequence = sequence; this.kind = Kind.BULK; this.grave = null; this.broken = false;
+            this.payload = payload; this.rows = List.copyOf(rows); this.phase = phase; this.identity = "bulk:" + sequence;
+        }
     }
+    /** Each row is already prepared on the caller owner; bulk uses one admission and a byte-bounded packet. */
+    public record BulkRow(GravesConfig grave, boolean broken) { }
     public SqlRecoveryJournal(FeatureIO io, GraveStorageBackend backend, Path directory, Consumer<String> error) {
         this(io, backend, directory, error, MAX_ENTRIES, MAX_BYTES);
     }
@@ -92,17 +102,40 @@ public final class SqlRecoveryJournal {
     }
     /** Record must already be detached and encoded on its Bukkit/Folia owner. */
     public synchronized Reservation reserve(Kind kind, GravesConfig record, boolean broken) {
-        if (!healthy || closing || outstanding + evidenceEntries >= entryLimit || next == Long.MAX_VALUE) return null;
+        if (kind == Kind.BULK || !canReserve()) return null;
         FeatureIO.Admission admission = io.admit();
         if (admission == null) return null;
+        boolean transferred = false;
         try {
             byte[] payload = encode(next + 1, kind, record, broken);
-            if (payload.length > byteLimit - bytes - evidenceBytes) { admission.close(); return null; }
-            // The immutable wire representation drives both first execution and restart replay.
-            Entry entry = decode(++next, payload); entry.phase = Phase.RESERVED;
-            entries.put(entry.sequence, entry); bytes += payload.length; outstanding++;
-            return new Reservation(entry, admission);
-        } catch (IOException | RuntimeException invalid) { admission.close(); return null; }
+            if (payload.length > byteLimit - bytes - evidenceBytes) return null;
+            Reservation result = install(payload, admission); transferred = true; return result;
+        } catch (IOException | RuntimeException invalid) { return null; }
+        finally { if (!transferred) admission.close(); }
+    }
+    /** Captures a caller-owned snapshot into one byte-bounded durable obligation.
+     * SQL advances in sixteen-row windows. Unfinished rows retry in order; a restart
+     * may replay the idempotent upsert prefix before any later SQL obligation.
+     */
+    public synchronized Reservation reserveBulk(java.util.Iterator<BulkRow> rows) {
+        if (!canReserve()) return null;
+        FeatureIO.Admission admission = io.admit();
+        if (admission == null) return null;
+        boolean transferred = false;
+        try {
+            long available = Math.min(MAX_FILE, byteLimit - bytes - evidenceBytes);
+            if (available < 49) return null;
+            byte[] payload = encodeBulk(next + 1, rows, (int) available);
+            Reservation result = install(payload, admission); transferred = true; return result;
+        } catch (IOException | RuntimeException invalid) { return null; }
+        finally { if (!transferred) admission.close(); }
+    }
+    private boolean canReserve() { return healthy && !closing && outstanding + evidenceEntries < entryLimit && next != Long.MAX_VALUE; }
+    private Reservation install(byte[] payload, FeatureIO.Admission admission) throws IOException {
+        Entry entry = decode(++next, payload); entry.phase = Phase.RESERVED;
+        Reservation result = new Reservation(entry, admission);
+        entries.put(entry.sequence, entry); bytes += payload.length; outstanding++;
+        return result;
     }
     public final class Reservation implements AutoCloseable {
         private final Entry entry;
@@ -117,13 +150,14 @@ public final class SqlRecoveryJournal {
             synchronized (SqlRecoveryJournal.this) {
                 if (admission == null) return entry.completion.copy();
                 ticket = admission; admission = null; entry.phase = Phase.READY; held = fatal;
+                if (!held && entry.kind == Kind.BULK) entry.bulkTicket = ticket;
             }
             if (held) {
                 ticket.close();
                 fail(entry, "SQL journal is terminally held; accepted intent requires owner reconciliation.", true);
                 return entry.completion.copy();
             }
-            ticket.submit(() -> true).whenComplete((value, failure) -> {
+            if (entry.kind != Kind.BULK) ticket.submit(() -> true).whenComplete((value, failure) -> {
                 if (failure != null) fail(entry, "SQL recovery worker rejected an accepted transition.");
             });
             wake();
@@ -160,23 +194,26 @@ public final class SqlRecoveryJournal {
     /** Called on FeatureIO after accepted work, including its final shutdown drain. */
     public void drain() {
         if (!io.isOwnerThread()) throw new IllegalStateException("SQL recovery requires the feature owner");
-        synchronized (this) { if (fatal || draining || !initialized || (cursor == 0 && !retryRequested)) return; draining = true; }
+        synchronized (this) { if (fatal || draining || !initialized || (cursor == 0 && !retryRequested && !bulkContinuing)) return; draining = true; }
         try {
-            List<Entry> prefix = new ArrayList<>();
+            List<Entry> prefix = new ArrayList<>(), publication = new ArrayList<>();
             synchronized (this) {
                 if (closing) cursor = 0;
-                if (cursor == 0) { blockedCycle.clear(); retryRequested = false; }
+                if (cursor == 0 && !bulkContinuing) { blockedCycle.clear(); retryRequested = false; }
                 int limit = closing ? entryLimit : 16;
+                boolean bulkBarrier = false;
                 for (Entry entry : entries.values()) {
-                    if (entry.sequence <= cursor) continue;
-                    if (prefix.size() >= limit) break;
-                    // Do not durably accept a successor whose missing predecessor could vanish on restart.
+                    // File acceptance may proceed past a SQL-held bulk, but never past a missing reservation.
                     if (entry.phase == Phase.RESERVED) break;
+                    publication.add(entry);
+                    if (entry.sequence <= cursor || prefix.size() >= limit || bulkBarrier) continue;
+                    if (entry.kind == Kind.BULK && !prefix.isEmpty()) { bulkBarrier = true; continue; }
                     prefix.add(entry);
+                    if (entry.kind == Kind.BULK) bulkBarrier = true;
                 }
             }
             // Persist the entire bounded order-safe prefix before JDBC or user notifications.
-            for (Entry entry : prefix) if (entry.phase != Phase.DURABLE) {
+            for (Entry entry : publication) if (entry.phase != Phase.DURABLE) {
                 try {
                     publish(entry);
                     synchronized (this) { entry.phase = Phase.DURABLE; }
@@ -185,17 +222,32 @@ public final class SqlRecoveryJournal {
                     return;
                 }
             }
-            for (Entry entry : prefix) notifyDurable(entry);
+            for (Entry entry : publication) notifyDurable(entry);
             for (Entry entry : prefix) {
                 if (blockedCycle.contains(entry.identity)) {
                     fail(entry, "Durable SQL predecessor remains unresolved; successor retained without acknowledgment.", false);
                     continue;
                 }
+                if (entry.kind == Kind.BULK) {
+                    boolean prior;
+                    synchronized (this) { prior = entries.keySet().stream().anyMatch(sequence -> sequence < entry.sequence); }
+                    if (prior) { holdBulkAndSuccessors(entry, "Bulk SQL predecessor remains held; snapshot retained."); pauseBulk(); return; }
+                    try {
+                        int end = Math.min(entry.rows.size(), entry.nextRow + 16);
+                        while (entry.nextRow < end) { apply(entry.rows.get(entry.nextRow)); entry.nextRow++; }
+                        if (entry.nextRow < entry.rows.size()) {
+                            synchronized (this) { cursor = entry.sequence - 1; bulkContinuing = true; }
+                            continueDrain(); return;
+                        }
+                    } catch (RuntimeException | Error failure) {
+                        holdBulkAndSuccessors(entry, "Bulk SQL snapshot retained for ordered recovery."); pauseBulk(); return;
+                    }
+                }
                 try {
                     boolean applied = true;
-                    try { apply(entry); }
+                    try { if (entry.kind != Kind.BULK) apply(entry); }
                     catch (SqlConditionNotMet miss) { applied = false; }
-                    retire(entry);
+                    retire(entry); releaseBulkTicket(entry);
                     synchronized (this) { entries.remove(entry.sequence, entry); }
                     boolean acknowledged = applied;
                     notifications.execute(() -> {
@@ -213,6 +265,7 @@ public final class SqlRecoveryJournal {
             boolean more = false;
             synchronized (this) {
                 if (!prefix.isEmpty()) cursor = prefix.getLast().sequence;
+                bulkContinuing = false;
                 for (Entry entry : entries.values()) if (entry.sequence > cursor) {
                     more = entry.phase != Phase.RESERVED; break;
                 }
@@ -222,14 +275,31 @@ public final class SqlRecoveryJournal {
             if (more) continueDrain();
         } finally { synchronized (this) { draining = false; } }
     }
+    private void holdBulkAndSuccessors(Entry bulk, String message) {
+        releaseBulkTicket(bulk);
+        List<Entry> held;
+        synchronized (this) { held = entries.values().stream().filter(entry -> entry.sequence >= bulk.sequence && entry.phase == Phase.DURABLE).toList(); }
+        for (Entry entry : held) { releaseBulkTicket(entry); fail(entry, message, false); }
+    }
+    private void releaseBulkTicket(Entry entry) {
+        FeatureIO.Admission ticket;
+        synchronized (this) { ticket = entry.bulkTicket; entry.bulkTicket = null; }
+        if (ticket != null) ticket.close();
+    }
+    private void pauseBulk() {
+        boolean retry;
+        synchronized (this) { cursor = 0; bulkContinuing = false; blockedCycle.clear(); retry = retryRequested; }
+        if (retry) continueDrain();
+    }
     /** A fatal journal fault owns the whole accepted queue, not just the current bounded pass. */
     private void settleFatal(String message) {
         List<Entry> affected;
         synchronized (this) {
-            healthy = false; fatal = true; cursor = 0; retryRequested = false; blockedCycle.clear();
+            healthy = false; fatal = true; cursor = 0; bulkContinuing = false; retryRequested = false; blockedCycle.clear();
             affected = entries.values().stream().filter(entry -> entry.phase != Phase.RESERVED).toList();
         }
         for (Entry entry : affected) {
+            releaseBulkTicket(entry);
             if (entry.phase == Phase.DURABLE) notifyDurable(entry);
             fail(entry, message, entry.phase != Phase.DURABLE);
         }
@@ -264,6 +334,7 @@ public final class SqlRecoveryJournal {
             case FLAG -> backend.setBroken(entry.grave, entry.broken);
             case DISPLAY -> backend.saveDisplayIdentity(entry.grave);
             case RECREATE -> backend.saveRecreatedGrave(entry.grave);
+            case BULK -> throw new IllegalStateException("Bulk SQL requires bounded progress");
         }
     }
     private Path file(long sequence) { return directory.resolve(String.format(java.util.Locale.ROOT, "%019d.sql", sequence)); }
@@ -296,10 +367,10 @@ public final class SqlRecoveryJournal {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) { channel.force(true); }
     }
     private void forceDirectory() throws IOException { forcePath(directory); }
-    private static byte[] readBounded(Path path) throws IOException {
+    private byte[] readBounded(Path path) throws IOException {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS)) {
             long size = channel.size();
-            if (size < 0 || size > MAX_RECORD) throw new IOException("Invalid recovery file size");
+            if (size < 0 || size > Math.min(MAX_FILE, byteLimit)) throw new IOException("Invalid recovery file size");
             ByteBuffer result = ByteBuffer.allocate((int) size);
             while (result.hasRemaining()) if (channel.read(result) < 0) throw new EOFException("Truncated recovery file");
             if (channel.read(ByteBuffer.allocate(1)) != -1) throw new IOException("Recovery file changed during read");
@@ -318,7 +389,7 @@ public final class SqlRecoveryJournal {
                 for (Path path : listing) {
                     String name = path.getFileName().toString();
                     if (++count > entryLimit * 2 || Files.isSymbolicLink(path) || !Files.isRegularFile(path)) throw new IOException("Journal entry limit or type invalid");
-                    long size = Files.size(path); if (size > MAX_RECORD || size > byteLimit - total) throw new IOException("Journal byte limit exceeded"); total += size;
+                    long size = Files.size(path); if (size > Math.min(MAX_FILE, byteLimit) || size > byteLimit - total) throw new IOException("Journal byte limit exceeded"); total += size;
                     if (name.matches("[0-9]{19}\\.sql")) files.add(path);
                     else if (name.matches("[0-9]{19}\\.sql\\.tmp")) temporary.add(path);
                     else if (name.matches("[0-9]{19}\\.sql\\.tmp\\.incomplete")) {
@@ -373,17 +444,33 @@ public final class SqlRecoveryJournal {
     }
     private static void uuid(DataOutputStream output, UUID value) throws IOException { output.writeBoolean(value != null); if (value != null) { output.writeLong(value.getMostSignificantBits()); output.writeLong(value.getLeastSignificantBits()); } }
     private static UUID uuid(DataInputStream input) throws IOException { return input.readBoolean() ? new UUID(input.readLong(), input.readLong()) : null; }
+    private static byte[] encodeBulk(long sequence, java.util.Iterator<BulkRow> rows, int limit) throws IOException {
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream();
+        try (DataOutputStream output = new DataOutputStream(bounded(bytes, limit - 32))) {
+            output.writeLong(sequence); output.writeInt(VERSION); output.writeByte(Kind.BULK.ordinal()); output.writeInt(0);
+            int count = 0;
+            while (rows.hasNext()) {
+                BulkRow row = rows.next(); byte[] payload = encode(sequence, Kind.UPSERT, row.grave(), row.broken());
+                output.writeInt(payload.length); output.write(payload); count++;
+            }
+            byte[] body = bytes.toByteArray(); ByteBuffer.wrap(body).putInt(13, count);
+            byte[] payload = Arrays.copyOf(body, body.length + 32); System.arraycopy(digest(body), 0, payload, body.length, 32); return payload;
+        }
+    }
+    private static OutputStream bounded(ByteArrayOutputStream bytes, int limit) {
+        return new OutputStream() {
+            @Override public void write(int value) throws IOException {
+                if (bytes.size() >= limit) throw new IOException("SQL recovery record exceeds limit"); bytes.write(value);
+            }
+            @Override public void write(byte[] value, int offset, int length) throws IOException {
+                if (length > limit - bytes.size()) throw new IOException("SQL recovery record exceeds limit"); bytes.write(value, offset, length);
+            }
+        };
+    }
     private static byte[] encode(long sequence, Kind kind, GravesConfig grave, boolean broken) throws IOException {
         if (grave.getUuid() == null || grave.getWorldId() == null || grave.getLocation() == null) throw new IOException("Complete SQL identity required");
         ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-        try (DataOutputStream output = new DataOutputStream(new OutputStream() {
-            @Override public void write(int value) throws IOException {
-                if (bytes.size() >= MAX_RECORD - 32) throw new IOException("SQL recovery record exceeds limit"); bytes.write(value);
-            }
-            @Override public void write(byte[] value, int offset, int length) throws IOException {
-                if (length > MAX_RECORD - 32 - bytes.size()) throw new IOException("SQL recovery record exceeds limit"); bytes.write(value, offset, length);
-            }
-        })) {
+        try (DataOutputStream output = new DataOutputStream(bounded(bytes, MAX_RECORD - 32))) {
             output.writeLong(sequence); output.writeInt(VERSION); output.writeByte(kind.ordinal()); output.writeBoolean(broken);
             uuid(output, grave.getUuid()); uuid(output, grave.getWorldId()); output.writeLong(grave.getTime());
             output.writeInt(grave.getLocation().getBlockX()); output.writeInt(grave.getLocation().getBlockY()); output.writeInt(grave.getLocation().getBlockZ());
@@ -414,7 +501,24 @@ public final class SqlRecoveryJournal {
             if (input.readLong() != sequence) throw new IOException("Recovery sequence mismatch");
             if (input.readInt() != VERSION) throw new IOException("Unsupported SQL recovery version");
             int ordinal = input.readUnsignedByte(); if (ordinal >= Kind.values().length) throw new IOException("Invalid mutation kind");
-            Kind kind = Kind.values()[ordinal]; boolean broken = input.readBoolean();
+            Kind kind = Kind.values()[ordinal];
+            if (kind == Kind.BULK) {
+                int count = input.readInt();
+                if (count < 0 || count > input.available() / 4) throw new IOException("Invalid bulk SQL row count");
+                List<Entry> rows = new ArrayList<>();
+                for (int i = 0; i < count; i++) {
+                    int size = input.readInt();
+                    if (size < 13 || size > MAX_RECORD || size > input.available()) throw new IOException("Invalid bulk SQL row size");
+                    byte[] row = input.readNBytes(size);
+                    if (row[12] != Kind.UPSERT.ordinal()) throw new IOException("Bulk SQL permits only full upserts");
+                    Entry decoded = decode(sequence, row);
+                    rows.add(new Entry(sequence, decoded.kind, decoded.grave, decoded.broken, null, Phase.DURABLE));
+                }
+                if (input.available() != 0) throw new IOException("Trailing bulk SQL bytes");
+                return new Entry(sequence, payload, rows, Phase.DURABLE);
+            }
+            if (payload.length > MAX_RECORD) throw new IOException("SQL recovery record exceeds limit");
+            boolean broken = input.readBoolean();
             UUID player = uuid(input), world = uuid(input); long time = input.readLong();
             var location = new org.bukkit.Location(null, input.readInt(), input.readInt(), input.readInt());
             String name = text(input), death = text(input); int exp = input.readInt(); boolean destroyed = input.readBoolean(); long destroyedTime = input.readLong();

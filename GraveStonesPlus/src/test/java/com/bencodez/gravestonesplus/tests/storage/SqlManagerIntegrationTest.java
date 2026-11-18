@@ -38,7 +38,7 @@ class SqlManagerIntegrationTest {
         final org.mockito.MockedStatic<InventorySerializer> encoding = mockStatic(InventorySerializer.class);
         Fixture(int capacity, Path path) throws Exception {
             io = new FeatureIO(capacity);
-            encoding.when(() -> InventorySerializer.encode(any())).thenAnswer(call -> { assertFalse(io.isOwnerThread()); return "synthetic-encoded"; });
+            encoding.when(() -> InventorySerializer.encode(any())).thenAnswer(call -> { assertFalse(io.isOwnerThread()); java.util.Map<Integer,ItemStack> items = call.getArgument(0); return "synthetic:" + (items.isEmpty() ? 0 : items.get(0).getAmount()); });
             when(plugin.getFeatureIO()).thenReturn(io); when(plugin.isEnabled()).thenReturn(true);
             when(plugin.getLogger()).thenReturn(java.util.logging.Logger.getAnonymousLogger());
             var scheduler = mock(BukkitScheduler.class); when(plugin.getBukkitScheduler()).thenReturn(scheduler);
@@ -73,15 +73,19 @@ class SqlManagerIntegrationTest {
             assertTrue(h.closed.await(5,TimeUnit.SECONDS)); verify(h.backend,never()).updateExistingGrave(any(),anyBoolean());
         }
     }
-    @Test void bulkCapacityRejectionCancelsAllRowsBeforeAnySqlMutation() throws Exception {
+    @Test void bulkCapacityRejectionDoesNotConsumeCallerDataOrWriteRows() throws Exception {
         try (var h = new Fixture(1,null)) {
+            var release = new CountDownLatch(1); var entered = new CountDownLatch(1);
+            var busy = h.io.submit(() -> { entered.countDown(); try { assertTrue(release.await(5,TimeUnit.SECONDS)); } catch (InterruptedException e) { throw new AssertionError(e); } return true; });
+            assertTrue(entered.await(5,TimeUnit.SECONDS)); var queued = h.io.submit(() -> true);
             var records = List.of(record(1),record(2),record(3));
-            assertThrows(ExecutionException.class,()->await(h.manager.saveSnapshotFromObjects(records.stream().map(SqlManagerIntegrationTest::grave).toList(),List.of())));
-            await(h.io.barrier()); assertEquals(0,h.journal.records());
-            verify(h.backend,never()).upsertGrave(any(),anyBoolean());
+            try { assertThrows(ExecutionException.class,()->await(h.manager.saveSnapshotFromObjects(records.stream().map(SqlManagerIntegrationTest::grave).toList(),List.of()))); }
+            finally { release.countDown(); }
+            await(busy); await(queued); assertEquals(0,h.journal.records()); verify(h.backend,never()).upsertGrave(any(),anyBoolean());
             for (var record : records) assertEquals(4,record.getItems().get(0).getAmount());
         }
     }
+
     @Test void bulkFailureRetiresOnlyConfirmedRowsAndRetriesOnlyTheRemainingIdentity() throws Exception {
         try (var h = new Fixture(8,null)) {
             var first = record(1); var second = record(2); var firstCalls = new AtomicInteger(); var secondCalls = new AtomicInteger();
@@ -139,6 +143,104 @@ class SqlManagerIntegrationTest {
             field(h.manager,"sqlJournal",null); h.manager.close();
             assertTrue(h.closed.await(5,TimeUnit.SECONDS)); h.io.close();
             verify(h.backend,times(1)).close(); assertTrue(h.io.isTerminated());
+        }
+    }
+    @org.junit.jupiter.params.ParameterizedTest @org.junit.jupiter.params.provider.ValueSource(ints={130,300})
+    void legacyLargeSnapshotUsesOneAdmissionAndBoundedProgressThroughShutdown(int count) throws Exception {
+        try (var h = new Fixture(128,null)) {
+            var calls = new AtomicInteger(); var records = new ArrayList<GravesConfig>();
+            for (int i=0;i<count;i++) records.add(record(i+1));
+            doAnswer(call -> { assertTrue(h.io.isOwnerThread()); assertEquals("synthetic:4",SqlJournalHarness.encoded(call.getArgument(0))); calls.incrementAndGet(); return null; })
+                    .when(h.backend).upsertGrave(any(),anyBoolean());
+            var saved = h.manager.saveSnapshotFromObjects(records.stream().map(SqlManagerIntegrationTest::grave).toList(),List.of());
+            records.forEach(record -> record.getItems().get(0).setAmount(99));
+            h.manager.close(); h.io.close(); assertTrue(await(saved)); assertEquals(count,calls.get());
+            assertTrue(h.io.isTerminated()); verify(h.backend,times(1)).close(); assertEquals(0,h.journal.records());
+        }
+    }
+    @Test void coordinateEncodingErrorReleasesBothSingleAndBulkAdmissionsBeforeClose() throws Exception {
+        try (var h = new Fixture(1,null)) {
+            var broken = record(1); var location = mock(Location.class); when(location.clone()).thenReturn(location);
+            when(location.getBlockX()).thenThrow(new AssertionError("synthetic coordinate encoding fault")); field(broken,"location",location);
+            assertThrows(AssertionError.class,()->h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.DISPLAY,broken,false));
+            assertFalse(h.io.hasUnsubmittedAdmissions());
+            var failed = h.manager.saveSnapshotFromObjects(List.of(grave(record(2)),grave(broken)),List.of());
+            var error = assertThrows(ExecutionException.class,()->await(failed)); assertInstanceOf(AssertionError.class,error.getCause());
+            assertFalse(h.io.hasUnsubmittedAdmissions()); h.manager.close(); h.io.close();
+            assertTrue(h.io.isTerminated()); verify(h.backend,times(1)).close(); verify(h.backend,never()).upsertGrave(any(),anyBoolean());
+        }
+    }
+    @Test void failedBulkAndFollowingWriteStayDurableAndReplayInLogicalOrder() throws Exception {
+        var source = record(1);
+        try (var h = new Fixture(128,directory)) {
+            h.encoding.when(() -> InventorySerializer.encode(any())).thenReturn("x".repeat(8192));
+            var records = new ArrayList<Grave>(); for(int i=0;i<140;i++) records.add(grave(i==0 ? source : record(i+1)));
+            assertThrows(ExecutionException.class,()->await(h.manager.saveSnapshotFromObjects(records,List.of())));
+            source.setDestroyed(true);
+            var following = h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.UPDATE,source,true); assertNotNull(following); following.commit();
+            assertEquals(SqlRecoveryJournal.Disposition.DURABLE,await(following.durable()));
+            assertThrows(ExecutionException.class,()->await(following.commit()));
+            assertEquals(2,h.journal.records());
+            try(var files=java.nio.file.Files.list(directory)) { assertTrue(files.anyMatch(path -> { try { return java.nio.file.Files.size(path)>1_048_576; } catch(Exception failure) { throw new AssertionError(failure); } })); }
+        }
+        try (var h = new Fixture(128,directory)) {
+            assertThrows(ExecutionException.class,()->await(h.manager.loadMySQLForRestoration()));
+            assertTrue(h.owners.isEmpty());
+            var calls = new AtomicInteger(); var updated = new CountDownLatch(1);
+            doAnswer(call -> { assertEquals(8192,SqlJournalHarness.encoded(call.getArgument(0)).length()); calls.incrementAndGet();return null; }).when(h.backend).upsertGrave(any(),anyBoolean());
+            doAnswer(call -> { assertEquals(140,calls.get()); assertTrue(((GravesConfig)call.getArgument(0)).isDestroyed()); updated.countDown();return null; }).when(h.backend).updateExistingGrave(any(),eq(true));
+            h.journal.journal.wake(); assertTrue(updated.await(5,TimeUnit.SECONDS)); assertEquals(140,calls.get());
+        }
+    }
+    @Test void bulkByteBudgetRejectsAtomicallyAndReleasesTheSingleAdmission() throws Exception {
+        try (var h = new Fixture(4,null)) {
+            var constructor = SqlRecoveryJournal.class.getDeclaredConstructor(FeatureIO.class,GraveStorageBackend.class,Path.class,java.util.function.Consumer.class,int.class,long.class);
+            constructor.setAccessible(true);
+            var bounded = constructor.newInstance(h.io,h.backend,h.journal.directory.resolve("bounded"),(java.util.function.Consumer<String>)ignored->{},4,256L);
+            assertTrue(await(bounded.loaded())); field(h.manager,"sqlJournal",bounded);
+            var first = record(1); var second = record(2);
+            assertThrows(ExecutionException.class,()->await(h.manager.saveSnapshotFromObjects(List.of(grave(first),grave(second)),List.of())));
+            assertFalse(h.io.hasUnsubmittedAdmissions()); verify(h.backend,never()).upsertGrave(any(),anyBoolean());
+            assertEquals(4,first.getItems().get(0).getAmount()); assertEquals(4,second.getItems().get(0).getAmount());
+        }
+    }
+    @Test void largeSnapshotYieldsToAlreadyQueuedFeatureWork() throws Exception {
+        try (var h = new Fixture(8,null)) {
+            var entered = new CountDownLatch(1); var release = new CountDownLatch(1); var calls = new AtomicInteger();
+            doAnswer(call -> {
+                if(calls.incrementAndGet()==1) { entered.countDown(); assertTrue(release.await(5,TimeUnit.SECONDS)); }
+                return null;
+            }).when(h.backend).upsertGrave(any(),anyBoolean());
+            var rows = new ArrayList<Grave>(); for(int i=0;i<130;i++) rows.add(grave(record(i+1)));
+            var saved = h.manager.saveSnapshotFromObjects(rows,List.of());
+            try {
+                assertTrue(entered.await(5,TimeUnit.SECONDS));
+                var unrelated = h.io.submit(() -> { assertTrue(calls.get()<130,"bulk must yield before monopolizing the full snapshot"); return true; });
+                release.countDown(); assertTrue(await(unrelated)); assertTrue(await(saved));
+            } finally { release.countDown(); }
+        }
+    }
+    @Test void outageReleasesAdmissionsForEveryHeldBulkSuccessor() throws Exception {
+        try (var h = new Fixture(8,null)) {
+            var release = new CountDownLatch(1); var entered = new CountDownLatch(1);
+            var busy = h.io.submit(() -> { entered.countDown(); try { assertTrue(release.await(5,TimeUnit.SECONDS)); } catch(InterruptedException e) { throw new AssertionError(e); } return true; });
+            assertTrue(entered.await(5,TimeUnit.SECONDS));
+            doThrow(new IllegalStateException("synthetic outage")).when(h.backend).upsertGrave(any(),anyBoolean());
+            var first = h.manager.saveSnapshotFromObjects(List.of(grave(record(1))),List.of());
+            var second = h.manager.saveSnapshotFromObjects(List.of(grave(record(2))),List.of());
+            try {
+                release.countDown(); await(busy);
+                assertThrows(ExecutionException.class,()->await(first)); assertThrows(ExecutionException.class,()->await(second));
+                assertFalse(h.io.hasUnsubmittedAdmissions()); assertEquals(2,h.journal.records());
+            } finally {
+                release.countDown();
+                if(h.io.hasUnsubmittedAdmissions()) await(h.io.submit(() -> {
+                    try { var retire=SqlRecoveryJournal.class.getDeclaredMethod("retireAfterDrain"); retire.setAccessible(true); retire.invoke(h.journal.journal); }
+                    catch(ReflectiveOperationException error) { throw new AssertionError(error); }
+                    return true;
+                }));
+            }
+            h.manager.close(); h.io.close(); assertTrue(h.io.isTerminated()); verify(h.backend,times(1)).close();
         }
     }
 }

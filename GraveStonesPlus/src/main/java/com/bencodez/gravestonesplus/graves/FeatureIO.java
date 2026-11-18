@@ -67,7 +67,7 @@ public final class FeatureIO implements AutoCloseable {
     /** Coalesced internal wake does not consume a ticket reserved by a gameplay caller. */
     public void requestDrain() {
         synchronized (lifecycle) {
-            if (closing || worker.isShutdown() || !drainRequested.compareAndSet(false, true)) return;
+            if (worker.isShutdown() || !drainRequested.compareAndSet(false, true)) return;
             try { worker.execute(() -> { drainRequested.set(false); notifyDrain(); }); }
             catch (RejectedExecutionException full) {
                 // Accepted queued work guarantees its final idle drain.

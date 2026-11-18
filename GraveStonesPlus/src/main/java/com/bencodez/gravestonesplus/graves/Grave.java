@@ -1286,13 +1286,32 @@ public class Grave {
         final com.bencodez.gravestonesplus.storage.GravesConfig captured;
         try { captured = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig); }
         catch (RuntimeException invalid) { releaseClaim(); return; }
-        plugin.getGraveClaimLedger().reserveQueuedLimit(identity, gravesConfig.getUuid()).whenComplete((saved, failure) -> {
-            if (failure != null || !Boolean.TRUE.equals(saved)) { releaseClaim(); return; }
+        final com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sql;
+        final long destroyedAt = System.currentTimeMillis();
+        var storage = plugin.getStorageManager();
+        try {
+            if (storage != null && storage.isMySQL()) {
+                var removed = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(captured);
+                removed.setDestroyed(true); removed.setDestroyedTime(destroyedAt);
+                sql = storage.reserveSqlTransition(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.UPDATE, removed, true);
+                if (sql == null) { releaseClaim(); return; }
+            } else sql = null;
+        } catch (RuntimeException rejected) { releaseClaim(); return; }
+        var lifecycle = new java.util.concurrent.CompletableFuture<Boolean>();
+        lifecycle.whenComplete((value, failure) -> { if (sql != null) sql.close(); });
+        if (!observeLifecycle(lifecycle, false)) { releaseClaim(); return; }
+        try { plugin.getGraveClaimLedger().reserveQueuedLimit(identity, gravesConfig.getUuid()).whenComplete((saved, failure) -> {
+            if (lifecycle.isDone() || failure != null || !Boolean.TRUE.equals(saved)) { lifecycle.complete(false); releaseClaim(); return; }
             java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
-            Runnable retired = () -> { if (started.compareAndSet(false, true)) deferLimitPayout(identity); };
+            Runnable retired = () -> { if (started.compareAndSet(false, true)) {
+                lifecycle.complete(false); deferLimitPayout(identity);
+            } };
             try {
                 plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(captured.getLocation(), task -> {
                     if (!started.compareAndSet(false, true)) return;
+                    boolean payoutStarted = false;
+                    try {
+                    if (lifecycle.isDone()) { releaseClaim(); return; }
                     Location loc = captured.getLocation();
                     // The disk reservation can outlive the grave's remaining lifetime.
                     // No world payout has occurred, so return ownership to the queued
@@ -1314,25 +1333,43 @@ public class Grave {
                         deferLimitPayout(identity); return;
                     }
                     try {
+                        payoutStarted = true;
                         for (ItemStack item : GravePayout.select(captured.getItems(), plugin.getConfigFile().getPercentageDrops(),
                                 () -> ThreadLocalRandom.current().nextInt(100)).values()) loc.getWorld().dropItem(loc, item);
                         if (captured.getExp() > 0) loc.getWorld().spawn(loc, org.bukkit.entity.ExperienceOrb.class).setExperience(captured.getExp());
-                        plugin.getGraveClaimLedger().paid(identity, gravesConfig.getUuid()).whenComplete((paid, paidFailure) -> {
-                            if (paidFailure != null || !Boolean.TRUE.equals(paid)) plugin.getLogger().severe("Grave ground payout completed but its completion record could not be saved; reservation prevents replay.");
-                        });
-                        remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(System.currentTimeMillis());
-                        plugin.removeGrave(this); plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
+                        remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(destroyedAt);
+                        java.util.concurrent.CompletableFuture<Boolean> stored;
+                        if (sql == null) { plugin.removeGrave(this); stored = java.util.concurrent.CompletableFuture.completedFuture(true); }
+                        else stored = plugin.removeGrave(this, sql);
+                        var paid = sql == null ? plugin.getGraveClaimLedger().paid(identity, gravesConfig.getUuid())
+                                : sql.durable().thenCompose(disposition -> disposition == com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE
+                                    ? plugin.getGraveClaimLedger().paid(identity, gravesConfig.getUuid())
+                                    : java.util.concurrent.CompletableFuture.completedFuture(false));
+                        plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
                         plugin.getGraveNavigation().invalidate(identity); removeTimer(); cleanupMarker();
                         Player recipient = limitRecipient.get(); limitRecipient.clear();
-                        if (recipient != null) plugin.getBukkitScheduler().runTask(plugin, () -> {
-                            if (plugin.isEnabled() && recipient.isOnline()) recipient.sendMessage(MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak()));
-                        }, recipient);
+                        final String message = MessageAPI.colorize(plugin.getConfigFile().getFormatGraveLimitBreak());
+                        paid.thenCombine(stored, (receipt, written) -> Boolean.TRUE.equals(receipt) && Boolean.TRUE.equals(written))
+                            .whenComplete((acknowledged, completionFailure) -> {
+                                if (completionFailure != null || !Boolean.TRUE.equals(acknowledged)) {
+                                    plugin.getLogger().severe("Grave ground payout completion remains held; owner evidence prevents replay."); return;
+                                }
+                                if (recipient != null) try { plugin.getBukkitScheduler().runTask(plugin, () -> {
+                                    if (plugin.isEnabled() && recipient.isOnline()) recipient.sendMessage(message);
+                                }, recipient); } catch (RuntimeException unavailable) { plugin.getLogger().fine("Acknowledged limit payout feedback unavailable."); }
+                            });
                     } catch (RuntimeException interrupted) {
                         plugin.getLogger().severe("Grave ground payout interrupted after reservation; replay is blocked and exact contents/XP remain in recovery evidence.");
                     } finally { releaseClaim(); }
+                    } catch (RuntimeException prePayoutFailure) {
+                        // Payout exceptions are consumed by the inner non-replayable path.
+                        // Only this pre-payout branch may return the ledger to QUEUED_LIMIT.
+                        if (!payoutStarted) deferLimitPayout(identity);
+                        else plugin.getLogger().severe("Grave ground payout remains held after a post-payout callback failure.");
+                    } finally { lifecycle.complete(true); }
                 }).whenComplete((result, schedulingFailure) -> { if (schedulingFailure != null) retired.run(); });
             } catch (RuntimeException schedulingFailure) { retired.run(); }
-        });
+        }); } catch (RuntimeException rejected) { lifecycle.complete(false); releaseClaim(); }
     }
     private void deferLimitPayout(String identity) {
         plugin.getGraveClaimLedger().deferLimitReservation(identity, gravesConfig.getUuid())
@@ -1697,13 +1734,23 @@ public class Grave {
     }
     private void completeClaim(Player player, String identity, boolean displaced, ClaimAttempt attempt) {
         try {
-            var paid = plugin.getGraveClaimLedger().paid(identity, player.getUniqueId());
+            java.util.UUID recipientId = player.getUniqueId();
             remove = true; gravesConfig.setDestroyed(true);
             gravesConfig.setDestroyedTime(attempt.destroyedAt == 0 ? System.currentTimeMillis() : attempt.destroyedAt);
             var sql = attempt.sqlRemoval();
             java.util.concurrent.CompletableFuture<Boolean> stored;
             if (sql == null) { plugin.removeGrave(this); stored = java.util.concurrent.CompletableFuture.completedFuture(true); }
             else stored = plugin.removeGrave(this, sql);
+            // A PAID tombstone must not outrun its recoverable SQL intent. If
+            // publication is HELD, RESERVED keeps the exact evidence for reconciliation.
+            var paid = sql == null ? plugin.getGraveClaimLedger().paid(identity, recipientId)
+                    : sql.durable().thenCompose(disposition -> disposition == com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE
+                        ? plugin.getGraveClaimLedger().paid(identity, recipientId)
+                        : java.util.concurrent.CompletableFuture.completedFuture(false));
+            final String successMessage = isOwner(player) || plugin.getConfigFile().isBreakOtherGravesSendMessage()
+                    ? MessageAPI.colorize(isOwner(player) ? plugin.getConfigFile().getFormatGraveBroke()
+                        : MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBrokeOther(), "player", gravesConfig.getPlayerName())) : "";
+            final String displacedMessage = displaced ? MessageAPI.colorize(plugin.getConfigFile().getFormatItemsNotInGrave()) : "";
             plugin.getTrustedGraveAccessStore().revokeForGraveAsync(identity);
             plugin.getGraveNavigation().invalidate(identity); removeTimer(); scheduleMarkerCleanup();
             // Register only after the gameplay transition; disk completion alone
@@ -1713,11 +1760,14 @@ public class Grave {
                 boolean acknowledged = failure == null && Boolean.TRUE.equals(saved);
                 if (!acknowledged) plugin.getLogger().severe("Grave payout completed but completion record could not be saved; durable reservation still prevents replay.");
                 attempt.finish(acknowledged ? ClaimResult.COMPLETED : ClaimResult.HELD);
+                if (acknowledged) try {
+                    plugin.getBukkitScheduler().runTask(plugin, () -> {
+                        if (!plugin.isEnabled() || !player.isOnline()) return;
+                        if (!successMessage.isEmpty()) claimFeedback(player, successMessage);
+                        if (!displacedMessage.isEmpty()) claimFeedback(player, displacedMessage);
+                    }, player);
+                } catch (RuntimeException retired) { plugin.getLogger().fine("Acknowledged grave payout feedback unavailable."); }
             });
-            if (isOwner(player) || plugin.getConfigFile().isBreakOtherGravesSendMessage()) claimFeedback(player, MessageAPI.colorize(isOwner(player)
-                    ? plugin.getConfigFile().getFormatGraveBroke()
-                    : MessageAPI.replacePlaceHolder(plugin.getConfigFile().getFormatGraveBrokeOther(), "player", gravesConfig.getPlayerName())));
-            if (displaced) claimFeedback(player, MessageAPI.colorize(plugin.getConfigFile().getFormatItemsNotInGrave()));
         } finally {
             synchronized (this) { if (attempt.ownsClaim) { attempt.ownsClaim = false; releaseClaim(); } }
         }

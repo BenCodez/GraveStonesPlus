@@ -29,6 +29,7 @@ final class ClaimHarness implements AutoCloseable {
     final MockedStatic<Bukkit> bukkit;
     final Grave grave;
     final ItemStack cloned;
+    final org.bukkit.World world;
 
     ClaimHarness() throws Exception {
         var type = Class.forName("com.bencodez.gravestonesplus.graves.GraveActionsTest$Harness");
@@ -38,6 +39,7 @@ final class ClaimHarness implements AutoCloseable {
         plugin = field(delegate, "plugin"); owner = field(delegate, "owner");
         ownerInventory = field(delegate, "ownerInventory"); events = field(delegate, "events");
         entityWork = field(delegate, "entityWork"); active = field(delegate, "active");
+        world = field(delegate, "world");
         bukkit = field(delegate, "bukkit"); grave = field(delegate, "grave"); cloned = field(delegate, "cloned");
     }
     @SuppressWarnings("unchecked")
@@ -53,6 +55,15 @@ final class ClaimHarness implements AutoCloseable {
             throw failure;
         }
     }
+    private Object fixture(String name) throws Exception {
+        var method=delegate.getClass().getEnclosingClass().getDeclaredMethod(name,delegate.getClass());method.setAccessible(true);
+        try { return method.invoke(null,delegate); }
+        catch(InvocationTargetException failure) { if(failure.getCause() instanceof Exception cause) throw cause;throw failure; }
+    }
+    GraveRestoration limitRestoration() throws Exception { return (GraveRestoration)fixture("limitRestoration"); }
+    org.bukkit.entity.ExperienceOrb groundWorld() throws Exception { return (org.bukkit.entity.ExperienceOrb)fixture("groundWorld"); }
+    void drainGround() throws Exception { fixture("drainGround"); }
+    void resumeLimit() throws Exception { invoke(grave,"resumeLimitPayout"); }
     String identity() throws Exception { return (String) invoke(delegate, "identity"); }
     void drain() throws Exception { invoke(delegate, "drain"); }
     void retireAcknowledgments() throws Exception { invoke(grave, "retireAcknowledgments"); }

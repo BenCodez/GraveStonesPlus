@@ -142,6 +142,8 @@ class ClaimCompletionTest {
             var storage = mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
             var ticket = mock(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation.class);
             var written = new CompletableFuture<Boolean>(); when(ticket.commit()).thenReturn(written);
+            var durable = new CompletableFuture<com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition>();
+            when(ticket.durable()).thenReturn(durable);
             when(storage.isMySQL()).thenReturn(true); when(h.plugin.getStorageManager()).thenReturn(storage);
             when(storage.reserveSqlTransition(any(),any(),eq(true))).thenAnswer(call -> {
                 verify(h.owner,never()).giveExp(anyInt()); assertFalse(h.grave.getGravesConfig().isDestroyed()); return ticket;
@@ -149,12 +151,17 @@ class ClaimCompletionTest {
             when(h.plugin.removeGrave(eq(h.grave),same(ticket))).thenAnswer(call -> { h.active.remove(h.grave); return ticket.commit(); });
             var result = h.grave.claimAsync(h.owner); h.drain();
             verify(h.owner,times(1)).giveExp(17); verify(ticket).commit(); assertFalse(result.isDone());
+            assertEquals(com.bencodez.gravestonesplus.graves.GraveClaimLedger.Restoration.RESERVED,ClaimHarness.await(h.ledger.restoration(h.identity())));
+            verify(h.owner,never()).sendMessage("Paid");
+            durable.complete(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.DURABLE); h.drain();
+            assertEquals(com.bencodez.gravestonesplus.graves.GraveClaimLedger.Restoration.PAID,ClaimHarness.await(h.ledger.restoration(h.identity())));
             if(succeeds) written.complete(true); else written.completeExceptionally(new IllegalStateException("synthetic SQL outage"));
             h.drain(); assertEquals(succeeds ? ClaimResult.COMPLETED : ClaimResult.HELD,ClaimHarness.await(result));
             assertTrue(h.ledger.isBlocked(h.identity()));
             var retry = h.grave.claimAsync(h.owner); h.drain();
             assertNotEquals(ClaimResult.COMPLETED,ClaimHarness.await(retry));
             verify(h.owner,times(1)).giveExp(17); verify(ticket).close();
+            verify(h.owner,times(succeeds ? 1 : 0)).sendMessage("Paid");
         }
     }
     @Test void retiredClaimReleasesReservedSqlCapacityWithoutCommitting() throws Exception {
@@ -237,6 +244,23 @@ class ClaimCompletionTest {
             var journal=new com.bencodez.gravestonesplus.storage.SqlRecoveryJournal(io,backend,sqlDirectory.resolve("sql"),ignored->{});
             assertTrue(ClaimHarness.await(journal.loaded()));assertTrue(replay.await(3,TimeUnit.SECONDS));
             journal.close();verify(backend,never()).upsertGrave(any(),anyBoolean());
+        }
+    }
+
+    @Test void heldSqlPublicationRetainsReservedEvidenceAndNeverAdvertisesSuccess() throws Exception {
+        try(var h = new ClaimHarness()) {
+            var storage=mock(com.bencodez.gravestonesplus.storage.GraveStorageManager.class);
+            var ticket=mock(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation.class);
+            when(storage.isMySQL()).thenReturn(true);when(h.plugin.getStorageManager()).thenReturn(storage);
+            when(storage.reserveSqlTransition(any(),any(),eq(true))).thenReturn(ticket);
+            when(ticket.commit()).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("synthetic journal publication held")));
+            when(ticket.durable()).thenReturn(CompletableFuture.completedFuture(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Disposition.HELD));
+            when(h.plugin.removeGrave(eq(h.grave),same(ticket))).thenAnswer(call -> {h.active.remove(h.grave);return ticket.commit();});
+            var ledger=spy(h.ledger);when(h.plugin.getGraveClaimLedger()).thenReturn(ledger);
+            var result=h.grave.claimAsync(h.owner);h.drain();assertEquals(ClaimResult.HELD,ClaimHarness.await(result));
+            verify(h.owner,times(1)).giveExp(17);verify(ledger,never()).paid(anyString(),any());
+            assertEquals(com.bencodez.gravestonesplus.graves.GraveClaimLedger.Restoration.RESERVED,ClaimHarness.await(ledger.restoration(h.identity())));
+            verify(h.owner,never()).sendMessage("Paid");verify(ticket).close();
         }
     }
 

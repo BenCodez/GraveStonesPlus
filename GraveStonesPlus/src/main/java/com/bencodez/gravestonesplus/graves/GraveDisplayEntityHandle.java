@@ -34,6 +34,21 @@ public class GraveDisplayEntityHandle {
 		return display;
 	}
 
+    /** Location-owned recreation capture. No claim metadata is exposed before SQL acknowledgment. */
+    @SuppressWarnings("deprecation")
+    ItemDisplay createRecreationDisplay(Grave grave, java.util.function.Consumer<ItemDisplay> spawned) {
+        Location loc = grave.getGravesConfig().getLocation();
+        Location displayLocation = new Location(loc.getWorld(), loc.getBlockX() + .5, loc.getBlockY() + .5,
+                loc.getBlockZ() + .5);
+        ItemDisplay display = loc.getWorld().spawn(displayLocation, ItemDisplay.class);
+        // Transfer the handle before any configurable native initialization can throw.
+        spawned.accept(display);
+        display.setItemStack(new ItemBuilder(Material.PLAYER_HEAD)
+                .setSkullOwner(Bukkit.getOfflinePlayer(grave.getGravesConfig().getUuid())).toItemStack());
+        display.setVisibleByDefault(true);
+        return display;
+    }
+
 	public ItemDisplay getItemDisplay(Grave grave) {
 		for (Entity entity : grave.getGravesConfig().getLocation().getWorld()
 				.getNearbyEntities(grave.getGravesConfig().getLocation(), 2, 2, 2)) {

@@ -99,6 +99,7 @@ public class Grave {
 	@Getter
 	private volatile boolean remove = false;
     private volatile boolean claimInProgress;
+    private volatile java.util.concurrent.CompletableFuture<Boolean> removalAcknowledgment = java.util.concurrent.CompletableFuture.completedFuture(false);
     @Getter private volatile boolean limitPayoutPending;
     private java.lang.ref.WeakReference<Player> limitRecipient = new java.lang.ref.WeakReference<>(null);
     private volatile long expiryDeadline;
@@ -598,15 +599,18 @@ public class Grave {
             plugin.getBukkitScheduler().runTask(plugin, () -> {
                 if (!removeState(reason, () -> plugin.isEnabled() && plugin.isLiveGrave(this))) return;
                 cleanupMarker();
-                try {
-                    plugin.getBukkitScheduler().runTask(plugin, () -> {
-                        if (plugin.isEnabled() && player.isOnline())
-                            player.sendMessage(MessageAPI.colorize("&cGrave removed"));
-                    }, player);
-                } catch (RuntimeException retired) {
-                    // Removal already completed. Retiring feedback cannot undo it.
-                    plugin.debug("Grave removal feedback could not be scheduled.");
-                }
+                removalAcknowledgment.whenComplete((saved, failure) -> {
+                    if (failure != null || !Boolean.TRUE.equals(saved)) return;
+                    try {
+                        plugin.getBukkitScheduler().runTask(plugin, () -> {
+                            if (plugin.isEnabled() && player.isOnline())
+                                player.sendMessage(MessageAPI.colorize("&cGrave removed"));
+                        }, player);
+                    } catch (RuntimeException retired) {
+                        // Feedback cannot undo the acknowledged storage transition.
+                        plugin.debug("Grave removal feedback could not be scheduled.");
+                    }
+                });
             }, gravesConfig.getLocation());
         }, player);
     }
@@ -636,7 +640,7 @@ public class Grave {
             try {
                 var removed = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig);
                 removed.setDestroyed(true); removed.setDestroyedTime(destroyedAt);
-                sql = storage.reserveSqlTransition(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.UPDATE, removed, true);
+                sql = storage.reserveSqlTransition(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.REMOVE, removed, true);
             } catch (RuntimeException rejected) { /* A failed capture is a pre-mutation rejection. */ }
             catch (Error fatal) { if (ticket != null) ticket.close(); throw fatal; }
             if (sql == null) {
@@ -645,6 +649,8 @@ public class Grave {
                 return false;
             }
         }
+        var confirmed = new java.util.concurrent.CompletableFuture<Boolean>();
+        removalAcknowledgment = confirmed;
         try {
         cleanupTicket = ticket;
         remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(destroyedAt);
@@ -655,12 +661,14 @@ public class Grave {
             plugin.getGraveClaimLedger().cancelQueuedLimit(GraveIdentity.of(gravesConfig));
         }
         removeTimer();
-        if (sql == null) plugin.removeGrave(this);
+        if (sql == null) { plugin.removeGrave(this); confirmed.complete(true); }
         else plugin.removeGrave(this, sql).whenComplete((saved, failure) -> {
             if (failure != null || !Boolean.TRUE.equals(saved)) plugin.getLogger().severe("Grave removal remains held for SQL reconciliation.");
+            if (failure == null) confirmed.complete(saved); else confirmed.completeExceptionally(failure);
         });
         return true;
-        } finally { if (sql != null) sql.close(); }
+        } catch (RuntimeException | Error failure) { confirmed.completeExceptionally(failure); throw failure; }
+        finally { if (sql != null) sql.close(); }
     }
     /** Admission pressure is transient; retry one current deadline without retaining a queue of tasks. */
     private synchronized void retryExpiration(long deadline) {

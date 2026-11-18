@@ -92,6 +92,11 @@ public class MySQLGraveStorageBackend implements GraveStorageBackend {
         table.updateExistingGraveChecked(grave, broken);
 	}
 
+    @Override public void removeExistingGrave(GravesConfig grave) {
+        if (table == null) throw new IllegalStateException("MySQL grave table unavailable");
+        table.removeExistingGraveChecked(grave);
+    }
+
 	@Override
 	public void deleteGrave(GravesConfig grave) {
         if (table == null) throw new IllegalStateException("MySQL grave table unavailable");

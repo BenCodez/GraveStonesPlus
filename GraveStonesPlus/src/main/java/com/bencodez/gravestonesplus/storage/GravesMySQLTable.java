@@ -211,7 +211,14 @@ public class GravesMySQLTable extends AbstractSqlTable {
         updateExistingGrave(grave, broken, true);
     }
 
+    public void removeExistingGraveChecked(GravesConfig grave) {
+        if (grave == null || !grave.isDestroyed()) throw new IllegalArgumentException("Removal requires terminal grave state");
+        updateExistingGrave(grave, true, true, true);
+    }
     private void updateExistingGrave(GravesConfig grave, boolean broken, boolean checked) {
+        updateExistingGrave(grave, broken, checked, false);
+    }
+    private void updateExistingGrave(GravesConfig grave, boolean broken, boolean checked, boolean removal) {
 		if (grave == null || grave.getUuid() == null || grave.getLocation() == null || grave.getWorldId() == null) {
             if (checked) throw new IllegalArgumentException("Grave write requires a complete identity");
 			return;
@@ -257,13 +264,42 @@ public class GravesMySQLTable extends AbstractSqlTable {
 			ps.setInt(15, grave.getLocation().getBlockZ());
 			ps.setLong(16, grave.getTime());
 
-			ps.executeUpdate();
+            int affected = ps.executeUpdate();
+            if (removal) {
+                if (affected < 0 || affected > 1) throw new SQLException("Removal affected an unexpected number of rows");
+                confirmRemoval(conn, grave);
+            }
 
 		} catch (SQLException e) {
             if (checked) throw new IllegalStateException("Grave SQL write was not acknowledged", e);
 			debug(e);
 		}
 	}
+
+    /** A changed-row or matched-row driver must confirm exactly the terminal snapshot, without fetching inventories. */
+    private void confirmRemoval(Connection conn, GravesConfig grave) throws SQLException {
+        String identity = qi("player_uuid")+"=? AND "+qi("world_uuid")+"=? AND "+qi("x")+"=? AND "+qi("y")+"=? AND "+qi("z")+"=? AND "+qi("time")+"=?";
+        String sql = "SELECT 1 FROM "+qi(tableName)+" WHERE "+identity
+                +" AND "+qi("broken")+"=? AND CAST("+qi("player_name")+" AS BINARY) <=> CAST(? AS BINARY)"
+                +" AND CAST("+qi("death_message")+" AS BINARY) <=> CAST(? AS BINARY) AND "+qi("exp")+"=?"
+                +" AND "+qi("destroyed")+"=? AND "+qi("destroyed_time")+"=?"
+                +" AND CAST("+qi("display_uuid")+" AS BINARY) <=> CAST(? AS BINARY)"
+                +" AND CAST("+qi("interact_uuid")+" AS BINARY) <=> CAST(? AS BINARY)"
+                +" AND CAST("+qi("grave_display_type")+" AS BINARY) <=> CAST(? AS BINARY)"
+                +" AND CAST("+qi("items_encoded")+" AS BINARY) <=> CAST(? AS BINARY) LIMIT 2;";
+        try (PreparedStatement query = conn.prepareStatement(sql)) {
+            query.setString(1,grave.getUuid().toString());query.setString(2,grave.getWorldId().toString());
+            query.setInt(3,grave.getLocation().getBlockX());query.setInt(4,grave.getLocation().getBlockY());query.setInt(5,grave.getLocation().getBlockZ());query.setLong(6,grave.getTime());
+            query.setInt(7,1);query.setString(8,safeString(grave.getPlayerName()));query.setString(9,safeString(grave.getDeathMessage()));query.setInt(10,grave.getExp());
+            query.setInt(11,1);query.setLong(12,grave.getDestroyedTime());
+            query.setString(13,grave.getDisplayUUID()==null?null:grave.getDisplayUUID().toString());
+            query.setString(14,grave.getInteractUUID()==null?null:grave.getInteractUUID().toString());
+            query.setString(15,safeString(grave.getGraveDisplayType()));query.setString(16,grave.encodedItemsForStorage());
+            try (ResultSet result = query.executeQuery()) {
+                if (!result.next() || result.next()) throw new SQLException("Exact stored removal state was not confirmed");
+            }
+        }
+    }
 
     /** Update only display identities on this exact still-active record. */
     public void saveDisplayIdentity(GravesConfig grave) {

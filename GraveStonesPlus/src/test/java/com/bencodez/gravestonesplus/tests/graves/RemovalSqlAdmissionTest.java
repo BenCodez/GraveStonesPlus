@@ -32,7 +32,7 @@ class RemovalSqlAdmissionTest {
                 try {
                     for(int i=0;i<129;i++) {var ticket=h.io.admit();assertNotNull(ticket);tickets.add(ticket);}
                     h.grave.removeGrave(reason);
-                    verify(manager).reserveSqlTransition(eq(SqlRecoveryJournal.Kind.UPDATE),argThat(record->record.isDestroyed()),eq(true));
+                    verify(manager).reserveSqlTransition(eq(SqlRecoveryJournal.Kind.REMOVE),argThat(record->record.isDestroyed()),eq(true));
                     assertFalse(h.grave.isRemove());assertFalse(h.grave.getGravesConfig().isDestroyed());assertTrue(h.active.contains(h.grave));
                     assertTrue(h.grave.isLimitPayoutPending());assertEquals(deadline,h.grave.getExpiryDeadline());
                     verify(cleanupTicket).close();verify(cleanupTicket,never()).commit();
@@ -41,7 +41,7 @@ class RemovalSqlAdmissionTest {
                     verify(h.plugin,never()).removeGrave(any());verify(h.plugin,never()).removeGrave(any(),any());
                 } finally {tickets.forEach(FeatureIO.Admission::close);}
                 assertEquals(GraveClaimLedger.Restoration.QUEUED_LIMIT,ClaimHarness.await(h.ledger.restoration(h.identity())));
-                assertEquals(0,journal.records());verify(backend,never()).updateExistingGrave(any(),anyBoolean());
+                assertEquals(0,journal.records());verify(backend,never()).removeExistingGrave(any());
             }
         }
     }

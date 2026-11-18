@@ -318,7 +318,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
             GravesConfig grave, boolean broken) {
         if (!isMySQL() || backend == null || sqlJournal == null || closeRequested || backendClosed || restorationLoading
                 || !sqlJournal.isReady()) return null;
-        GravesConfig captured = kind == SqlRecoveryJournal.Kind.UPSERT || kind == SqlRecoveryJournal.Kind.UPDATE
+        GravesConfig captured = kind == SqlRecoveryJournal.Kind.UPSERT || kind == SqlRecoveryJournal.Kind.UPDATE || kind == SqlRecoveryJournal.Kind.REMOVE
                 ? snapshot(grave) : metadataSnapshot(grave);
         return sqlJournal.reserve(kind, captured, broken);
     }

@@ -93,6 +93,11 @@ public interface GraveStorageBackend {
 		// no-op
 	}
 
+    /** Internal exact existing-row removal; unsupported implementations must not acknowledge it. */
+    default void removeExistingGrave(GravesConfig grave) {
+        throw new UnsupportedOperationException("Backend cannot acknowledge exact removal");
+    }
+
 	/**
 	 * Delete a single grave (incremental write). Default implementation is no-op
 	 * (used only by MySQL backend).

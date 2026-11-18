@@ -19,7 +19,7 @@ public final class SqlRecoveryJournal {
     /** HELD may replay after repair/restart: the caller must retain ownership and must not restore/drop rewards.
      * CANCELLED is possible only before commit and cannot replay. DURABLE is not an SQL acknowledgment. */
     public enum Disposition { DURABLE, HELD, CANCELLED }
-    public enum Kind { UPSERT, UPDATE, FLAG, DISPLAY, RECREATE, BULK }
+    public enum Kind { UPSERT, UPDATE, FLAG, DISPLAY, RECREATE, BULK, REMOVE }
     private enum Phase { RESERVED, READY, DURABLE }
     private static final int VERSION = 1;
     private static final int MAX_RECORD = 1_048_576;
@@ -333,6 +333,7 @@ public final class SqlRecoveryJournal {
         switch (entry.kind) {
             case UPSERT -> backend.upsertGrave(entry.grave, entry.broken);
             case UPDATE -> backend.updateExistingGrave(entry.grave, entry.broken);
+            case REMOVE -> backend.removeExistingGrave(entry.grave);
             case FLAG -> backend.setBroken(entry.grave, entry.broken);
             case DISPLAY -> backend.saveDisplayIdentity(entry.grave);
             case RECREATE -> backend.saveRecreatedGrave(entry.grave);
@@ -479,7 +480,7 @@ public final class SqlRecoveryJournal {
             text(output, Objects.toString(grave.getPlayerName(), "")); text(output, Objects.toString(grave.getDeathMessage(), ""));
             output.writeInt(grave.getExp()); output.writeBoolean(grave.isDestroyed()); output.writeLong(grave.getDestroyedTime());
             uuid(output, grave.getDisplayUUID()); uuid(output, grave.getInteractUUID()); text(output, Objects.toString(grave.getGraveDisplayType(), ""));
-            text(output, kind == Kind.UPSERT || kind == Kind.UPDATE ? grave.encodedItemsForStorage() : "");
+            text(output, kind == Kind.UPSERT || kind == Kind.UPDATE || kind == Kind.REMOVE ? grave.encodedItemsForStorage() : "");
         }
         byte[] body = bytes.toByteArray();
         byte[] checksum = digest(body);

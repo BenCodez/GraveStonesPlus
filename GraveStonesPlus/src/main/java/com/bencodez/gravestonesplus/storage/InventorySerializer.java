@@ -3,6 +3,8 @@ package com.bencodez.gravestonesplus.storage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.util.List;
+import java.util.HashSet;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -14,10 +16,14 @@ import org.bukkit.util.io.BukkitObjectOutputStream;
  * Utility to serialize and deserialize a map of inventory slots to {@link ItemStack}s.
  *
  * <p>The array index used when encoding corresponds to the original slot number
- * (0–35 for the main inventory and negative values for armour/off?hand).  Empty slots
+ * (nonnegative for the main inventory). Negative slots have distinct appended
+ * positions and an optional slot-key suffix. Legacy arrays without that suffix
+ * retain their surviving nonnegative keys. Empty slots
  * are represented as {@code null} entries and are omitted when deserializing.</p>
  */
 public final class InventorySerializer {
+
+    private static final int SLOT_KEYS = 0x534c5431; // SLT1
 
     /**
      * Encodes a map of slot indices and items into a Base64 string.
@@ -27,27 +33,19 @@ public final class InventorySerializer {
      * @throws IOException if writing fails
      */
     public static String encode(HashMap<Integer, ItemStack> items) throws IOException {
-        // Determine the highest positive slot index
-        int maxSlot = items.keySet().stream()
-                .filter(i -> i >= 0)
-                .max(Integer::compareTo)
-                .orElse(-1);
-        // Determine the number of armour/off?hand entries
-        int minSlot = items.keySet().stream()
-                .filter(i -> i < 0)
-                .min(Integer::compareTo)
-                .orElse(0);
-        int totalSize = Math.max(maxSlot + 1, Math.abs(minSlot) + 1);
-
-        ItemStack[] array = new ItemStack[totalSize];
-        for (Map.Entry<Integer, ItemStack> e : items.entrySet()) {
-            int index = e.getKey();
-            // Normal inventory slots use 0+, negative values are remapped to the end
-            if (index >= 0) {
-                array[index] = e.getValue();
-            } else {
-                array[array.length + index] = e.getValue();
-            }
+        int maxSlot = items.keySet().stream().filter(i -> i >= 0)
+                .max(Integer::compareTo).orElse(-1);
+        List<Integer> equipment = items.keySet().stream().filter(i -> i < 0).sorted().toList();
+        long totalSize = (long) maxSlot + 1 + equipment.size();
+        if (totalSize > Integer.MAX_VALUE) {
+            throw new IOException("Inventory slot range is too large");
+        }
+        ItemStack[] array = new ItemStack[(int) totalSize];
+        for (Map.Entry<Integer, ItemStack> entry : items.entrySet()) {
+            if (entry.getKey() >= 0) array[entry.getKey()] = entry.getValue();
+        }
+        for (int i = 0; i < equipment.size(); i++) {
+            array[maxSlot + 1 + i] = items.get(equipment.get(i));
         }
 
         try (ByteArrayOutputStream baos = new ByteArrayOutputStream();
@@ -56,6 +54,14 @@ public final class InventorySerializer {
             for (ItemStack item : array) {
                 oos.writeObject(item);
             }
+            if (!equipment.isEmpty()) {
+                // Append metadata after the unchanged positional frame. Old readers
+                // still retain each value, but cannot restore equipment positions.
+                oos.writeInt(SLOT_KEYS);
+                oos.writeInt(equipment.size());
+                for (int slot : equipment) oos.writeInt(slot);
+            }
+            oos.flush();
             return java.util.Base64.getEncoder().encodeToString(baos.toByteArray());
         }
     }
@@ -72,6 +78,9 @@ public final class InventorySerializer {
         byte[] bytes = java.util.Base64.getDecoder().decode(data);
         try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes);
              BukkitObjectInputStream ois = new BukkitObjectInputStream(bais)) {
+            // The previous empty writer returned only the valid stream header
+            // because its count was not flushed before extracting the bytes.
+            if (bytes.length == 4) return items;
             int size = ois.readInt();
             for (int i = 0; i < size; i++) {
                 try {
@@ -82,6 +91,22 @@ public final class InventorySerializer {
                 } catch (ClassNotFoundException e) {
                     throw new IOException("Could not read inventory data", e);
                 }
+            }
+            // A legacy frame ends cleanly. Once any suffix byte exists,
+            // require the complete marker instead of swallowing partial EOF.
+            int first = ois.read();
+            if (first == -1) return items;
+            int marker = (first << 24) | (ois.readUnsignedByte() << 16)
+                    | (ois.readUnsignedByte() << 8) | ois.readUnsignedByte();
+            if (marker != SLOT_KEYS) throw new IOException("Invalid slot-key marker");
+            int count = ois.readInt();
+            if (count <= 0 || count > size) throw new IOException("Invalid slot-key count");
+            HashSet<Integer> seen = new HashSet<>();
+            for (int i = 0; i < count; i++) {
+                int slot = ois.readInt();
+                if (slot >= 0 || !seen.add(slot)) throw new IOException("Invalid equipment slot key");
+                ItemStack item = items.remove(size - count + i);
+                if (item != null) items.put(slot, item);
             }
         }
         return items;

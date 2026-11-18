@@ -296,4 +296,24 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @Test void cancellingRecreationBarrierWakesAcceptedSuffixBeforeFinalAdmissionRelease() throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(h.io));
+            doAnswer(call->{
+                var original=h.io.admit();if(original==null)return null;
+                var wrapped=mock(FeatureIO.Admission.class,org.mockito.AdditionalAnswers.delegatesTo(original));
+                doAnswer(unused->{original.close();assertTrue(h.closed.await(5,TimeUnit.SECONDS));return null;}).when(wrapped).close();
+                return wrapped;
+            }).when(proxy).admit();
+            field(h.journal.journal,"io",proxy);var record=record(1);
+            try(var barrier=h.journal.journal.reserveRecreation(record);var following=h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.UPDATE,record,true)) {
+                assertNotNull(barrier);assertNotNull(following);following.commit();h.manager.close();await(h.io.barrier());
+                verify(h.backend,never()).close();verify(h.backend,never()).updateExistingGrave(any(),anyBoolean());
+                barrier.close();assertFalse(await(barrier.commit()));assertTrue(await(following.commit()));
+                assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(barrier.durable()));
+                verify(h.backend,times(1)).updateExistingGrave(any(),eq(true));verify(h.backend,times(1)).close();
+            }
+        }
+    }
+
 }

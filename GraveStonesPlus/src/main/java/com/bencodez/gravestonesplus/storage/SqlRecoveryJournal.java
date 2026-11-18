@@ -23,6 +23,7 @@ public final class SqlRecoveryJournal {
     private enum Phase { RESERVED, READY, DURABLE }
     private static final int VERSION = 1;
     private static final int MAX_RECORD = 1_048_576;
+    private static final int RECREATION_BYTES = 177;
     private static final int MAX_FILE = 64 * 1_048_576;
     private static final int MAX_ENTRIES = 256;
     private static final long MAX_BYTES = 64L * 1_048_576;
@@ -43,9 +44,11 @@ public final class SqlRecoveryJournal {
     private static final class Entry {
         final long sequence;
         final Kind kind;
-        final GravesConfig grave;
+        GravesConfig grave;
         final boolean broken;
-        final byte[] payload;
+        byte[] payload;
+        final long charge;
+        final boolean late;
         final String identity;
         final List<Entry> rows;
         int nextRow;
@@ -57,13 +60,23 @@ public final class SqlRecoveryJournal {
         Entry(long sequence, Kind kind, GravesConfig grave, boolean broken, byte[] payload, Phase phase) {
             this.sequence = sequence; this.kind = kind; this.grave = grave; this.broken = broken;
             this.payload = payload; this.phase = phase; this.rows = List.of();
-            identity = grave.getUuid() + ":" + grave.getWorldId() + ":" + grave.getTime() + ":"
-                    + grave.getLocation().getBlockX() + ":" + grave.getLocation().getBlockY() + ":" + grave.getLocation().getBlockZ();
+            this.charge = payload == null ? 0 : payload.length; this.late = false;
+            identity = identity(grave);
         }
             Entry(long sequence, byte[] payload, List<Entry> rows, Phase phase) {
             this.sequence = sequence; this.kind = Kind.BULK; this.grave = null; this.broken = false;
             this.payload = payload; this.rows = List.copyOf(rows); this.phase = phase; this.identity = "bulk:" + sequence;
+            this.charge = payload.length; this.late = false;
         }
+        Entry(long sequence, String identity) {
+            this.sequence = sequence; this.kind = Kind.RECREATE; this.grave = null; this.broken = false;
+            this.payload = null; this.identity = identity; this.rows = List.of(); this.phase = Phase.RESERVED;
+            this.charge = RECREATION_BYTES; this.late = true;
+        }
+    }
+    private static String identity(GravesConfig grave) {
+        return grave.getUuid() + ":" + grave.getWorldId() + ":" + grave.getTime() + ":"
+                + grave.getLocation().getBlockX() + ":" + grave.getLocation().getBlockY() + ":" + grave.getLocation().getBlockZ();
     }
     /** Each row is already prepared on the caller owner; bulk uses one admission and a byte-bounded packet. */
     public record BulkRow(GravesConfig grave, boolean broken) { }
@@ -113,6 +126,21 @@ public final class SqlRecoveryJournal {
         } catch (IOException | RuntimeException invalid) { return null; }
         finally { if (!transferred) admission.close(); }
     }
+    /** Reserve marker metadata capacity before native UUIDs exist. No provisional wire can publish. */
+    public synchronized Reservation reserveRecreation(GravesConfig record) {
+        if (!canReserve() || RECREATION_BYTES > byteLimit - bytes - evidenceBytes) return null;
+        FeatureIO.Admission admission = io.admit();
+        if (admission == null) return null;
+        boolean transferred = false;
+        try {
+            if (record == null || record.getUuid() == null || record.getWorldId() == null || record.getLocation() == null) return null;
+            Entry entry = new Entry(next + 1, identity(record));
+            Reservation result = new Reservation(entry, admission);
+            entries.put(entry.sequence, entry); next = entry.sequence; bytes += entry.charge; outstanding++;
+            transferred = true; return result;
+        } catch (RuntimeException invalid) { return null; }
+        finally { if (!transferred) admission.close(); }
+    }
     /** Captures a caller-owned snapshot into one byte-bounded durable obligation.
      * SQL advances in sixteen-row windows. Unfinished rows retry in order; a restart
      * may replay the idempotent upsert prefix before any later SQL obligation.
@@ -134,7 +162,7 @@ public final class SqlRecoveryJournal {
     private Reservation install(byte[] payload, FeatureIO.Admission admission) throws IOException {
         Entry entry = decode(++next, payload); entry.phase = Phase.RESERVED;
         Reservation result = new Reservation(entry, admission);
-        entries.put(entry.sequence, entry); bytes += payload.length; outstanding++;
+        entries.put(entry.sequence, entry); bytes += entry.charge; outstanding++;
         return result;
     }
     public final class Reservation implements AutoCloseable {
@@ -143,15 +171,51 @@ public final class SqlRecoveryJournal {
         private Reservation(Entry entry, FeatureIO.Admission admission) { this.entry = entry; this.admission = admission; }
         /** Acknowledges the order-safe journal publication, independently of SQL completion. */
         public CompletableFuture<Disposition> durable() { return entry.durable.copy(); }
+        /** Finalize once on the marker owner. Invalid preparation cancels only an unused late slot. */
+        public boolean prepareRecreation(GravesConfig record) {
+            boolean finalizing = false, accepted = false;
+            try {
+                synchronized (SqlRecoveryJournal.this) {
+                    if (admission == null || !entry.late || entry.payload != null || entry.phase != Phase.RESERVED) return false;
+                    finalizing = true;
+                    if (fatal) return false;
+                    try {
+                        if (record == null || record.isDestroyed() || record.getDestroyedTime() != 0 || record.getExp() != 0
+                                || !Objects.toString(record.getPlayerName(), "").isEmpty()
+                                || !Objects.toString(record.getDeathMessage(), "").isEmpty()) return false;
+                        String type = record.getGraveDisplayType();
+                        if (!Set.of("CHEST", "PLAYER_HEAD", "DISPLAY_ENTITY").contains(type)) return false;
+                        // Encode a bounded scalar capture, never re-read live strings or inventories.
+                        var location = record.getLocation();
+                        GravesConfig detached = new GravesConfig(record.getUuid(), "",
+                                new org.bukkit.Location(null, location.getBlockX(), location.getBlockY(), location.getBlockZ()),
+                                new HashMap<>(), 0, "", record.getTime(), false, 0,
+                                record.getDisplayUUID(), record.getInteractUUID(), type);
+                        detached.setWorldId(record.getWorldId());
+                        byte[] payload = encode(entry.sequence, Kind.RECREATE, detached, false);
+                        if (payload.length > entry.charge) return false;
+                        Entry prepared = decode(entry.sequence, payload);
+                        if (!entry.identity.equals(prepared.identity)) return false;
+                        entry.grave = prepared.grave; entry.payload = payload;
+                        accepted = true; return true;
+                    } catch (IOException | RuntimeException invalid) { return false; }
+                }
+            } finally { if (finalizing && !accepted) close(); }
+        }
         /** Consumes the reserved slot; the returned future acknowledges SQL, never merely RAM admission. */
         public CompletableFuture<Boolean> commit() {
             FeatureIO.Admission ticket;
-            boolean held;
+            boolean held, cancelled;
             synchronized (SqlRecoveryJournal.this) {
                 if (admission == null) return entry.completion.copy();
-                ticket = admission; admission = null; entry.phase = Phase.READY; held = fatal;
-                if (!held && entry.kind == Kind.BULK) entry.bulkTicket = ticket;
+                ticket = admission; admission = null; cancelled = entry.payload == null; held = fatal;
+                if (cancelled) entries.remove(entry.sequence, entry);
+                else {
+                    entry.phase = Phase.READY;
+                    if (!held && entry.kind == Kind.BULK) entry.bulkTicket = ticket;
+                }
             }
+            if (cancelled) { cancel(entry, ticket); return entry.completion.copy(); }
             if (held) {
                 ticket.close();
                 fail(entry, "SQL journal is terminally held; accepted intent requires owner reconciliation.", true);
@@ -172,13 +236,17 @@ public final class SqlRecoveryJournal {
                 if (ticket == null) return;
                 entries.remove(entry.sequence);
             }
-            ticket.close();
-            notifications.execute(() -> {
-                try { entry.durable.complete(Disposition.CANCELLED); entry.completion.complete(false); }
-                finally { release(entry); }
-            });
-            wake();
+            cancel(entry, ticket);
         }
+    }
+    private void cancel(Entry entry, FeatureIO.Admission ticket) {
+        // Removing a RESERVED barrier can expose accepted successors during shutdown.
+        wake();
+        ticket.close();
+        notifications.execute(() -> {
+            try { entry.durable.complete(Disposition.CANCELLED); entry.completion.complete(false); }
+            finally { release(entry); }
+        });
     }
     /** Explicit retry signal; never blocks a Bukkit/region owner and never loops on a failed backend. */
     public void wake() {
@@ -313,7 +381,7 @@ public final class SqlRecoveryJournal {
         }
     }
     private synchronized void release(Entry entry) {
-        outstanding--; bytes -= entry.payload.length;
+        outstanding--; bytes -= entry.charge;
         if (closing && outstanding == 0 && loaded.isDone()) notifications.shutdown();
     }
     private void report(String message) {
@@ -528,7 +596,9 @@ public final class SqlRecoveryJournal {
             UUID display = uuid(input), interact = uuid(input); String type = text(input), items = text(input);
             if (player == null || world == null || input.available() != 0) throw new IOException("Invalid recovery identity or trailing bytes");
             GravesConfig grave = new GravesConfig(player, name, location, new HashMap<>(), exp, death, time, destroyed, destroyedTime, display, interact, type);
-            grave.setWorldId(world); grave.acceptPreparedSqlItems(items);
+            grave.setWorldId(world);
+            if (kind == Kind.RECREATE) grave.setGraveDisplayType(type);
+            grave.acceptPreparedSqlItems(items);
             return new Entry(sequence, kind, grave, broken, payload, Phase.DURABLE);
         }
     }

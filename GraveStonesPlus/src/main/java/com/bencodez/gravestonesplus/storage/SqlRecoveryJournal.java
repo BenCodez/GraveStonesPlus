@@ -374,6 +374,8 @@ public final class SqlRecoveryJournal {
             }
             synchronized (this) { more |= retryRequested; }
             if (more) continueDrain();
+        } catch (RuntimeException | Error dispatchFailure) {
+            settleFatal("SQL recovery continuation failed; accepted successors require reconciliation.");
         } finally {
             synchronized (this) { draining = false; }
             settleRequestedFatal();

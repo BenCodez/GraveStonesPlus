@@ -56,6 +56,7 @@ public class GraveStorageManager {
         public java.util.concurrent.CompletableFuture<SqlRecoveryJournal.Disposition> durable() { return slot.durable(); }
         public java.util.concurrent.CompletableFuture<Boolean> commit() {
             synchronized (GraveStorageManager.this) {
+                if (committed) return sql.copy();
                 if (released) return java.util.concurrent.CompletableFuture.completedFuture(false);
                 if (!committed) {
                     committed = true; sql = new java.util.concurrent.CompletableFuture<>();

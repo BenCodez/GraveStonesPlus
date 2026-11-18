@@ -562,4 +562,34 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @Test void repeatedCommitAfterSuccessfulOwnerFinishReturnsOriginalSqlAck()throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var admission=h.manager.reserveRecreation(record(1),false);assertNotNull(admission);
+            assertTrue(await(admission.commit()));assertTrue(admission.finish());
+            assertTrue(await(admission.commit()));admission.close();assertTrue(await(admission.commit()));
+            verify(h.backend,times(1)).saveRecreatedGrave(any());
+        }
+    }
+    @Test void failedContinuationSettlesEveryAlreadyPublishedSuccessor()throws Exception {
+        try(var io=new FeatureIO(32)) {
+            var backend=mock(GraveStorageBackend.class);var journal=new SqlRecoveryJournal(io,backend,directory,ignored->{});
+            assertTrue(await(journal.loaded()));await(io.barrier());
+            var barrier=journal.reserveRecreation(record(1));assertNotNull(barrier);
+            var slots=new ArrayList<SqlRecoveryJournal.Reservation>();var results=new ArrayList<CompletableFuture<Boolean>>();
+            for(int i=0;i<20;i++){var slot=journal.reserve(SqlRecoveryJournal.Kind.FLAG,record(i+2),true);assertNotNull(slot);slots.add(slot);results.add(slot.commit());}
+            await(io.barrier());verifyNoInteractions(backend);
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(io));
+            var continuation=new CountDownLatch(1);
+            doAnswer(call->{if(io.isOwnerThread()){continuation.countDown();throw new IllegalStateException("synthetic continuation dispatch failure");}io.requestDrain(call.getArgument(0));return null;}).when(proxy).requestDrain(any(Runnable.class));
+            field(journal,"io",proxy);
+            try {
+                barrier.close();assertTrue(continuation.await(3,TimeUnit.SECONDS));
+                for(int i=0;i<16;i++)assertTrue(await(results.get(i)));
+                for(int i=16;i<20;i++){var result=results.get(i);assertThrows(ExecutionException.class,()->await(result));}
+                for(var slot:slots)assertEquals(SqlRecoveryJournal.Disposition.DURABLE,await(slot.durable()));
+                verify(backend,times(16)).setBroken(any(),eq(true));assertFalse(journal.isReady());assertFalse(io.hasUnsubmittedAdmissions());
+            }finally{field(journal,"io",io);journal.close();}
+        }
+    }
+
 }

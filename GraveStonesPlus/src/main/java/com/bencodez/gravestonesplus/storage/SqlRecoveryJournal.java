@@ -225,8 +225,9 @@ public final class SqlRecoveryJournal {
             }
             if (cancelled) { cancel(entry, ticket); return entry.completion.copy(); }
             if (held) {
-                ticket.close();
-                fail(entry, "SQL journal is terminally held; accepted intent requires owner reconciliation.", true);
+                try { ticket.close(); }
+                catch (RuntimeException | Error failure) { report("Held SQL admission wake failed after release."); }
+                finally { fail(entry, "SQL journal is terminally held; accepted intent requires owner reconciliation.", true); }
                 return entry.completion.copy();
             }
             // Request service while the admission still fences final shutdown.

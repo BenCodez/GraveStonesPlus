@@ -533,4 +533,33 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(booleans={false,true})
+    void preparedLateCommitSettlesBothJournalObserversWhenTicketWakeThrows(boolean error)throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(h.io));
+            doAnswer(call->{
+                var issued=h.io.admit();if(issued==null)return null;
+                var ticket=mock(FeatureIO.Admission.class,org.mockito.AdditionalAnswers.delegatesTo(issued));
+                doAnswer(unused->{issued.close();if(error)throw new AssertionError("synthetic held ticket wake error");throw new IllegalStateException("synthetic held ticket wake failure");}).when(ticket).close();
+                return ticket;
+            }).when(proxy).admit();
+            field(h.journal.journal,"io",proxy);var record=record(1);var late=h.manager.reserveRecreation(record,true);assertNotNull(late);
+            field(h.journal.journal,"io",h.io);var cancel=h.manager.reserveRecreation(record(2),true);assertNotNull(cancel);
+            var metadata=new GravesConfig(record.getUuid(),"",record.getLocation(),new HashMap<>(),0,"",record.getTime(),false,0,UUID.randomUUID(),null,"DISPLAY_ENTITY");metadata.setWorldId(record.getWorldId());
+            assertTrue(late.prepare(metadata));
+            doThrow(new IllegalStateException("synthetic terminal cancellation dispatch failure")).when(proxy).requestDrain(any(Runnable.class));
+            field(h.journal.journal,"io",proxy);
+            try{cancel.close();assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(cancel.durable()));}
+            finally{field(h.journal.journal,"io",h.io);}
+            var member=late.getClass().getDeclaredField("slot");member.setAccessible(true);var slot=(SqlRecoveryJournal.Reservation)member.get(late);
+            assertThrows(ExecutionException.class,()->await(late.commit()));
+            assertEquals(SqlRecoveryJournal.Disposition.HELD,await(slot.durable()));
+            assertThrows(ExecutionException.class,()->await(slot.commit()));
+            assertThrows(ExecutionException.class,()->await(late.commit()));
+            assertFalse(late.finish());assertTrue(h.manager.isRecreationPending(GraveIdentity.of(record)));
+            assertFalse(h.io.hasUnsubmittedAdmissions());verify(h.backend,never()).saveRecreatedGrave(any());assertEquals(0,h.journal.records());
+        }
+    }
+
 }

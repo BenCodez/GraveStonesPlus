@@ -229,21 +229,27 @@ public final class SqlRecoveryJournal {
             }
             // Request service while the admission still fences final shutdown.
             // A fast worker may finish submit before this caller resumes.
-            wake();
-            if (entry.kind != Kind.BULK) ticket.submit(() -> true).whenComplete((value, failure) -> {
-                if (failure != null) fail(entry, "SQL recovery worker rejected an accepted transition.");
-            });
+            try {
+                wake();
+                if (entry.kind != Kind.BULK) ticket.submit(() -> true).whenComplete((value, failure) -> {
+                    if (failure != null) fail(entry, "SQL recovery worker rejected an accepted transition.");
+                });
+            } catch (RuntimeException | Error failure) {
+                try { ticket.close(); }
+                finally { fail(entry, "SQL recovery dispatch failed after accepting a transition.", entry.phase != Phase.DURABLE); }
+            }
             return entry.completion.copy();
         }
-        @Override public void close() {
+        boolean cancelIfUnused() {
             FeatureIO.Admission ticket;
             synchronized (SqlRecoveryJournal.this) {
                 ticket = admission; admission = null;
-                if (ticket == null) return;
+                if (ticket == null) return false;
                 entries.remove(entry.sequence);
             }
-            cancel(entry, ticket);
+            cancel(entry, ticket); return true;
         }
+        @Override public void close() { cancelIfUnused(); }
     }
     private void cancel(Entry entry, FeatureIO.Admission ticket) {
         // Removing a RESERVED barrier can expose accepted successors during shutdown.

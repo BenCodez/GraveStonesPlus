@@ -57,7 +57,17 @@ public class GraveStorageManager {
         public java.util.concurrent.CompletableFuture<Boolean> commit() {
             synchronized (GraveStorageManager.this) {
                 if (released) return java.util.concurrent.CompletableFuture.completedFuture(false);
-                if (!committed) { committed = true; sql = slot.commit(); }
+                if (!committed) {
+                    committed = true; sql = new java.util.concurrent.CompletableFuture<>();
+                    try {
+                        slot.commit().whenComplete((saved, failure) -> {
+                            if (failure == null) sql.complete(saved); else sql.completeExceptionally(failure);
+                        });
+                    } catch (RuntimeException | Error failure) {
+                        // A consumed slot may already replay. Only an atomic unused cancellation is definitive.
+                        if (slot.cancelIfUnused()) sql.complete(false); else sql.completeExceptionally(failure);
+                    }
+                }
                 return sql.copy();
             }
         }

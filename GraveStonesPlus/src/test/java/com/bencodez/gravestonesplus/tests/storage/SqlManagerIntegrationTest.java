@@ -398,4 +398,56 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @org.junit.jupiter.params.ParameterizedTest
+    @org.junit.jupiter.params.provider.ValueSource(ints={0,1,2,3})
+    void synchronousRecreationCommitFailureKeepsAStableOutcome(int mode)throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var busy=h.io.submit(()->{entered.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}return true;});
+            assertTrue(entered.await(3,TimeUnit.SECONDS));
+            var record=record(1);String identity=GraveIdentity.of(record);var admission=h.manager.reserveRecreation(record,false);
+            assertNotNull(admission);var member=admission.getClass().getDeclaredField("slot");member.setAccessible(true);
+            var slot=spy((SqlRecoveryJournal.Reservation)member.get(admission));member.set(admission,slot);
+            boolean consumed=mode>=2;
+            doAnswer(call->{
+                if(consumed)call.callRealMethod();
+                if(mode%2==0)throw new IllegalStateException("synthetic synchronous commit failure");
+                throw new AssertionError("synthetic synchronous commit error");
+            }).when(slot).commit();
+            try {
+                var result=assertDoesNotThrow(admission::commit);
+                if(consumed) {
+                    assertThrows(ExecutionException.class,()->await(result));
+                    assertThrows(ExecutionException.class,()->await(admission.commit()));
+                    assertFalse(admission.finish());admission.close();assertTrue(h.manager.isRecreationPending(identity));
+                }else {
+                    assertFalse(await(result));assertFalse(await(admission.commit()));
+                    assertEquals(SqlRecoveryJournal.Disposition.CANCELLED,await(admission.durable()));
+                    assertTrue(admission.finish());assertFalse(h.manager.isRecreationPending(identity));
+                }
+            }finally{slot.close();release.countDown();await(busy);}
+            await(h.io.barrier());
+            assertFalse(h.io.hasUnsubmittedAdmissions());
+            verify(h.backend,times(consumed?1:0)).saveRecreatedGrave(any());
+            if(consumed)assertEquals(SqlRecoveryJournal.Disposition.DURABLE,await(admission.durable()));
+        }
+    }
+    @Test void synchronousJournalDispatchFailureReleasesConsumedWorkerTicketAndRetainsIntent()throws Exception {
+        try(var h=new Fixture(8,null)) {
+            var entered=new CountDownLatch(1);var release=new CountDownLatch(1);
+            var busy=h.io.submit(()->{entered.countDown();try{assertTrue(release.await(5,TimeUnit.SECONDS));}catch(InterruptedException failure){throw new AssertionError(failure);}return true;});
+            assertTrue(entered.await(3,TimeUnit.SECONDS));
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(h.io));
+            doThrow(new IllegalStateException("synthetic drain dispatch failure")).when(proxy).requestDrain(any(Runnable.class));
+            field(h.journal.journal,"io",proxy);
+            var record=record(1);var admission=h.manager.reserveRecreation(record,false);assertNotNull(admission);
+            try {
+                assertThrows(ExecutionException.class,()->await(admission.commit()));assertFalse(h.io.hasUnsubmittedAdmissions());
+                assertFalse(admission.finish());assertTrue(h.manager.isRecreationPending(GraveIdentity.of(record)));
+                assertEquals(SqlRecoveryJournal.Disposition.HELD,await(admission.durable()));
+            }finally{field(h.journal.journal,"io",h.io);release.countDown();await(busy);}
+            h.journal.journal.wake();await(h.io.barrier());verify(h.backend,times(1)).saveRecreatedGrave(any());
+        }
+    }
+
 }

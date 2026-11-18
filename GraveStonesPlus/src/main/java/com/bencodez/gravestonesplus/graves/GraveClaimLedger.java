@@ -104,6 +104,61 @@ public final class GraveClaimLedger {
             next.put(grave, "RESERVED:" + recipient + ":" + value.substring(prefix.length())); return true;
         });
     }
+    /** Own both reservation and possible pre-delivery rollback before changing owner state. */
+    public LimitDelivery admitLimitDelivery(String grave, UUID recipient) {
+        if (grave == null || recipient == null || !isReady()) return null;
+        FeatureIO.Admission reserve = state.admit();
+        if (reserve == null) return null;
+        FeatureIO.Admission rollback = state.admit();
+        if (rollback == null) { reserve.close(); return null; }
+        try { return new LimitDelivery(grave, recipient, reserve, rollback); }
+        catch (RuntimeException | Error failure) { reserve.close(); rollback.close(); throw failure; }
+    }
+    public final class LimitDelivery {
+        private final String grave;
+        private final UUID recipient;
+        private final FeatureIO.Admission rollback;
+        private final CompletableFuture<Boolean> ready;
+        private final java.util.concurrent.atomic.AtomicInteger phase = new java.util.concurrent.atomic.AtomicInteger();
+        private final CompletableFuture<Boolean> stopped = new CompletableFuture<>();
+        private LimitDelivery(String grave, UUID recipient, FeatureIO.Admission reserve, FeatureIO.Admission rollback) {
+            this.grave = grave; this.recipient = recipient; this.rollback = rollback;
+            ready = state.update(reserve, next -> {
+                String value = next.get(grave), prefix = "QUEUED_LIMIT:" + recipient + ":";
+                if (value == null || !value.startsWith(prefix)) return false;
+                next.put(grave, "RESERVED:" + recipient + ":" + value.substring(prefix.length())); return true;
+            });
+        }
+        public CompletableFuture<Boolean> ready() { return ready.copy(); }
+        /** The actor wins this fence immediately before its first potentially irreversible effect. */
+        public boolean beginDelivery() {
+            if (!ready.isDone() || ready.isCompletedExceptionally() || !Boolean.TRUE.equals(ready.getNow(false))) return false;
+            if (!phase.compareAndSet(0, 1)) return false;
+            rollback.close(); return true;
+        }
+        /** Null means the actor already owns potentially non-replayable delivery. */
+        public CompletableFuture<Boolean> deferBeforeDelivery() { return stop(true); }
+        public CompletableFuture<Boolean> cancelBeforeDelivery() { return stop(false); }
+        private CompletableFuture<Boolean> stop(boolean requeue) {
+            if (!phase.compareAndSet(0, 2)) return phase.get() == 1 ? null : stopped.copy();
+            ready.whenComplete((saved, failure) -> {
+                if (failure != null || !Boolean.TRUE.equals(saved)) {
+                    rollback.close(); stopped.complete(false); return;
+                }
+                try { state.update(rollback, next -> {
+                    String value = next.get(grave), prefix = "RESERVED:" + recipient + ":";
+                    if (value == null || !value.startsWith(prefix)) return false;
+                    if (requeue) next.put(grave, "QUEUED_LIMIT:" + recipient + ":" + value.substring(prefix.length()));
+                    else next.remove(grave);
+                    return true;
+                }).whenComplete((done, error) -> {
+                    if (error == null && Boolean.TRUE.equals(done) && !requeue) synchronized (GraveClaimLedger.this) { pending.remove(grave); }
+                    if (error == null) stopped.complete(done); else stopped.completeExceptionally(error);
+                }); } catch (RuntimeException | Error rejected) { rollback.close(); stopped.completeExceptionally(rejected); }
+            });
+            return stopped.copy();
+        }
+    }
     /** Only used before any item/XP mutation when the owning chunk disappears. */
     public CompletableFuture<Boolean> deferLimitReservation(String grave, UUID recipient) {
         return state.update(next -> {

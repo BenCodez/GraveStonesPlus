@@ -273,4 +273,27 @@ class SqlManagerIntegrationTest {
         }
     }
 
+    @Test void inlineWorkerCompletionCannotOvertakeCommitDrainRequestDuringClose() throws Exception {
+        try(var h=new Fixture(4,null)) {
+            var proxy=mock(FeatureIO.class,org.mockito.AdditionalAnswers.delegatesTo(h.io));
+            doAnswer(call->{
+                var original=h.io.admit();if(original==null)return null;
+                var wrapped=mock(FeatureIO.Admission.class);
+                doAnswer(unused->{original.close();return null;}).when(wrapped).close();
+                doAnswer(submit->{
+                    java.util.function.Supplier<Boolean> action=submit.getArgument(0);
+                    var result=original.submit(action);
+                    // Force the worker notification to finish before submit returns to commit.
+                    await(result);return result;
+                }).when(wrapped).submit(any());
+                return wrapped;
+            }).when(proxy).admit();
+            field(h.journal.journal,"io",proxy);
+            var ticket=h.manager.reserveSqlTransition(SqlRecoveryJournal.Kind.UPDATE,record(1),true);assertNotNull(ticket);
+            h.manager.close();await(h.io.barrier());verify(h.backend,never()).close();
+            assertTrue(await(ticket.commit()));assertTrue(h.closed.await(5,TimeUnit.SECONDS));
+            verify(h.backend,times(1)).updateExistingGrave(any(),eq(true));verify(h.backend,times(1)).close();
+        }
+    }
+
 }

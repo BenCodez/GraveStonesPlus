@@ -157,10 +157,12 @@ public final class SqlRecoveryJournal {
                 fail(entry, "SQL journal is terminally held; accepted intent requires owner reconciliation.", true);
                 return entry.completion.copy();
             }
+            // Request service while the admission still fences final shutdown.
+            // A fast worker may finish submit before this caller resumes.
+            wake();
             if (entry.kind != Kind.BULK) ticket.submit(() -> true).whenComplete((value, failure) -> {
                 if (failure != null) fail(entry, "SQL recovery worker rejected an accepted transition.");
             });
-            wake();
             return entry.completion.copy();
         }
         @Override public void close() {

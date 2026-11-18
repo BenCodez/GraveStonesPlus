@@ -629,15 +629,38 @@ public class Grave {
             return false;
         }
         if (claimInProgress || remove || !expirationEligible(reason) || !authorized.getAsBoolean()) { if (ticket != null) ticket.close(); return false; }
+        long destroyedAt = System.currentTimeMillis();
+        com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sql = null;
+        var storage = plugin.getStorageManager();
+        if (storage != null && storage.isMySQL()) {
+            try {
+                var removed = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig);
+                removed.setDestroyed(true); removed.setDestroyedTime(destroyedAt);
+                sql = storage.reserveSqlTransition(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.UPDATE, removed, true);
+            } catch (RuntimeException rejected) { /* A failed capture is a pre-mutation rejection. */ }
+            catch (Error fatal) { if (ticket != null) ticket.close(); throw fatal; }
+            if (sql == null) {
+                if (ticket != null) ticket.close();
+                if (reason == GraveRemoveReason.EXPIRED) retryExpiration(expiringDeadline);
+                return false;
+            }
+        }
+        try {
         cleanupTicket = ticket;
-        remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(System.currentTimeMillis());
+        remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(destroyedAt);
         plugin.getGraveNavigation().invalidate(GraveIdentity.of(gravesConfig));
         plugin.getTrustedGraveAccessStore().revokeForGraveAsync(GraveIdentity.of(gravesConfig));
         if (limitPayoutPending) {
             limitPayoutPending = false; limitRecipient.clear();
             plugin.getGraveClaimLedger().cancelQueuedLimit(GraveIdentity.of(gravesConfig));
         }
-        removeTimer(); plugin.removeGrave(this); return true;
+        removeTimer();
+        if (sql == null) plugin.removeGrave(this);
+        else plugin.removeGrave(this, sql).whenComplete((saved, failure) -> {
+            if (failure != null || !Boolean.TRUE.equals(saved)) plugin.getLogger().severe("Grave removal remains held for SQL reconciliation.");
+        });
+        return true;
+        } finally { if (sql != null) sql.close(); }
     }
     /** Admission pressure is transient; retry one current deadline without retaining a queue of tasks. */
     private synchronized void retryExpiration(long deadline) {
@@ -1275,7 +1298,7 @@ public class Grave {
     void resumeLimitPayout() {
         String identity = GraveIdentity.of(gravesConfig);
         synchronized (this) {
-            if (remove || claimInProgress || !limitPayoutPending || !plugin.isEnabled()) return;
+            if (acknowledgmentsRetired || remove || claimInProgress || !limitPayoutPending || !plugin.isEnabled()) return;
             if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) {
                 removeOwned(GraveRemoveReason.EXPIRED); return;
             }
@@ -1297,42 +1320,59 @@ public class Grave {
                 if (sql == null) { releaseClaim(); return; }
             } else sql = null;
         } catch (RuntimeException rejected) { releaseClaim(); return; }
+        final GraveClaimLedger.LimitDelivery delivery;
+        try { delivery = plugin.getGraveClaimLedger().admitLimitDelivery(identity, gravesConfig.getUuid()); }
+        catch (RuntimeException rejected) { if (sql != null) sql.close(); releaseClaim(); return; }
+        if (delivery == null) { if (sql != null) sql.close(); releaseClaim(); return; }
         var lifecycle = new java.util.concurrent.CompletableFuture<Boolean>();
-        lifecycle.whenComplete((value, failure) -> { if (sql != null) sql.close(); });
-        if (!observeLifecycle(lifecycle, false)) { releaseClaim(); return; }
-        try { plugin.getGraveClaimLedger().reserveQueuedLimit(identity, gravesConfig.getUuid()).whenComplete((saved, failure) -> {
-            if (lifecycle.isDone() || failure != null || !Boolean.TRUE.equals(saved)) { lifecycle.complete(false); releaseClaim(); return; }
+        lifecycle.whenComplete((value, failure) -> {
+            if (sql != null) sql.close();
+            if (!Boolean.TRUE.equals(value)) {
+                var deferred = delivery.deferBeforeDelivery();
+                if (deferred != null) deferred.whenComplete((saved, error) -> releaseClaim());
+            }
+        });
+        if (!observeLifecycle(lifecycle, false)) return;
+        try { delivery.ready().whenComplete((saved, failure) -> {
+            if (lifecycle.isDone() || failure != null || !Boolean.TRUE.equals(saved)) { lifecycle.complete(false); return; }
             java.util.concurrent.atomic.AtomicBoolean started = new java.util.concurrent.atomic.AtomicBoolean();
             Runnable retired = () -> { if (started.compareAndSet(false, true)) {
-                lifecycle.complete(false); deferLimitPayout(identity);
+                lifecycle.complete(false);
             } };
             try {
                 plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocation(captured.getLocation(), task -> {
                     if (!started.compareAndSet(false, true)) return;
                     boolean payoutStarted = false;
                     try {
-                    if (lifecycle.isDone()) { releaseClaim(); return; }
+                    if (lifecycle.isDone()) return;
                     Location loc = captured.getLocation();
                     // The disk reservation can outlive the grave's remaining lifetime.
                     // No world payout has occurred, so return ownership to the queued
                     // record before releaseClaim dispatches normal cancellable expiry.
-                    if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) { deferLimitPayout(identity); return; }
+                    if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) { lifecycle.complete(false); return; }
                     if (!plugin.isEnabled() || !plugin.isLiveGrave(this) || loc.getWorld() == null
-                            || !loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) { deferLimitPayout(identity); return; }
+                            || !loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) { lifecycle.complete(false); return; }
                     GraveRemoveEvent event = new GraveRemoveEvent(this, GraveRemoveReason.LIMIT_REACHED);
                     Bukkit.getPluginManager().callEvent(event);
                     if (event.isCancelled()) {
-                        limitPayoutPending = false; cancelClaim(identity); return;
+                        limitPayoutPending = false;
+                        var cancelled = delivery.cancelBeforeDelivery();
+                        if (cancelled != null) cancelled.whenComplete((value, error) -> releaseClaim());
+                        return;
                     }
                     // Listeners may run until the deadline or change the time limit.
-                    if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) { deferLimitPayout(identity); return; }
+                    if (expiryDeadline > 0 && expiryDeadline <= System.currentTimeMillis()) { lifecycle.complete(false); return; }
                     if (!plugin.isLiveGrave(this)) {
-                        limitPayoutPending = false; cancelClaim(identity); return;
+                        limitPayoutPending = false;
+                        var cancelled = delivery.cancelBeforeDelivery();
+                        if (cancelled != null) cancelled.whenComplete((value, error) -> releaseClaim());
+                        return;
                     }
                     if (!plugin.isEnabled() || !loc.getWorld().isChunkLoaded(loc.getBlockX() >> 4, loc.getBlockZ() >> 4)) {
-                        deferLimitPayout(identity); return;
+                        lifecycle.complete(false); return;
                     }
                     try {
+                        if (!delivery.beginDelivery()) return;
                         payoutStarted = true;
                         for (ItemStack item : GravePayout.select(captured.getItems(), plugin.getConfigFile().getPercentageDrops(),
                                 () -> ThreadLocalRandom.current().nextInt(100)).values()) loc.getWorld().dropItem(loc, item);
@@ -1360,20 +1400,16 @@ public class Grave {
                             });
                     } catch (RuntimeException interrupted) {
                         plugin.getLogger().severe("Grave ground payout interrupted after reservation; replay is blocked and exact contents/XP remain in recovery evidence.");
-                    } finally { releaseClaim(); }
+                    } finally { if (payoutStarted) releaseClaim(); }
                     } catch (RuntimeException prePayoutFailure) {
                         // Payout exceptions are consumed by the inner non-replayable path.
                         // Only this pre-payout branch may return the ledger to QUEUED_LIMIT.
-                        if (!payoutStarted) deferLimitPayout(identity);
+                        if (!payoutStarted) lifecycle.complete(false);
                         else plugin.getLogger().severe("Grave ground payout remains held after a post-payout callback failure.");
                     } finally { lifecycle.complete(true); }
                 }).whenComplete((result, schedulingFailure) -> { if (schedulingFailure != null) retired.run(); });
             } catch (RuntimeException schedulingFailure) { retired.run(); }
-        }); } catch (RuntimeException rejected) { lifecycle.complete(false); releaseClaim(); }
-    }
-    private void deferLimitPayout(String identity) {
-        plugin.getGraveClaimLedger().deferLimitReservation(identity, gravesConfig.getUuid())
-                .whenComplete((saved, failure) -> releaseClaim());
+        }); } catch (RuntimeException rejected) { lifecycle.complete(false); }
     }
 
 	public boolean canAdminister(Player player) {

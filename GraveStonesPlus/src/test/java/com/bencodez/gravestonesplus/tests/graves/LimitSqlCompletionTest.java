@@ -58,7 +58,21 @@ class LimitSqlCompletionTest {
             h.resumeLimit();h.drain();verify(storage).reserveSqlTransition(any(),any(),eq(true));
             h.retireAcknowledgments();h.drainGround();
             verify(ticket).close();verify(ticket,never()).commit();verify(h.world,never()).dropItem(any(),any());
-            assertEquals(GraveClaimLedger.Restoration.RESERVED,ClaimHarness.await(h.ledger.restoration(h.identity())));restoration.retire();
+            assertEquals(GraveClaimLedger.Restoration.QUEUED_LIMIT,ClaimHarness.await(h.ledger.restoration(h.identity())));var restarted=h.restartLedger();assertTrue(ClaimHarness.await(restarted.loaded()));
+            assertEquals(GraveClaimLedger.Restoration.QUEUED_LIMIT,ClaimHarness.await(restarted.restoration(h.identity())));restoration.retire();
+        }
+    }
+
+    @Test void retirementDuringFinalEventWinsBeforeFirstWorldEffect() throws Exception {
+        try(var h=new ClaimHarness()) {
+            var restoration=h.limitRestoration();h.groundWorld();
+            var storage=mock(GraveStorageManager.class);when(storage.isMySQL()).thenReturn(true);when(h.plugin.getStorageManager()).thenReturn(storage);
+            var ticket=mock(SqlRecoveryJournal.Reservation.class);when(storage.reserveSqlTransition(any(),any(),eq(true))).thenReturn(ticket);
+            doAnswer(call->{if(call.getArgument(0) instanceof com.bencodez.gravestonesplus.events.GraveRemoveEvent)h.retireAcknowledgments();return null;})
+                    .when(h.events).callEvent(any());
+            h.grave.dropAndRemoveForLimit(h.owner);h.drainGround();
+            verify(ticket).close();verify(ticket,never()).commit();verify(h.world,never()).dropItem(any(),any());
+            assertEquals(GraveClaimLedger.Restoration.QUEUED_LIMIT,ClaimHarness.await(h.ledger.restoration(h.identity())));restoration.retire();
         }
     }
 

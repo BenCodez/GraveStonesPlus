@@ -64,6 +64,9 @@ final class ClaimHarness implements AutoCloseable {
     org.bukkit.entity.ExperienceOrb groundWorld() throws Exception { return (org.bukkit.entity.ExperienceOrb)fixture("groundWorld"); }
     void drainGround() throws Exception { fixture("drainGround"); }
     void resumeLimit() throws Exception { invoke(grave,"resumeLimitPayout"); }
+    GraveClaimLedger restartLedger() throws Exception {
+        return new GraveClaimLedger(new DurableFeatureState(io,(DurableFeatureState.Disk)field(delegate,"claimDisk"),8192));
+    }
     String identity() throws Exception { return (String) invoke(delegate, "identity"); }
     void drain() throws Exception { invoke(delegate, "drain"); }
     void retireAcknowledgments() throws Exception { invoke(grave, "retireAcknowledgments"); }

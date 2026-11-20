@@ -27,9 +27,14 @@ public final class SqlRecoveryJournal {
     private static final int MAX_FILE = 64 * 1_048_576;
     private static final int MAX_ENTRIES = 256;
     private static final long MAX_BYTES = 64L * 1_048_576;
+    @FunctionalInterface
+    interface DirectoryChannel { FileChannel open(Path directory) throws IOException; }
+    private final boolean nativeWindows;
+    private final DirectoryChannel directoryChannels;
     private final FeatureIO io;
     private final GraveStorageBackend backend;
-    private final Path directory;
+    // Initialized on the feature owner before loaded/healthy publication.
+    private Path directory;
     private final Consumer<String> error;
     private final int entryLimit;
     private final long byteLimit;
@@ -87,6 +92,14 @@ public final class SqlRecoveryJournal {
     }
     SqlRecoveryJournal(FeatureIO io, GraveStorageBackend backend, Path directory, Consumer<String> error,
             int entryLimit, long byteLimit) {
+        this(io, backend, directory, error, entryLimit, byteLimit,
+                directory.getFileSystem().provider().getClass().getName().equals("sun.nio.fs.WindowsFileSystemProvider"),
+                path -> FileChannel.open(path, StandardOpenOption.READ, LinkOption.NOFOLLOW_LINKS));
+    }
+    // Per-store capability seam: no global OS/provider override and no file-force substitution.
+    SqlRecoveryJournal(FeatureIO io, GraveStorageBackend backend, Path directory, Consumer<String> error,
+            int entryLimit, long byteLimit, boolean nativeWindows, DirectoryChannel directoryChannels) {
+        this.nativeWindows = nativeWindows; this.directoryChannels = Objects.requireNonNull(directoryChannels);
         this.io = io; this.backend = backend; this.directory = Objects.requireNonNull(directory); this.error = error;
         this.entryLimit = entryLimit; this.byteLimit = byteLimit;
         notifications = new ThreadPoolExecutor(1, 1, 10L, TimeUnit.SECONDS,
@@ -481,8 +494,21 @@ public final class SqlRecoveryJournal {
     private static void forceFile(Path path) throws IOException {
         try (FileChannel channel = FileChannel.open(path, StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS)) { channel.force(true); }
     }
-    private static void forcePath(Path path) throws IOException {
-        try (FileChannel channel = FileChannel.open(path, StandardOpenOption.READ)) { channel.force(true); }
+    private void forcePath(Path path) throws IOException {
+        // Do not traverse a directory symlink, including an ancestor of the journal.
+        if (!Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Recovery directory type invalid");
+        final FileChannel channel;
+        try { channel = directoryChannels.open(path); }
+        catch (AccessDeniedException unsupportedHandle) {
+            // Native Windows cannot open directories with FileChannel READ. File content
+            // still requires force and atomic rename; directory metadata durability is
+            // limited by that platform capability. Never classify force/close failures here.
+            if (!nativeWindows || !path.toString().equals(unsupportedHandle.getFile())
+                    || unsupportedHandle.getOtherFile() != null
+                    || !Files.isDirectory(path, LinkOption.NOFOLLOW_LINKS)) throw unsupportedHandle;
+            return;
+        }
+        try (channel) { channel.force(true); }
     }
     private void forceDirectory() throws IOException { forcePath(directory); }
     private byte[] readBounded(Path path) throws IOException {
@@ -499,6 +525,9 @@ public final class SqlRecoveryJournal {
         try {
             Files.createDirectories(directory);
             if (Files.isSymbolicLink(directory)) throw new IOException("Journal directory cannot be a symbolic link");
+            // Existing server/data-folder aliases remain supported. Pin their real
+            // target once, while retaining rejection of a linked journal or entry.
+            directory = directory.toRealPath();
             // Persist each new directory's entry in its parent before acknowledging a journal record.
             for (Path path = directory.toAbsolutePath(); path != null; path = path.getParent()) forcePath(path);
             List<Path> files = new ArrayList<>(), temporary = new ArrayList<>();

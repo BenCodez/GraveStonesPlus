@@ -12,7 +12,7 @@ public final class GraveReminderStore {
     private final java.util.function.Consumer<String> warning;
     private final Map<String, Long> delivered = new HashMap<>();
     public GraveReminderStore(GraveStonesPlus plugin) {
-        this(new DurableFeatureState(plugin.getFeatureIO(), new java.io.File(plugin.getDataFolder(), "grave-reminders.yml").toPath(), 8192), message -> plugin.getLogger().warning(message));
+        this(new DurableFeatureState(plugin.getFeatureIO(), plugin.getFeatureIO().storeRoot(plugin.getDataFolder().toPath()).resolve("grave-reminders.yml"), 8192), message -> plugin.getLogger().warning(message));
     }
     public GraveReminderStore(DurableFeatureState state) { this(state, message -> { }); }
     public GraveReminderStore(DurableFeatureState state, java.util.function.Consumer<String> warning) { this.state = state; this.warning = warning; }

@@ -64,10 +64,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private CommandLoader commandLoader;
 
 	@Getter
-	private List<Grave> graves;
+	private List<Grave> graves = Collections.synchronizedList(new ArrayList<>());
 
 	@Getter
-	private List<Grave> brokenGraves;
+	private List<Grave> brokenGraves = Collections.synchronizedList(new ArrayList<>());
 
 	@Getter
 	private GraveStorageManager storageManager;
@@ -140,6 +140,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
     }
 
 
+    /** Internal completion: SQL was already admitted and acknowledged; never issue a second UPSERT. */
+    public void publishSqlCreatedGrave(Grave grave) { if (!containsByKey(graves, grave)) graves.add(grave); }
 	public void addGrave(Grave grave) {
 		if (grave == null || grave.getGravesConfig() == null) {
 			return;
@@ -292,16 +294,44 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	@Override
 	public void onPostLoad() {
-		if (featureIO != null && !featureIO.isTerminated()) throw new IllegalStateException("Previous grave disk owner is still draining; cannot reload selected state yet");
-        featureIO = new com.bencodez.gravestonesplus.graves.FeatureIO();
-        reloadRetired = false;
+		if (featureIO != null && !featureIO.isGenerationReleased()) throw new IllegalStateException("Previous grave disk owner is still draining; cannot reload selected state yet");
+        graves = Collections.synchronizedList(new ArrayList<Grave>());
+        brokenGraves = Collections.synchronizedList(new ArrayList<Grave>());
+        selectedInitialized = false;
+        var owner = new com.bencodez.gravestonesplus.graves.FeatureIO(getDataFolder().toPath());
+        featureIO = owner; reloadRetired = false;
+        owner.ready().whenComplete((available, failure) -> {
+            if (failure != null || !Boolean.TRUE.equals(available)) {
+                getLogger().severe("Grave storage initialization blocked by installation generation ownership.");
+                try { getBukkitScheduler().runTask(this, () -> {
+                    if (featureIO == owner && !reloadRetired && isEnabled()) Bukkit.getPluginManager().disablePlugin(this);
+                }); } catch (RuntimeException retired) { /* No selected state or lease was acquired. */ }
+                return;
+            }
+            try { getBukkitScheduler().runTask(this, () -> {
+                if (featureIO != owner || reloadRetired || !isEnabled()) return;
+                try { initializeSelectedState(); }
+                catch (RuntimeException | Error unavailable) {
+                    getLogger().severe("Grave storage initialization incomplete; existing records remain withheld.");
+                    Bukkit.getPluginManager().disablePlugin(this);
+                }
+            }); } catch (RuntimeException rejected) {
+                reloadRetired = true;
+                owner.abandonStartup();
+                getLogger().severe("Grave storage initialization owner is unavailable.");
+            }
+        });
+    }
+    private boolean selectedInitialized;
+    private void initializeSelectedState() {
+        gravesConfig = new GraveLocations(this);
         graveClaimLedger = new com.bencodez.gravestonesplus.graves.GraveClaimLedger(
             new com.bencodez.gravestonesplus.graves.DurableFeatureState(featureIO,
-                new java.io.File(getDataFolder(), "selected-claims.yml").toPath(), 8192),
-            new java.io.File(getDataFolder(), "selected-claim-archive").toPath());
+                featureIO.storeRoot(getDataFolder().toPath()).resolve("selected-claims.yml"), 8192),
+            featureIO.storeRoot(getDataFolder().toPath()).resolve("selected-claim-archive"));
         markerCleanup = new com.bencodez.gravestonesplus.graves.GraveMarkerCleanup(this,
             new com.bencodez.gravestonesplus.graves.DurableFeatureState(featureIO,
-                new java.io.File(getDataFolder(), "selected-marker-cleanup.yml").toPath(), 8192));
+                featureIO.storeRoot(getDataFolder().toPath()).resolve("selected-marker-cleanup.yml"), 8192));
         graveNavigation = new com.bencodez.gravestonesplus.graves.GraveNavigation(this);
         trustedGraveAccessStore = new TrustedGraveAccessStore(this);
 		graveReminderStore = new GraveReminderStore(this);
@@ -315,6 +345,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
         graveRestoration = new com.bencodez.gravestonesplus.graves.GraveRestoration(this, storageManager);
         graveRestoration.start();
+        selectedInitialized = true;
 
 		commandLoader = new CommandLoader(this);
 		commandLoader.loadCommands();
@@ -401,7 +432,6 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		plugin = this;
 		configFile = new Config(this);
 		configFile.reloadData();
-		gravesConfig = new GraveLocations(this);
 		nbtConfigManager = new NBTConfigManager(this);
 		updateAdvancedCoreHook();
 	}
@@ -426,7 +456,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
 
 		// For flatfile, persist lists once at shutdown.
-		if (storageManager != null && !storageManager.isMySQL()) {
+		if (selectedInitialized && storageManager != null && !storageManager.isMySQL()) {
 			storageManager.saveBrokenGravesFromObjects(brokenGraves);
 			storageManager.saveGravesFromObjects(graves);
 		}

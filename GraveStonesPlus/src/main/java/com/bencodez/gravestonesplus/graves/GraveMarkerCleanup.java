@@ -56,6 +56,18 @@ public final class GraveMarkerCleanup {
             tile.getPersistentDataContainer().set(identityKey(plugin), PersistentDataType.STRING, identity); tile.update();
         }
     }
+    static void tagCreation(GraveStonesPlus plugin, Block block, String identity, java.util.function.BooleanSupplier current) {
+        if (identity == null || !current.getAsBoolean()) return;
+        var chunk = block.getChunk();
+        if (!current.getAsBoolean()) return;
+        chunk.getPersistentDataContainer().set(positionKey(plugin, block), PersistentDataType.STRING, identity);
+        if (!current.getAsBoolean()) return;
+        var state = block.getState();
+        if (state instanceof TileState tile && current.getAsBoolean()) {
+            tile.getPersistentDataContainer().set(identityKey(plugin), PersistentDataType.STRING, identity);
+            if (current.getAsBoolean()) tile.update();
+        }
+    }
     private static Marker marker(String id, String type) {
         String[] parts = id.split("/", -1);
         if (parts.length != 6) throw new IllegalArgumentException("Invalid cleanup identity");

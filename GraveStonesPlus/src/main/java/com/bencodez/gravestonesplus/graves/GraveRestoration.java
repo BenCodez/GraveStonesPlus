@@ -41,6 +41,7 @@ public final class GraveRestoration {
     public GraveRestoration(GraveStonesPlus plugin, GraveStorageManager storage) { this.plugin = plugin; this.storage = storage; }
     // Unpublished creation reservations share logical capacity but never enter marker restoration.
     private final Set<String> creating = new HashSet<>();
+    private final Set<String> protectedCreations = new HashSet<>();
     private static final int MAX_CREATIONS = 4096;
     private final Map<String, String> creationReplacements = new HashMap<>();
     public record CreationAdmission(int priorGraves, Grave replacement) { }
@@ -74,11 +75,18 @@ public final class GraveRestoration {
             throw new java.util.concurrent.RejectedExecutionException("Grave creation admission retired");
         return admitted.computeIfAbsent(identity, ignored -> new Grave(plugin, record));
     }
+    /** Location owner only: protect accepted native work without opening restoration or claims. */
+    synchronized void protectCreation(GravesConfig record) {
+        String identity = GraveIdentity.of(record);
+        if (!retired && creating.contains(identity) && pending.get(identity) == record && !record.isDestroyed()) {
+            protectedCreations.add(identity); index(identity, record);
+        }
+    }
     /** Publication transfers the same identity; only deferred replacement intents remain in restoration. */
     public synchronized void completeCreation(GravesConfig record) {
         String identity = GraveIdentity.of(record);
         if (!creating.remove(identity) || pending.get(identity) != record) return;
-        creationReplacements.remove(identity);
+        creationReplacements.remove(identity); protectedCreations.remove(identity); unindex(identity);
         if (limitRequests.containsKey(identity)) {
             index(identity, record);
         } else {
@@ -88,7 +96,8 @@ public final class GraveRestoration {
     /** Cancelling an unpublished reservation cannot retire any persisted grave or history. */
     public synchronized void releaseCreation(GravesConfig record) {
         String identity = GraveIdentity.of(record);
-        if (!creating.contains(identity) || pending.get(identity) != record) return;
+        if (!creating.contains(identity) || pending.get(identity) != record || protectedCreations.contains(identity)) return;
+        unindex(identity);
         creating.remove(identity); creationReplacements.remove(identity); pending.remove(identity); admitted.remove(identity);
         activeRecords.remove(identity); limitRequests.remove(identity);
     }
@@ -439,6 +448,10 @@ public final class GraveRestoration {
         pending.remove(key); admitted.remove(key); published.remove(key); conflicts.remove(key);
         activeRecords.remove(key); limitRequests.remove(key);
         displayRepairs.remove(key); savingDisplays.remove(key); repairingMarkers.remove(key);
+        unindex(key);
+        storage.restorationResolved(record);
+    }
+    private void unindex(String key) {
         // The key retains the original position even if an integration moved its mutable record.
         if (key != null && !key.startsWith("unresolved-")) {
             String[] identity = key.split("/", -1);
@@ -446,7 +459,6 @@ public final class GraveRestoration {
             Set<String> exact = positions.get(position); if (exact != null) { exact.remove(key); if (exact.isEmpty()) positions.remove(position); }
             Set<String> values = chunks.get(position.chunk()); if (values != null) { values.remove(key); if (values.isEmpty()) chunks.remove(position.chunk()); }
         }
-        storage.restorationResolved(record);
     }
     private void index(String identity, GravesConfig record) {
         Location loc = record.getLocation();

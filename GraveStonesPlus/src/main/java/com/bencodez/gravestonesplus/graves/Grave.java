@@ -114,6 +114,19 @@ public class Grave {
 	private volatile ItemDisplay itemDisplay;
 
 	private boolean chunkLoaded = false;
+    void bindCreationDisplay(ItemDisplay display) { itemDisplay = display; }
+    /** Death publication is still owned by its native frame through callback-capable chunk/tile access. */
+    boolean loadCreationBlockMeta(Block block, java.util.function.BooleanSupplier current) {
+        try {
+            if (!current.getAsBoolean()) return false;
+            block.removeMetadata("Grave", plugin);
+            if (!current.getAsBoolean()) return false;
+            block.setMetadata("Grave", new org.bukkit.metadata.FixedMetadataValue(plugin, this));
+            if (!current.getAsBoolean()) return false;
+            GraveMarkerCleanup.tagCreation(plugin, block, GraveIdentity.of(gravesConfig), current);
+            return current.getAsBoolean();
+        } finally { if (!current.getAsBoolean()) block.removeMetadata("Grave", plugin); }
+    }
 
 	/**
 	 * Constructor.
@@ -621,10 +634,114 @@ public class Grave {
             }, gravesConfig.getLocation());
         }, player);
     }
+    /** Internal two-phase limit preparation. No old-grave/native effect precedes new capture acceptance. */
+    LimitPreparation prepareDeathLimit(Player recipient, boolean drop) {
+        synchronized (this) {
+            if (remove || claimInProgress || limitPayoutPending || !plugin.isEnabled()) return null;
+            claimInProgress = true;
+        }
+        FeatureIO.Actor nativeOwner = plugin.getFeatureIO().retainActor();
+        if (nativeOwner == null) { synchronized (this) { claimInProgress = false; } return null; }
+        GraveMarkerCleanup.Ticket cleanup = null;
+        com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sql = null;
+        GraveClaimLedger.LimitPublication payout = null;
+        boolean transferred = false;
+        long plannedDestroyedAt = System.currentTimeMillis();
+        try {
+            if (drop) {
+                String evidence = GraveClaimLedger.evidence(com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig));
+                payout = plugin.getGraveClaimLedger().prepareLimit(GraveIdentity.of(gravesConfig), gravesConfig.getUuid(), evidence);
+                if (payout == null) return null;
+            } else {
+                var cleanups = plugin.getMarkerCleanup();
+                if (cleanups != null && (cleanup = cleanups.prepare(gravesConfig)) == null) return null;
+                var storage = plugin.getStorageManager();
+                if (storage != null && storage.isMySQL()) {
+                    var snapshot = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig);
+                    snapshot.setDestroyed(true); snapshot.setDestroyedTime(plannedDestroyedAt);
+                    sql = storage.reserveSqlTransition(com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.REMOVE, snapshot, true);
+                    if (sql == null) return null;
+                }
+            }
+            var result = new LimitPreparation(recipient, cleanup, sql, payout, plannedDestroyedAt, nativeOwner);
+            if (!plugin.registerRecreationAttempt(result)) return null;
+            result.registered = true; transferred = true; return result;
+        } finally {
+            // Ownership is transferred only by a registered preparation.
+            // The registered instance retains these resources through capture acceptance.
+            if (!transferred) {
+                synchronized (this) { claimInProgress = false; }
+                try { if (cleanup != null) cleanup.close(); if (sql != null) sql.close(); if (payout != null) payout.close(); }
+                finally { nativeOwner.close(); }
+            }
+        }
+    }
+    final class LimitPreparation implements Runnable, AutoCloseable {
+        final Player recipient;
+        final com.bencodez.gravestonesplus.storage.GraveStorageManager storageOwner = plugin.getStorageManager();
+        final FeatureIO diskOwner = plugin.getFeatureIO();
+        final GraveMarkerCleanup.Ticket cleanup;
+        final com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sql;
+        final GraveClaimLedger.LimitPublication payout;
+        boolean registered, used, running, transitionStarted;
+        final FeatureIO.Actor nativeOwner;
+        volatile boolean retired;
+        final long destroyedAt;
+        LimitPreparation(Player recipient, GraveMarkerCleanup.Ticket cleanup,
+                com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sql, GraveClaimLedger.LimitPublication payout, long destroyedAt, FeatureIO.Actor nativeOwner) {
+            this.nativeOwner = nativeOwner;
+            this.destroyedAt = destroyedAt;
+            this.recipient = recipient; this.cleanup = cleanup; this.sql = sql; this.payout = payout;
+        }
+        boolean active() { return !retired && plugin.isEnabled() && plugin.getStorageManager() == storageOwner
+                && plugin.getFeatureIO() == diskOwner && !remove && !gravesConfig.isDestroyed(); }
+        void commit() {
+            synchronized (Grave.this) { if (used || !active()) { close(); return; } used = true; }
+            if (payout != null) {
+                limitRecipient = new java.lang.ref.WeakReference<>(recipient);
+                try { payout.commit().whenComplete((saved, failure) -> {
+                    if (failure == null && Boolean.TRUE.equals(saved) && active()) {
+                        limitPayoutPending = true; plugin.getGraveRestoration().retainLimit(Grave.this);
+                    }
+                    synchronized (Grave.this) { claimInProgress = false; }
+                    plugin.unregisterRecreationAttempt(this);
+                    if (limitPayoutPending && active()) plugin.getGraveRestoration().retry();
+                }); } finally { nativeOwner.close(); }
+            } else {
+                try { plugin.getBukkitScheduler().runTask(plugin, () -> {
+                    synchronized (Grave.this) { if (!active()) { close(); return; } running = true; }
+                    boolean removed = false;
+                    try { removed = removeState(GraveRemoveReason.LIMIT_REACHED, this::active, this); if (removed && !retired) cleanupMarker(); }
+                    finally {
+                        synchronized (Grave.this) { running = false; }
+                        if (!removed) closeUnused(); nativeOwner.close(); plugin.unregisterRecreationAttempt(this);
+                    }
+                }, gravesConfig.getLocation()); }
+                catch (RuntimeException rejected) { closeUnused(); plugin.unregisterRecreationAttempt(this); }
+            }
+        }
+        void beginTransition() {
+            // No native/plugin callback occurs while consuming these original disk admissions.
+            transitionStarted = true;
+            try { if (sql != null) sql.commit(); if (cleanup != null) cleanup.commit(); }
+            finally { if (sql != null) sql.close(); if (cleanup != null) cleanup.close(); }
+        }
+        private void closeUnused() {
+            synchronized (Grave.this) { retired = true; claimInProgress = false; }
+            try { synchronized (Grave.this) {
+                if (!transitionStarted) { if (cleanup != null) cleanup.close(); if (sql != null) sql.close(); if (payout != null) payout.close(); }
+            } } finally { synchronized (Grave.this) { if (!running) nativeOwner.close(); } }
+        }
+        @Override public void run() { close(); }
+        @Override public void close() { closeUnused(); if (registered) plugin.unregisterRecreationAttempt(this); }
+    }
     private synchronized boolean removeState(GraveRemoveReason reason, java.util.function.BooleanSupplier authorized) {
-        if (remove || claimInProgress || !expirationEligible(reason) || !authorized.getAsBoolean()) return false;
+        return removeState(reason, authorized, null);
+    }
+    private synchronized boolean removeState(GraveRemoveReason reason, java.util.function.BooleanSupplier authorized, LimitPreparation prepared) {
+        if (remove || claimInProgress && prepared == null || !expirationEligible(reason) || !authorized.getAsBoolean()) return false;
         GraveMarkerCleanup cleanup = plugin.getMarkerCleanup();
-        GraveMarkerCleanup.Ticket ticket = cleanup == null ? null : cleanup.prepare(gravesConfig);
+        GraveMarkerCleanup.Ticket ticket = prepared != null ? prepared.cleanup : cleanup == null ? null : cleanup.prepare(gravesConfig);
         if (cleanup != null && ticket == null) {
             if (reason == GraveRemoveReason.EXPIRED) retryExpiration(expiryDeadline);
             return false;
@@ -639,11 +756,11 @@ public class Grave {
                     && expiringDeadline <= System.currentTimeMillis()) expiryDeadline = 0;
             return false;
         }
-        if (claimInProgress || remove || !expirationEligible(reason) || !authorized.getAsBoolean()) { if (ticket != null) ticket.close(); return false; }
-        long destroyedAt = System.currentTimeMillis();
-        com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sql = null;
+        if (claimInProgress && prepared == null || remove || !expirationEligible(reason) || !authorized.getAsBoolean()) { if (ticket != null) ticket.close(); return false; }
+        long destroyedAt = prepared == null ? System.currentTimeMillis() : prepared.destroyedAt;
+        com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation sql = prepared == null ? null : prepared.sql;
         var storage = plugin.getStorageManager();
-        if (storage != null && storage.isMySQL()) {
+        if (prepared == null && storage != null && storage.isMySQL()) {
             try {
                 var removed = com.bencodez.gravestonesplus.storage.GraveStorageManager.snapshot(gravesConfig);
                 removed.setDestroyed(true); removed.setDestroyedTime(destroyedAt);
@@ -659,7 +776,9 @@ public class Grave {
         var confirmed = new java.util.concurrent.CompletableFuture<Boolean>();
         removalAcknowledgment = confirmed;
         try {
+        if (prepared != null) prepared.beginTransition();
         cleanupTicket = ticket;
+        if (prepared != null) claimInProgress = false;
         remove = true; gravesConfig.setDestroyed(true); gravesConfig.setDestroyedTime(destroyedAt);
         plugin.getGraveNavigation().invalidate(GraveIdentity.of(gravesConfig));
         plugin.getTrustedGraveAccessStore().revokeForGraveAsync(GraveIdentity.of(gravesConfig));

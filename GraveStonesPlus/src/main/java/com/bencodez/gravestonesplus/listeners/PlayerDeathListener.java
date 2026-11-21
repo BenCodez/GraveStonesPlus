@@ -199,23 +199,22 @@ public class PlayerDeathListener implements Listener {
             if (admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
             throw rejected;
         }
-        GraveCreationTask handoff = new GraveCreationTask(plugin, record, grave -> {
-				grave.loadChunk(false);
-
-				grave.createGrave();
-
-				grave.createHologram();
-				grave.checkTimeLimit(plugin.getConfigFile().getGraveTimeLimit());
-				plugin.addGrave(grave);
-				grave.loadBlockMeta(emptyBlockFinal.getBlock());
-
+        final String lifetime, deathFormat;
+        try {
+            lifetime = plugin.getConfigFile().getGraveTimeLimit();
+            deathFormat = plugin.getConfigFile().getFormatDeath();
+        } catch (RuntimeException | Error rejected) {
+            if (admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+            throw rejected;
+        }
+        java.util.function.Consumer<Grave> notification = grave -> {
 				HashMap<String, String> placeholders = new HashMap<String, String>();
 				placeholders.put("x", "" + emptyBlockFinal.getBlockX());
 				placeholders.put("y", "" + emptyBlockFinal.getBlockY());
 				placeholders.put("z", "" + emptyBlockFinal.getBlockZ());
 
 				String msg = MessageAPI.colorize(com.bencodez.advancedcore.api.messages.PlaceholderUtils
-						.replacePlaceHolder(plugin.getConfigFile().getFormatDeath(), placeholders));
+						.replacePlaceHolder(deathFormat, placeholders));
 				if (!msg.isEmpty()) {
                     try {
                         plugin.getBukkitScheduler().runTask(plugin, () -> {
@@ -228,18 +227,34 @@ public class PlayerDeathListener implements Listener {
 				}
 
 				plugin.getLogger().info("Grave: " + emptyBlockFinal.toString());
-		});
+        };
+        java.util.function.Consumer<Grave> completed = grave -> {
+            grave.createHologram();
+            if (!plugin.isEnabled()) return;
+            grave.checkTimeLimit(lifetime); notification.accept(grave);
+        };
+        GraveCreationTask handoff = null;
         boolean scheduled = false;
         try {
-            handoff.schedule(emptyBlockFinal);
-            scheduled = true;
+            handoff = GraveCreationTask.death(plugin, record, entity, completed, grave -> {
+                grave.loadChunk(false); grave.createGrave();
+                grave.createHologram(); grave.checkTimeLimit(lifetime);
+                plugin.addGrave(grave); grave.loadBlockMeta(emptyBlockFinal.getBlock()); notification.accept(grave);
+            });
+            handoff.schedule(emptyBlockFinal); scheduled = true;
+        } catch (java.util.concurrent.RejectedExecutionException rejected) {
+            if (plugin.getStorageManager() == null || !plugin.getStorageManager().isMySQL()) throw rejected;
+            plugin.getLogger().warning("Grave creation declined: admission unavailable; native drops and XP retained");
+            return;
         } finally {
-            if (!scheduled && admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+            if (!scheduled) {
+                if (handoff != null) handoff.cancel();
+                if (admitted[0] != null) rollbackKeptBatch(playerId, admitted[0]);
+            }
         }
-
         boolean accepted = false;
         try {
-            if (handoff.priorGraves() >= plugin.getConfigFile().getGraveLimit()) {
+            if (!handoff.hasSqlDeath() && handoff.priorGraves() >= plugin.getConfigFile().getGraveLimit()) {
                 Grave oldest = handoff.replacement();
                 if (oldest != null) {
                     if (plugin.getConfigFile().isDropItemsOnGraveRemoval()) {
@@ -253,11 +268,11 @@ public class PlayerDeathListener implements Listener {
                     }
                 }
             }
-            event.setDroppedExp(0);
-            event.getDrops().clear();
-            if (admitted[0] != null) admitted[0].newest().accepted = true;
-            handoff.accept();
-            accepted = true;
+            accepted = handoff.capture(() -> {
+                event.setDroppedExp(0); event.getDrops().clear();
+                if (admitted[0] != null) admitted[0].newest().accepted = true;
+            });
+            if (accepted) handoff.commitLimit();
         } finally {
             if (!accepted) {
                 handoff.cancel();

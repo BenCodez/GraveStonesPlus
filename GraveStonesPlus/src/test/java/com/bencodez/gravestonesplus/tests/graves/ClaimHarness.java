@@ -17,6 +17,12 @@ import org.mockito.MockedStatic;
 /** Test-only bridge to the existing package-private gameplay fixture. */
 final class ClaimHarness implements AutoCloseable {
     private final Object delegate;
+    final com.bencodez.gravestonesplus.config.Config config;
+    final com.bencodez.simpleapi.scheduler.BukkitScheduler scheduler;
+    final com.bencodez.simpleapi.folialib.FoliaLib folia;
+    final com.bencodez.simpleapi.folialib.impl.ServerImplementation platform;
+    final ItemStack stored;
+    final Queue<Runnable> ownerWork;
     final FeatureIO io;
     final TrustedGraveAccessStore access;
     final GraveClaimLedger ledger;
@@ -36,12 +42,18 @@ final class ClaimHarness implements AutoCloseable {
         var type = Class.forName("com.bencodez.gravestonesplus.graves.GraveActionsTest$Harness");
         var constructor = type.getDeclaredConstructor(); constructor.setAccessible(true);
         delegate = constructor.newInstance();
+        config = field(delegate, "config"); scheduler = field(delegate, "scheduler");
+        folia = field(delegate, "folia"); platform = field(delegate, "platform");
+        stored = field(delegate, "stored"); ownerWork = field(delegate, "ownerWork");
         io = field(delegate, "io"); access = field(delegate, "access"); ledger = field(delegate, "ledger");
         plugin = field(delegate, "plugin"); owner = field(delegate, "owner");
         ownerInventory = field(delegate, "ownerInventory"); events = field(delegate, "events");
         entityWork = field(delegate, "entityWork"); regionWork = field(delegate, "regionWork"); active = field(delegate, "active");
         world = field(delegate, "world");
         bukkit = field(delegate, "bukkit"); grave = field(delegate, "grave"); cloned = field(delegate, "cloned");
+    }
+    static void pluginField(GraveStonesPlus plugin, String name, Object value) throws Exception {
+        var field = GraveStonesPlus.class.getDeclaredField(name); field.setAccessible(true); field.set(plugin, value);
     }
     @SuppressWarnings("unchecked")
     private static <T> T field(Object owner, String name) throws ReflectiveOperationException {

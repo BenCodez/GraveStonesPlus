@@ -46,6 +46,7 @@ public final class SqlRecoveryJournal {
     private long next, bytes, cursor;
     private final Set<String> blockedCycle = new HashSet<>();
     private boolean healthy, closing, draining, initialized, retryRequested, fatal, loadComplete, bulkContinuing;
+    private boolean publicationFault;
     private boolean fatalSettled;
     private String fatalMessage;
     private static final class Entry {
@@ -56,6 +57,9 @@ public final class SqlRecoveryJournal {
         byte[] payload;
         final long charge;
         final boolean late;
+        final boolean creation;
+        boolean accepted, metadataKnown;
+        FeatureIO.Settlement recoverability;
         final String identity;
         final List<Entry> rows;
         int nextRow;
@@ -67,20 +71,30 @@ public final class SqlRecoveryJournal {
         Entry(long sequence, Kind kind, GravesConfig grave, boolean broken, byte[] payload, Phase phase) {
             this.sequence = sequence; this.kind = kind; this.grave = grave; this.broken = broken;
             this.payload = payload; this.phase = phase; this.rows = List.of();
-            this.charge = payload == null ? 0 : payload.length; this.late = false;
+            this.charge = payload == null ? 0 : payload.length; this.late = false; this.creation = false;
             identity = identity(grave);
         }
             Entry(long sequence, byte[] payload, List<Entry> rows, Phase phase) {
             this.sequence = sequence; this.kind = Kind.BULK; this.grave = null; this.broken = false;
             this.payload = payload; this.rows = List.copyOf(rows); this.phase = phase; this.identity = "bulk:" + sequence;
-            this.charge = payload.length; this.late = false;
+            this.charge = payload.length; this.late = false; this.creation = false;
         }
         Entry(long sequence, String identity) {
             this.sequence = sequence; this.kind = Kind.RECREATE; this.grave = null; this.broken = false;
             this.payload = null; this.identity = identity; this.rows = List.of(); this.phase = Phase.RESERVED;
-            this.charge = RECREATION_BYTES; this.late = true;
+            this.charge = RECREATION_BYTES; this.late = true; this.creation = false;
+        }
+        Entry(long sequence, Entry frozen, FeatureIO.Settlement fence) {
+            this.sequence = sequence; this.kind = Kind.UPSERT; this.grave = frozen.grave; this.broken = false;
+            this.payload = null; this.identity = frozen.identity; this.rows = List.of(); this.phase = Phase.RESERVED;
+            this.charge = frozen.payload.length + FINAL_UUID_BYTES; this.late = true; this.creation = true;
+            this.recoverability = fence;
         }
     }
+    private static Entry creationEntry(long sequence, Entry frozen, FeatureIO.Settlement fence) {
+        return new Entry(sequence, frozen, fence);
+    }
+    private static final int FINAL_UUID_BYTES = 32;
     private static String identity(GravesConfig grave) {
         return grave.getUuid() + ":" + grave.getWorldId() + ":" + grave.getTime() + ":"
                 + grave.getLocation().getBlockX() + ":" + grave.getLocation().getBlockY() + ":" + grave.getLocation().getBlockZ();
@@ -123,6 +137,9 @@ public final class SqlRecoveryJournal {
     synchronized boolean hasUncommittedReservations() {
         return entries.values().stream().anyMatch(entry -> entry.phase == Phase.RESERVED);
     }
+    synchronized boolean hasUnrecoverableCreations() {
+        return entries.values().stream().anyMatch(entry -> entry.creation && entry.accepted && entry.recoverability != null);
+    }
     /** Backend teardown is terminal even if durable outage records remain for the next instance. */
     void retireAfterDrain() {
         if (!io.isOwnerThread()) throw new IllegalStateException("SQL retirement requires the feature owner");
@@ -140,6 +157,29 @@ public final class SqlRecoveryJournal {
             Reservation result = install(payload, admission); transferred = true; return result;
         } catch (IOException | RuntimeException invalid) { return null; }
         finally { if (!transferred) admission.close(); }
+    }
+    /** Full immutable owner-encoded body, including room for both final native UUIDs. */
+    public synchronized Reservation reserveCreation(GravesConfig record) {
+        if (!canReserve() || record == null || record.getDisplayUUID() != null || record.getInteractUUID() != null
+                || record.isDestroyed() || record.getDestroyedTime() != 0) return null;
+        FeatureIO.Admission admission = io.admit();
+        if (admission == null) return null;
+        FeatureIO.Settlement fence = null;
+        boolean transferred = false;
+        try {
+            byte[] wire = encode(next + 1, Kind.UPSERT, record, false);
+            long charge = wire.length + FINAL_UUID_BYTES;
+            if (charge > MAX_RECORD || charge > byteLimit - bytes - evidenceBytes) return null;
+            Entry frozen = decode(next + 1, wire);
+            if (!Set.of("CHEST", "PLAYER_HEAD", "DISPLAY_ENTITY").contains(frozen.grave.getGraveDisplayType())) return null;
+            fence = io.retainUntilRecoverable();
+            if (fence == null) return null;
+            Entry entry = creationEntry(next + 1, frozen, fence);
+            Reservation result = new Reservation(entry, admission);
+            entries.put(entry.sequence, entry); next = entry.sequence; bytes += entry.charge; outstanding++;
+            transferred = true; return result;
+        } catch (IOException | RuntimeException invalid) { return null; }
+        finally { if (!transferred) { if (fence != null) fence.close(); admission.close(); } }
     }
     /** Reserve marker metadata capacity before native UUIDs exist. No provisional wire can publish. */
     public synchronized Reservation reserveRecreation(GravesConfig record) {
@@ -186,12 +226,28 @@ public final class SqlRecoveryJournal {
         private Reservation(Entry entry, FeatureIO.Admission admission) { this.entry = entry; this.admission = admission; }
         /** Acknowledges the order-safe journal publication, independently of SQL completion. */
         public CompletableFuture<Disposition> durable() { return entry.durable.copy(); }
+        /** Capture acceptance is distinct from native actor execution and never releases charged ownership. */
+        public boolean acceptCreation() {
+            synchronized (SqlRecoveryJournal.this) {
+                if (!entry.creation || admission == null || entry.phase != Phase.RESERVED || fatal || closing) return false;
+                entry.accepted = true; return true;
+            }
+        }
+        /** Only scalar UUIDs cross from the native owner; all reward bytes were frozen before capture. */
+        public boolean prepareCreation(UUID display, UUID interact, boolean nativeNeverStarted) {
+            synchronized (SqlRecoveryJournal.this) {
+                if (!entry.creation || !entry.accepted || admission == null || entry.metadataKnown) return false;
+                if ("DISPLAY_ENTITY".equals(entry.grave.getGraveDisplayType()) && display == null && !nativeNeverStarted) return false;
+                entry.grave.setDisplayUUID(display); entry.grave.setInteractUUID(interact); entry.metadataKnown = true;
+                return true;
+            }
+        }
         /** Finalize once on the marker owner. Invalid preparation cancels only an unused late slot. */
         public boolean prepareRecreation(GravesConfig record) {
             FeatureIO.Admission cancelled = null;
             try {
                 synchronized (SqlRecoveryJournal.this) {
-                    if (admission == null || !entry.late || entry.payload != null || entry.phase != Phase.RESERVED) return false;
+                    if (admission == null || !entry.late || entry.creation || entry.payload != null || entry.phase != Phase.RESERVED) return false;
                     boolean accepted = false;
                     try {
                         if (fatal) return false;
@@ -229,7 +285,9 @@ public final class SqlRecoveryJournal {
             boolean held, cancelled;
             synchronized (SqlRecoveryJournal.this) {
                 if (admission == null) return entry.completion.copy();
-                ticket = admission; admission = null; cancelled = entry.payload == null; held = fatal;
+                if (entry.creation && entry.accepted && !entry.metadataKnown) return entry.completion.copy();
+                ticket = admission; admission = null;
+                cancelled = entry.payload == null && !(entry.creation && entry.accepted && entry.metadataKnown); held = fatal;
                 if (cancelled) entries.remove(entry.sequence, entry);
                 else {
                     entry.phase = Phase.READY;
@@ -260,6 +318,7 @@ public final class SqlRecoveryJournal {
         boolean cancelIfUnused() {
             FeatureIO.Admission ticket;
             synchronized (SqlRecoveryJournal.this) {
+                if (entry.creation && entry.accepted) return false;
                 ticket = admission; admission = null;
                 if (ticket == null) return false;
                 entries.remove(entry.sequence);
@@ -269,6 +328,7 @@ public final class SqlRecoveryJournal {
         @Override public void close() { cancelIfUnused(); }
     }
     private void cancel(Entry entry, FeatureIO.Admission ticket) {
+        if (entry.recoverability != null) { entry.recoverability.close(); entry.recoverability = null; }
         // Removing a RESERVED barrier can expose accepted successors during shutdown.
         try { wake(); }
         catch (RuntimeException | Error failure) {
@@ -301,6 +361,7 @@ public final class SqlRecoveryJournal {
     /** Called on FeatureIO after accepted work, including its final shutdown drain. */
     public void drain() {
         if (!io.isOwnerThread()) throw new IllegalStateException("SQL recovery requires the feature owner");
+        repairAcceptedPublication();
         synchronized (this) { if (fatal || draining || !initialized || (cursor == 0 && !retryRequested && !bulkContinuing)) return; draining = true; }
         try {
             List<Entry> prefix = new ArrayList<>(), publication = new ArrayList<>();
@@ -326,7 +387,9 @@ public final class SqlRecoveryJournal {
                 try {
                     publish(entry);
                     synchronized (this) { entry.phase = Phase.DURABLE; }
+                    settleCreation(entry);
                 } catch (IOException journalFailure) {
+                    synchronized (this) { publicationFault = true; }
                     settleFatal("SQL recovery publication held; replay remains possible.");
                     return;
                 }
@@ -468,8 +531,42 @@ public final class SqlRecoveryJournal {
             case BULK -> throw new IllegalStateException("Bulk SQL requires bounded progress");
         }
     }
+    private void settleCreation(Entry entry) {
+        FeatureIO.Settlement fence;
+        synchronized (this) { fence = entry.recoverability; entry.recoverability = null; }
+        if (fence != null) fence.close();
+    }
+    /** Only publication-phase exact-byte repair is permitted. Never reset fatal or replay JDBC here. */
+    private void repairAcceptedPublication() {
+        List<Entry> prefix = new ArrayList<>();
+        synchronized (this) {
+            if (!closing || !fatal || !publicationFault || draining || !hasUnrecoverableCreations()) return;
+            for (Entry entry : entries.values()) {
+                if (entry.phase == Phase.RESERVED) break;
+                prefix.add(entry);
+            }
+        }
+        try {
+            if (!directory.equals(directory.toRealPath()) || !Files.isDirectory(directory, LinkOption.NOFOLLOW_LINKS)) return;
+            for (Entry entry : prefix) {
+                if (entry.phase != Phase.DURABLE) {
+                    publish(entry);
+                    synchronized (this) { entry.phase = Phase.DURABLE; }
+                }
+                settleCreation(entry);
+            }
+        } catch (IOException | RuntimeException unavailable) {
+            // Charged accepted ownership and the installation lease remain held. Close retries with bounded backoff.
+        }
+    }
     private Path file(long sequence) { return directory.resolve(String.format(java.util.Locale.ROOT, "%019d.sql", sequence)); }
     private void publish(Entry entry) throws IOException {
+        if (entry.creation && entry.payload == null) {
+            if (!entry.metadataKnown) throw new IOException("Creation metadata is not settled");
+            byte[] finalWire = encode(entry.sequence, Kind.UPSERT, entry.grave, false);
+            if (finalWire.length > entry.charge) throw new IOException("Creation metadata exceeds pre-admitted capacity");
+            entry.payload = finalWire;
+        }
         Path target = file(entry.sequence), temporary = directory.resolve(target.getFileName() + ".tmp");
         if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
             if (!Arrays.equals(readBounded(target), entry.payload)) throw new IOException("Conflicting recovery publication");

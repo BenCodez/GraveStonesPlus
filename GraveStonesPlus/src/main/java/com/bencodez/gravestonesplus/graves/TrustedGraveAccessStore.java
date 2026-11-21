@@ -17,7 +17,7 @@ public final class TrustedGraveAccessStore {
     private long operation;
     private boolean denyAll;
     public TrustedGraveAccessStore(GraveStonesPlus plugin) {
-        this(new DurableFeatureState(plugin.getFeatureIO(), new java.io.File(plugin.getDataFolder(), "selected-access.yml").toPath(), 4096), System::currentTimeMillis, plugin);
+        this(new DurableFeatureState(plugin.getFeatureIO(), plugin.getFeatureIO().storeRoot(plugin.getDataFolder().toPath()).resolve("selected-access.yml"), 4096), System::currentTimeMillis, plugin);
     }
     public TrustedGraveAccessStore(DurableFeatureState state, LongSupplier clock) { this(state, clock, null); }
     TrustedGraveAccessStore(DurableFeatureState state, LongSupplier clock, GraveStonesPlus plugin) {

@@ -10,12 +10,17 @@ import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.simpleapi.file.YMLFile;
 
 public class GraveLocations extends YMLFile {
+    private static File storeFile(AdvancedCorePlugin plugin) {
+        if (plugin instanceof GraveStonesPlus owner && owner.getFeatureIO() != null)
+            return owner.getFeatureIO().storeRoot(plugin.getDataFolder().toPath()).resolve("Graves.yml").toFile();
+        return new File(plugin.getDataFolder(), "Graves.yml");
+    }
 	public GraveLocations(AdvancedCorePlugin plugin) {
-		super(plugin, new File(plugin.getDataFolder(), "Graves.yml"), true);
+		super(plugin, storeFile(plugin), true);
 	}
 
     private GraveLocations(AdvancedCorePlugin plugin, org.bukkit.configuration.file.FileConfiguration prepared) {
-        super(plugin, new File(plugin.getDataFolder(), "Graves.yml"), plugin.getBukkitScheduler(), false);
+        super(plugin, storeFile(plugin), plugin.getBukkitScheduler(), false);
         setData(prepared);
     }
     public static GraveLocations prepare(AdvancedCorePlugin plugin, org.bukkit.configuration.file.FileConfiguration data) {

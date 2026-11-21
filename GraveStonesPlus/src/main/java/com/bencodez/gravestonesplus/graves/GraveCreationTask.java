@@ -12,6 +12,28 @@ public final class GraveCreationTask implements Runnable {
     private static final int PREPARING = 0, ACCEPTED = 1, RUNNING = 2, FINISHED = 3;
     private final GraveStonesPlus plugin;
     private final Runnable creation;
+    private SqlDeathCreation sqlDeath;
+    /** Internal death entry only; administrative/legacy constructors retain their existing path. */
+    public static GraveCreationTask death(GraveStonesPlus plugin,
+            com.bencodez.gravestonesplus.storage.GravesConfig record, org.bukkit.entity.Player recipient,
+            java.util.function.Consumer<Grave> success, java.util.function.Consumer<Grave> legacy) {
+        var task = new GraveCreationTask(plugin, record, legacy);
+        if (plugin.getStorageManager() != null && plugin.getStorageManager().isMySQL())
+            task.sqlDeath = new SqlDeathCreation(plugin, record, success);
+        task.recipient = recipient; return task;
+    }
+    private org.bukkit.entity.Player recipient;
+    public boolean capture(Runnable nativeMutation) {
+        if (sqlDeath != null) {
+            if (!sqlDeath.capture(nativeMutation)) return false;
+        } else {
+            if (phase.get() != PREPARING || !plugin.isEnabled()) return false;
+            nativeMutation.run();
+        }
+        accept(); return true;
+    }
+    public void commitLimit() { if (sqlDeath != null) sqlDeath.commitLimit(); }
+    public boolean hasSqlDeath() { return sqlDeath != null; }
     private final com.bencodez.gravestonesplus.storage.GravesConfig record;
     private final GraveRestoration restoration;
     private int priorGraves;
@@ -26,8 +48,8 @@ public final class GraveCreationTask implements Runnable {
         this.plugin = plugin; this.record = record; this.restoration = plugin.getGraveRestoration();
         this.creation = () -> {
             Grave grave = restoration == null ? new Grave(plugin, record) : restoration.creationGrave(record);
-            creation.accept(grave);
-            if (restoration != null) restoration.completeCreation(record);
+            if (sqlDeath != null) sqlDeath.create(grave);
+            else { creation.accept(grave); if (restoration != null) restoration.completeCreation(record); }
         };
     }
     public int priorGraves() { return priorGraves; }
@@ -43,6 +65,7 @@ public final class GraveCreationTask implements Runnable {
                     priorGraves = admission.priorGraves(); replacement = admission.replacement();
                 }
             }
+            if (sqlDeath != null && priorGraves >= plugin.getConfigFile().getGraveLimit()) sqlDeath.prepareLimit(replacement, recipient);
             // The legacy location overload interpreted its delay in seconds.
             // Preserve that delay explicitly while obtaining a cancellable handle.
             var scheduled = plugin.getBukkitScheduler().getFoliaLib().getImpl().runAtLocationTimer(
@@ -56,6 +79,7 @@ public final class GraveCreationTask implements Runnable {
     public void accept() { phase.compareAndSet(PREPARING, ACCEPTED); }
     public void cancel() {
         phase.set(FINISHED);
+        if (sqlDeath != null) sqlDeath.run();
         if (restoration != null) restoration.releaseCreation(record);
         var current = task.getAndSet(null);
         if (current != null) try { current.cancel(); }
@@ -70,6 +94,13 @@ public final class GraveCreationTask implements Runnable {
         if (phase.get() == FINISHED) { cancel(); return; }
         if (!phase.compareAndSet(ACCEPTED, RUNNING)) return;
         try { if (plugin.isEnabled()) creation.run(); }
-        finally { cancel(); }
+        finally {
+            if (sqlDeath == null) cancel();
+            else {
+                sqlDeath.callbackReturned();
+                phase.set(FINISHED);
+                var current = task.getAndSet(null); if (current != null) current.cancel();
+            }
+        }
     }
 }

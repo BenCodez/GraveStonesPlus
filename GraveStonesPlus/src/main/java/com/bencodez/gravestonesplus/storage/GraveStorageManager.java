@@ -14,6 +14,8 @@ import com.bencodez.gravestonesplus.graves.Grave;
 public class GraveStorageManager {
 
 	private final GraveStonesPlus plugin;
+    private final com.bencodez.gravestonesplus.graves.FeatureIO.Settlement backendRetirement;
+    private java.util.concurrent.CompletableFuture<Boolean> backendReady = java.util.concurrent.CompletableFuture.completedFuture(true);
 	private GraveStorageBackend backend;
 	private DataStorageType type = DataStorageType.FLATFILE;
     private record Recovery(List<GravesConfig> active, List<GravesConfig> broken) { }
@@ -174,6 +176,7 @@ public class GraveStorageManager {
 	 */
 	public GraveStorageManager(GraveStonesPlus plugin) {
 		this.plugin = plugin;
+        backendRetirement = plugin.getFeatureIO().ownsInstallationLease() ? plugin.getFeatureIO().retainUntilRecoverable() : null;
         plugin.getFeatureIO().onDrain(this::flushRetained);
 	}
 
@@ -197,12 +200,13 @@ public class GraveStorageManager {
 			backend = new FlatFileGraveStorageBackend(new GraveLocations(plugin));
 		}
 
-		backend.init();
         if (isMySQL()) {
+            GraveStorageBackend initializing = backend;
+            backendReady = plugin.getFeatureIO().submit(() -> { initializing.init(); return true; });
             SqlRecoveryJournal journal = new SqlRecoveryJournal(plugin.getFeatureIO(), backend,
-                    new java.io.File(plugin.getDataFolder(), "sql-recovery").toPath(), message -> plugin.getLogger().severe(message));
+                    plugin.getFeatureIO().storeRoot(plugin.getDataFolder().toPath()).resolve("sql-recovery"), message -> plugin.getLogger().severe(message));
             synchronized (this) { sqlJournal = journal; }
-        }
+        } else backend.init();
 	}
 
 	/**
@@ -234,7 +238,7 @@ public class GraveStorageManager {
             journal = sqlJournal;
         }
         if (journal == null) return java.util.concurrent.CompletableFuture.failedFuture(new IllegalStateException("SQL recovery unavailable"));
-        return journal.loaded().thenCompose(loaded -> {
+        return backendReady.thenCombine(journal.loaded(), (initialized, loaded) -> Boolean.TRUE.equals(initialized) && Boolean.TRUE.equals(loaded)).thenCompose(loaded -> {
             if (!Boolean.TRUE.equals(loaded)) return java.util.concurrent.CompletableFuture.<List<List<java.util.function.Supplier<GravesConfig>>>>failedFuture(new IllegalStateException("SQL recovery unavailable"));
             return plugin.getFeatureIO().submit(() -> {
                 synchronized (this) { if (closeRequested || backendClosed) throw new IllegalStateException("storage is closing"); }
@@ -402,7 +406,8 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
 	 * Close backend.
 	 */
 	public synchronized void close() {
-		if (backend == null || backendClosed || closeRequested) return;
+        if (backend == null) { if (backendRetirement != null) backendRetirement.close(); return; }
+		if (backendClosed || closeRequested) return;
 		// Closing is a terminal request, rather than an ordinary write admission.
 		// FeatureIO invokes the drain listener after all admitted work has run,
 		// including its final bounded shutdown drain when the queue is saturated.
@@ -424,6 +429,12 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
                 grave.getExp(), grave.getDeathMessage(), grave.getTime(), grave.isDestroyed(), grave.getDestroyedTime(),
                 grave.getDisplayUUID(), grave.getInteractUUID(), grave.getGraveDisplayType());
         copy.setWorldId(grave.getWorldId()); copy.prepareItemsForStorage(); return copy;
+    }
+    /** Internal death path: snapshot reward bytes once, before irreversible capture. */
+    public synchronized SqlRecoveryJournal.Reservation reserveSqlCreation(GravesConfig grave) {
+        if (!isMySQL() || backend == null || sqlJournal == null || closeRequested || backendClosed || restorationLoading
+                || !sqlJournal.isReady()) return null;
+        return sqlJournal.reserveCreation(snapshot(grave));
     }
     /** Reserve before changing gameplay state. Null is a definitive pre-admission rejection. */
     public synchronized SqlRecoveryJournal.Reservation reserveSqlTransition(SqlRecoveryJournal.Kind kind,
@@ -527,7 +538,7 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
             journal.drain();
             boolean close;
             synchronized (this) {
-                close = closeRequested && journal.isLoadComplete() && !journal.hasUncommittedReservations()
+                close = closeRequested && journal.isLoadComplete() && !journal.hasUncommittedReservations() && !journal.hasUnrecoverableCreations()
                         && !plugin.getFeatureIO().hasUnsubmittedAdmissions() && !plugin.getFeatureIO().hasQueuedWork();
             }
             if (close) { journal.retireAfterDrain(); closeBackendIfRequested(true); }
@@ -584,9 +595,11 @@ public synchronized void updateExistingGrave(GravesConfig grave, boolean broken)
         }
         try {
             if (toClose != null) toClose.close();
+            if (backendRetirement != null) backendRetirement.close();
         } catch (RuntimeException | Error failure) {
-            // The terminal close is intentionally at-most-once. The worker's
-            // bounded shutdown must not keep retrying a backend that rejected it.
+            // A failed close has unknown ownership. Do not retry a possibly
+            // partially closed backend or release its generation lease. Production
+            // unload deliberately remains held; process termination is not a clean drain.
             plugin.getLogger().severe("Grave backend close failed after storage drain.");
         }
     }

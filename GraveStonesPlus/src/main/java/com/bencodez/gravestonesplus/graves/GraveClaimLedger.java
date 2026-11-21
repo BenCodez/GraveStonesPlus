@@ -96,6 +96,37 @@ public final class GraveClaimLedger {
             return saved;
         });
     }
+    /** Death-limit preparation reserves capacity but creates no durable payout intent until capture commits. */
+    synchronized LimitPublication prepareLimit(String grave, UUID recipient, String evidence) {
+        if (recipient == null || evidence == null || evidence.length() > 350_000 || isBlocked(grave) || pending.size() >= 128) return null;
+        FeatureIO.Admission ticket = state.admit(); if (ticket == null) return null;
+        try {
+            pending.add(grave); return new LimitPublication(grave, recipient, evidence, ticket);
+        } catch (RuntimeException | Error failure) { pending.remove(grave); ticket.close(); throw failure; }
+    }
+    final class LimitPublication implements AutoCloseable {
+        private final String grave, evidence;
+        private final UUID recipient;
+        private final FeatureIO.Admission ticket;
+        private boolean used;
+        LimitPublication(String grave, UUID recipient, String evidence, FeatureIO.Admission ticket) {
+            this.grave = grave; this.recipient = recipient; this.evidence = evidence; this.ticket = ticket;
+        }
+        CompletableFuture<Boolean> commit() {
+            synchronized (GraveClaimLedger.this) { if (used) return CompletableFuture.completedFuture(false); used = true; }
+            return state.update(ticket, next -> {
+                if (next.containsKey(grave) || archived(grave)) return false;
+                next.put(grave, "QUEUED_LIMIT:" + recipient + ":" + evidence); return true;
+            }).thenApply(saved -> {
+                if (!saved && state.isReady()) synchronized (GraveClaimLedger.this) { pending.remove(grave); }
+                return saved;
+            });
+        }
+        @Override public void close() {
+            synchronized (GraveClaimLedger.this) { if (used) return; used = true; pending.remove(grave); }
+            ticket.close();
+        }
+    }
     /** Publish non-replayable ownership before the first world payout operation. */
     public CompletableFuture<Boolean> reserveQueuedLimit(String grave, UUID recipient) {
         return state.update(next -> {

@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
 
 import org.bukkit.Bukkit;
@@ -26,8 +27,12 @@ import com.bencodez.gravestonesplus.config.Config;
 import com.bencodez.gravestonesplus.events.GraveRemoveReason;
 import com.bencodez.gravestonesplus.graves.Grave;
 import com.bencodez.gravestonesplus.graves.GraveDisplayEntityHandle;
+import com.bencodez.gravestonesplus.graves.TrustedGraveAccess;
+import com.bencodez.gravestonesplus.graves.TrustedGraveAccessStore;
+import com.bencodez.gravestonesplus.graves.GraveReminderStore;
 import com.bencodez.gravestonesplus.listeners.GraveBlockProtectionListener;
 import com.bencodez.gravestonesplus.listeners.GraveClaimListener;
+import com.bencodez.gravestonesplus.listeners.GraveCleanupListener;
 import com.bencodez.gravestonesplus.listeners.PlayerDeathListener;
 import com.bencodez.gravestonesplus.nbt.NBTConfigManager;
 import com.bencodez.gravestonesplus.pluginhandles.PvpManagerHandle;
@@ -59,10 +64,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private CommandLoader commandLoader;
 
 	@Getter
-	private List<Grave> graves;
+	private List<Grave> graves = Collections.synchronizedList(new ArrayList<>());
 
 	@Getter
-	private List<Grave> brokenGraves;
+	private List<Grave> brokenGraves = Collections.synchronizedList(new ArrayList<>());
 
 	@Getter
 	private GraveStorageManager storageManager;
@@ -77,8 +82,14 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Getter
 	private GraveDisplayEntityHandle graveDisplayEntityHandler;
 
-	@Getter
 	private NBTConfigManager nbtConfigManager;
+    private record ReloadFiles(String config, String graves, String nbt) { }
+    private record RuntimeConfiguration(Config config, GraveLocations graves, NBTConfigManager nbt) { }
+    private volatile RuntimeConfiguration runtimeConfiguration;
+    public NBTConfigManager getNbtConfigManager() {
+        RuntimeConfiguration current = runtimeConfiguration;
+        return current == null ? nbtConfigManager : current.nbt();
+    }
 
 	@Getter
 	private boolean nbtAPIHooked = false;
@@ -86,6 +97,51 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	@Getter
 	private PlayerBreakManager playerBreakManager;
 
+	@Getter
+	private TrustedGraveAccessStore trustedGraveAccessStore;
+    @Getter private com.bencodez.gravestonesplus.graves.FeatureIO featureIO;
+    private volatile CompletableFuture<Void> pendingReload;
+    private volatile boolean reloadRetired;
+    private java.util.Set<Runnable> recreationAttempts;
+    /** Runtime ownership includes historical objects outside the current grave lists. */
+    public synchronized boolean registerRecreationAttempt(Runnable retirement) {
+        if (reloadRetired || !isEnabled()) return false;
+        if (recreationAttempts == null) recreationAttempts = java.util.Collections.newSetFromMap(new java.util.IdentityHashMap<>());
+        return recreationAttempts.size() < 128 && recreationAttempts.add(retirement);
+    }
+    public synchronized void unregisterRecreationAttempt(Runnable retirement) {
+        if (recreationAttempts != null) recreationAttempts.remove(retirement);
+    }
+    public void retireRecreationAttempts() {
+        java.util.List<Runnable> attempts;
+        synchronized (this) {
+            reloadRetired = true;
+            attempts = recreationAttempts == null ? java.util.List.of() : java.util.List.copyOf(recreationAttempts);
+            if (recreationAttempts != null) recreationAttempts.clear();
+        }
+        attempts.forEach(Runnable::run);
+    }
+
+    @Getter private com.bencodez.gravestonesplus.graves.GraveMarkerCleanup markerCleanup;
+    @Getter private com.bencodez.gravestonesplus.graves.GraveRestoration graveRestoration;
+    @Getter private com.bencodez.gravestonesplus.graves.GraveClaimLedger graveClaimLedger;
+    @Getter private com.bencodez.gravestonesplus.graves.GraveNavigation graveNavigation;
+
+	@Getter
+	private GraveReminderStore graveReminderStore;
+	private com.bencodez.gravestonesplus.listeners.GraveReminderListener graveReminderListener;
+
+    /** Restored records were already persisted; admission never republishes a partial startup list. */
+    public void restoreActiveRecord(Grave grave) { if (!containsByKey(graves, grave)) graves.add(grave); }
+    public void restoreBrokenRecord(Grave grave) { if (!containsByKey(brokenGraves, grave)) brokenGraves.add(grave); }
+    /** Withdraw only this restored instance; its backend record remains pending, not broken. */
+    public void withholdRestoredRecord(Grave grave) {
+        synchronized (graves) { graves.remove(grave); }
+    }
+
+
+    /** Internal completion: SQL was already admitted and acknowledged; never issue a second UPSERT. */
+    public void publishSqlCreatedGrave(Grave grave) { if (!containsByKey(graves, grave)) graves.add(grave); }
 	public void addGrave(Grave grave) {
 		if (grave == null || grave.getGravesConfig() == null) {
 			return;
@@ -100,54 +156,107 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	}
 
 	public void removeGrave(Grave grave) {
-		if (grave == null || grave.getGravesConfig() == null) {
-			return;
-		}
+        if (grave == null || grave.getGravesConfig() == null) return;
+        if (storageManager.isMySQL()) {
+            var admitted = storageManager.reserveSqlTransition(
+                    com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Kind.UPDATE, grave.getGravesConfig(), true);
+            if (admitted == null) throw new java.util.concurrent.RejectedExecutionException("SQL removal capacity unavailable; lists unchanged");
+            removeGrave(grave, admitted);
+        } else {
+            moveToBroken(grave);
+            storageManager.saveBrokenGravesFromObjects(brokenGraves);
+            storageManager.saveGravesFromObjects(graves);
+        }
+    }
+    /** Internal completion path for callers which reserved SQL capacity before payout.
+     * The durable claim ledger remains the recovery authority if this acknowledgment is held. */
+    public java.util.concurrent.CompletableFuture<Boolean> removeGrave(Grave grave,
+            com.bencodez.gravestonesplus.storage.SqlRecoveryJournal.Reservation admitted) {
+        java.util.Objects.requireNonNull(admitted, "SQL removal admission");
+        moveToBroken(grave);
+        return admitted.commit();
+    }
+    private void moveToBroken(Grave grave) {
+        removeFromListByKey(graves, grave);
+        if (!containsByKey(brokenGraves, grave)) brokenGraves.add(grave);
+    }
 
-		// Remove from active list by key (not object identity)
-		removeFromListByKey(graves, grave);
-
-		// Add to broken list only once
-		if (!containsByKey(brokenGraves, grave)) {
-			brokenGraves.add(grave);
-		}
-
-		if (storageManager.isMySQL()) {
-			storageManager.updateExistingGrave(grave.getGravesConfig(), true);
-		} else {
-			storageManager.saveBrokenGravesFromObjects(brokenGraves);
-			storageManager.saveGravesFromObjects(graves);
-		}
+    /**
+     * Initiates asynchronous recreation. This legacy void method does not
+     * guarantee changed state before return; await the future overload instead.
+     */
+	public void recreateBrokenGrave(Grave grave) {
+		recreateBrokenGrave(grave, null);
 	}
 
-	public void recreateBrokenGrave(Grave grave) {
+    public java.util.concurrent.CompletableFuture<Boolean> recreateBrokenGrave(Grave grave, Player actor) {
+		return recreateBrokenGrave(grave, actor, actor != null);
+	}
+
+    /** Common recovery wrapper with an explicit marker policy for legacy callers. */
+    public java.util.concurrent.CompletableFuture<Boolean> recreateBrokenGrave(Grave grave, Player actor,
+            boolean createMarker) {
 		if (grave == null || grave.getGravesConfig() == null) {
-			return;
+			return java.util.concurrent.CompletableFuture.completedFuture(false);
 		}
 
-		grave.getGravesConfig().setDestroyed(false);
-
+        if (storageManager.isMySQL()) return grave.recreateAsync(actor, createMarker);
+        var completion = grave.recreateAsync(actor, createMarker).thenCompose(restored -> {
+        if (!restored) return java.util.concurrent.CompletableFuture.completedFuture(false);
 		if (!containsByKey(graves, grave)) {
 			graves.add(grave);
 		}
 		removeFromListByKey(brokenGraves, grave);
 
 		if (storageManager.isMySQL()) {
-			storageManager.setBroken(grave.getGravesConfig(), false);
-		} else {
-			storageManager.saveBrokenGravesFromObjects(brokenGraves);
-			storageManager.saveGravesFromObjects(graves);
+            return storageManager.saveRecreatedGrave(grave.getGravesConfig());
 		}
+		return storageManager.saveSnapshotFromObjects(graves, brokenGraves);
+        });
+		completion.whenComplete((success, failure) -> {
+			if (failure != null) {
+				getLogger().warning("Failed to recreate grave " + grave.getGravesConfig().getLocation()
+						+ ": " + failure.getMessage());
+			}
+		});
+		// Caller cancellation/completion affects only observation. The internal stage
+		// must still move the lists and request persistence after recreation commits.
+		return completion.copy();
 	}
+
+    /** Called only after SQL acknowledgment on the recreation's location owner; no second storage admission. */
+    public void publishSqlRecreatedGrave(Grave grave) {
+        publishSqlRecreation(grave, () -> true);
+    }
+    /** The acceptance callback contains only the lifecycle check and already-admitted terminal acknowledgment. */
+    public boolean publishSqlRecreatedGrave(Grave grave, java.util.function.BooleanSupplier accept) {
+        return publishSqlRecreation(grave, accept);
+    }
+    private boolean publishSqlRecreation(Grave grave, java.util.function.BooleanSupplier accept) {
+        // Snapshot only matching references: publication failure must not leave a historical grave in the active list.
+        String identity = buildGraveKey(grave);
+        java.util.List<Grave> priorActive = snapshot(graves).stream().filter(value -> value != null && value.getGravesConfig() != null && identity.equals(buildGraveKey(value))).toList();
+        java.util.List<Grave> priorBroken = snapshot(brokenGraves).stream().filter(value -> value != null && value.getGravesConfig() != null && identity.equals(buildGraveKey(value))).toList();
+        try {
+            if (!containsByKey(graves, grave)) graves.add(grave);
+            removeFromListByKey(brokenGraves, grave);
+            if (!accept.getAsBoolean()) throw new java.util.concurrent.CancellationException("Recreation publication retired");
+            return true;
+        } catch (RuntimeException | Error failure) {
+            removeFromListByKey(graves, grave); removeFromListByKey(brokenGraves, grave);
+            graves.addAll(priorActive); brokenGraves.addAll(priorBroken);
+            throw failure;
+        }
+    }
 
 	private boolean containsByKey(List<Grave> list, Grave grave) {
 		if (list == null || grave == null || grave.getGravesConfig() == null
 				|| grave.getGravesConfig().getLocation() == null
-				|| grave.getGravesConfig().getLocation().getWorld() == null) {
+				|| grave.getGravesConfig().getWorldId() == null) {
 			return false;
 		}
 		String key = buildGraveKey(grave);
-		for (Grave g : list) {
+		for (Grave g : snapshot(list)) {
 			if (g != null && g.getGravesConfig() != null && key.equals(buildGraveKey(g))) {
 				return true;
 			}
@@ -158,16 +267,11 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	private void removeFromListByKey(List<Grave> list, Grave grave) {
 		if (list == null || grave == null || grave.getGravesConfig() == null
 				|| grave.getGravesConfig().getLocation() == null
-				|| grave.getGravesConfig().getLocation().getWorld() == null) {
+				|| grave.getGravesConfig().getWorldId() == null) {
 			return;
 		}
-		String key = buildGraveKey(grave);
-		for (int i = list.size() - 1; i >= 0; i--) {
-			Grave g = list.get(i);
-			if (g != null && g.getGravesConfig() != null && key.equals(buildGraveKey(g))) {
-				list.remove(i);
-			}
-		}
+        String key = buildGraveKey(grave);
+        synchronized (list) { list.removeIf(g -> g != null && g.getGravesConfig() != null && key.equals(buildGraveKey(g))); }
 	}
 
 	public void callEventSync(final Event event) {
@@ -183,13 +287,54 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	private String buildGraveKey(Grave grave) {
 		GravesConfig cfg = grave.getGravesConfig();
-		return cfg.getUuid().toString() + "|" + cfg.getLocation().getWorld().getUID().toString() + "|"
+		return cfg.getUuid().toString() + "|" + cfg.getWorldId().toString() + "|"
 				+ cfg.getLocation().getBlockX() + "," + cfg.getLocation().getBlockY() + ","
 				+ cfg.getLocation().getBlockZ() + "|" + cfg.getTime();
 	}
 
 	@Override
 	public void onPostLoad() {
+		if (featureIO != null && !featureIO.isGenerationReleased()) throw new IllegalStateException("Previous grave disk owner is still draining; cannot reload selected state yet");
+        graves = Collections.synchronizedList(new ArrayList<Grave>());
+        brokenGraves = Collections.synchronizedList(new ArrayList<Grave>());
+        selectedInitialized = false;
+        var owner = new com.bencodez.gravestonesplus.graves.FeatureIO(getDataFolder().toPath());
+        featureIO = owner; reloadRetired = false;
+        owner.ready().whenComplete((available, failure) -> {
+            if (failure != null || !Boolean.TRUE.equals(available)) {
+                getLogger().severe("Grave storage initialization blocked by installation generation ownership.");
+                try { getBukkitScheduler().runTask(this, () -> {
+                    if (featureIO == owner && !reloadRetired && isEnabled()) Bukkit.getPluginManager().disablePlugin(this);
+                }); } catch (RuntimeException retired) { /* No selected state or lease was acquired. */ }
+                return;
+            }
+            try { getBukkitScheduler().runTask(this, () -> {
+                if (featureIO != owner || reloadRetired || !isEnabled()) return;
+                try { initializeSelectedState(); }
+                catch (RuntimeException | Error unavailable) {
+                    getLogger().severe("Grave storage initialization incomplete; existing records remain withheld.");
+                    Bukkit.getPluginManager().disablePlugin(this);
+                }
+            }); } catch (RuntimeException rejected) {
+                reloadRetired = true;
+                owner.abandonStartup();
+                getLogger().severe("Grave storage initialization owner is unavailable.");
+            }
+        });
+    }
+    private boolean selectedInitialized;
+    private void initializeSelectedState() {
+        gravesConfig = new GraveLocations(this);
+        graveClaimLedger = new com.bencodez.gravestonesplus.graves.GraveClaimLedger(
+            new com.bencodez.gravestonesplus.graves.DurableFeatureState(featureIO,
+                featureIO.storeRoot(getDataFolder().toPath()).resolve("selected-claims.yml"), 8192),
+            featureIO.storeRoot(getDataFolder().toPath()).resolve("selected-claim-archive"));
+        markerCleanup = new com.bencodez.gravestonesplus.graves.GraveMarkerCleanup(this,
+            new com.bencodez.gravestonesplus.graves.DurableFeatureState(featureIO,
+                featureIO.storeRoot(getDataFolder().toPath()).resolve("selected-marker-cleanup.yml"), 8192));
+        graveNavigation = new com.bencodez.gravestonesplus.graves.GraveNavigation(this);
+        trustedGraveAccessStore = new TrustedGraveAccessStore(this);
+		graveReminderStore = new GraveReminderStore(this);
 		graveDisplayEntityHandler = new GraveDisplayEntityHandle(this);
 
 		graves = Collections.synchronizedList(new ArrayList<Grave>());
@@ -198,85 +343,9 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		storageManager = new GraveStorageManager(this);
 		storageManager.init();
 
-		// Load broken graves
-		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-			@Override
-			public void run() {
-				List<GravesConfig> gravesbroken1 = storageManager.loadBrokenGraves();
-				if (gravesbroken1 != null) {
-					for (GravesConfig gr : gravesbroken1) {
-						Grave grave = new Grave(plugin, gr);
-						try {
-							grave.loadChunk(false);
-						} catch (Exception e) {
-							e.printStackTrace();
-						}
-						grave.removeHologramsAround();
-						if (gr.isDestroyed()) {
-							if (gr.getDestroyedTime() == 0) {
-								gr.setDestroyedTime(System.currentTimeMillis());
-								debug("Fixed broken grave time: " + grave.getGravesConfig().getLocation());
-								debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
-								brokenGraves.add(grave);
-							} else {
-								ParsedDuration duration = ParsedDuration.parse(configFile.getBrokenGraveTimeLimit(),
-										TimeUnit.HOURS);
-								long limitMillis = duration.getMillis();
-
-								if (System.currentTimeMillis() - gr.getDestroyedTime() > limitMillis) {
-									debug("Broken Grave at " + grave.getGravesConfig().getLocation()
-											+ " has reached it's time limit and will be removed");
-								} else {
-									debug("Broken Grave loaded: " + grave.getGravesConfig().getLocation());
-									brokenGraves.add(grave);
-								}
-							}
-						}
-					}
-					gravesConfig.setBrokenGraves(brokenGraves);
-				}
-			}
-		});
-
-		// Load active graves
-		plugin.getBukkitScheduler().runTask(plugin, new Runnable() {
-			@Override
-			public void run() {
-				List<GravesConfig> graves1 = storageManager.loadGraves();
-				if (graves1 != null) {
-					for (GravesConfig gr : graves1) {
-						Grave grave = new Grave(plugin, gr);
-						try {
-							grave.loadChunk(false);
-						} catch (Exception e) {
-							e.printStackTrace();
-						}
-						grave.removeHologramsAround();
-						grave.loadBlockMeta(gr.getLocation().getBlock());
-
-						// Display-entities: ensure display entity is present if block is barrier
-						grave.checkBlockDisplayAndFixIfMissing();
-
-						if (grave.isValid()) {
-							grave.createHologram();
-							grave.checkTimeLimit(getConfigFile().getGraveTimeLimit());
-							graves.add(grave);
-							debug("Grave loaded: " + grave.getGravesConfig().getLocation());
-
-						} else {
-							// Only remove if it truly isn't a grave anymore
-							grave.removeGrave(GraveRemoveReason.INVALID);
-							debug("Grave at " + grave.getGravesConfig().getLocation() + " is not valid");
-						}
-					}
-
-					// For flatfile, save once after load to persist any displayUUID fixes
-					if (!storageManager.isMySQL()) {
-						storageManager.saveGravesFromObjects(graves);
-					}
-				}
-			}
-		});
+        graveRestoration = new com.bencodez.gravestonesplus.graves.GraveRestoration(this, storageManager);
+        graveRestoration.start();
+        selectedInitialized = true;
 
 		commandLoader = new CommandLoader(this);
 		commandLoader.loadCommands();
@@ -286,7 +355,11 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 		Bukkit.getPluginManager().registerEvents(new PlayerDeathListener(this), this);
 		Bukkit.getPluginManager().registerEvents(new GraveClaimListener(this), this);
+		Bukkit.getPluginManager().registerEvents(new GraveCleanupListener(this), this);
 		Bukkit.getPluginManager().registerEvents(new GraveBlockProtectionListener(this), this);
+		graveReminderListener = new com.bencodez.gravestonesplus.listeners.GraveReminderListener(this);
+		Bukkit.getPluginManager().registerEvents(graveReminderListener, this);
+		graveReminderListener.start();
 
 		plugin.debug("Graves type: " + configFile.getGraveDisplayTypeEnum().name());
 
@@ -298,21 +371,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 				@Override
 				public void run() {
 					if (getConfigFile().isGlowingEffectNearGrave() && plugin != null) {
-						for (int i = graves.size() - 1; i >= 0; i--) {
-							Grave grave = graves.get(i);
-							if (!grave.isRemove()) {
-								if (grave.isValid()) {
-									grave.checkGlowing();
-								} else {
-									plugin.getBukkitScheduler().runTask(plugin, () -> {
-										;
-										grave.removeGrave(GraveRemoveReason.INVALID);
-										grave.removeHologramsAround();
-
-									}, grave.getGravesConfig().getLocation());
-								}
-							}
-						}
+                        for (Grave grave : activeGraveSnapshot()) refreshGraveGlow(grave);
 					} else {
 						cancel();
 					}
@@ -373,19 +432,31 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		plugin = this;
 		configFile = new Config(this);
 		configFile.reloadData();
-		gravesConfig = new GraveLocations(this);
 		nbtConfigManager = new NBTConfigManager(this);
 		updateAdvancedCoreHook();
 	}
 
 	@Override
 	public void onUnLoad() {
+        synchronized (this) {
+            reloadRetired = true;
+            CompletableFuture<Void> reload = pendingReload;
+            if (reload != null) reload.completeExceptionally(new IllegalStateException("Grave reload lifecycle retired"));
+        }
+
+        retireRecreationAttempts();
+        for (Grave grave : activeGraveSnapshot()) grave.retireAcknowledgments();
+        for (Grave grave : brokenGraveSnapshot()) grave.retireAcknowledgments();
+		if (graveRestoration != null) graveRestoration.retire();
+        if (markerCleanup != null) markerCleanup.retire();
+		if (graveReminderListener != null) graveReminderListener.stop();
+		if (graveReminderStore != null) graveReminderStore.close();
 		if (playerBreakManager != null) {
 			playerBreakManager.stop();
 		}
 
 		// For flatfile, persist lists once at shutdown.
-		if (storageManager != null && !storageManager.isMySQL()) {
+		if (selectedInitialized && storageManager != null && !storageManager.isMySQL()) {
 			storageManager.saveBrokenGravesFromObjects(brokenGraves);
 			storageManager.saveGravesFromObjects(graves);
 		}
@@ -394,7 +465,8 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 			storageManager.close();
 		}
 
-		for (Grave grave : graves) {
+        if (featureIO != null) featureIO.close();
+		for (Grave grave : activeGraveSnapshot()) {
 			grave.removeHologram();
 			grave.removeTimer();
 		}
@@ -403,45 +475,151 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 	}
 
 	@Override
-	public void reload() {
-		configFile.reloadData();
-		gravesConfig.reloadData();
-		nbtConfigManager.reloadConfig();
-		updateAdvancedCoreHook();
-		reloadAdvancedCore(false);
-	}
+    public void reload() {
+        reloadAsync();
+    }
+
+    /**
+     * Reloads the files off-thread and completes after the Bukkit owner has
+     * published the new configuration. The legacy void method initiates this
+     * work asynchronously; callers requiring new settings must await this future.
+     * Its descriptor is preserved, but synchronous completion is not promised.
+     */
+    public CompletableFuture<Void> reloadAsync() {
+        final CompletableFuture<Void> completion;
+        final com.bencodez.gravestonesplus.graves.FeatureIO diskOwner;
+        synchronized (this) {
+            if (reloadRetired || !isEnabled() || featureIO == null) return CompletableFuture.failedFuture(
+                    new IllegalStateException("Grave configuration lifecycle is unavailable"));
+            if (pendingReload != null && !pendingReload.isDone()) return CompletableFuture.failedFuture(
+                    new IllegalStateException("A grave configuration reload is already pending"));
+            completion = new CompletableFuture<>();
+            pendingReload = completion;
+            diskOwner = featureIO;
+            if (playerBreakManager != null) playerBreakManager.invalidateAuthorization();
+        }
+        try {
+            diskOwner.submit(() -> {
+                java.io.File nbtRules = new java.io.File(getDataFolder(), "nbt_rules.yml");
+                if (!nbtRules.exists()) saveResource("nbt_rules.yml", false);
+                return new ReloadFiles(readReloadFile(configFile.getdFile()),
+                        readReloadFile(gravesConfig.getdFile()), readReloadFile(nbtRules));
+            }).whenComplete((loaded, failure) -> {
+                if (failure != null) {
+                    getLogger().severe("Grave configuration reload failed; inspect configuration before retrying.");
+                    completion.completeExceptionally(failure);
+                    return;
+                }
+                try {
+                    getBukkitScheduler().runTask(this, () -> {
+                        if (reloadRetired || !isEnabled() || featureIO != diskOwner || pendingReload != completion || completion.isDone()) {
+                            completion.completeExceptionally(new IllegalStateException("Grave reload lifecycle retired"));
+                            return;
+                        }
+                        RuntimeConfiguration previous = runtimeConfiguration;
+                        boolean published = false;
+                        try {
+                            Config preparedConfig = Config.prepare(this, parseReloadFile(loaded.config()));
+                            GraveLocations preparedGraves = GraveLocations.prepare(this, parseReloadFile(loaded.graves()));
+                            NBTConfigManager preparedNbt = NBTConfigManager.prepare(this,
+                                    parseReloadFile(loaded.nbt()), preparedConfig.getKeepItemsWithLore());
+                            runtimeConfiguration = new RuntimeConfiguration(preparedConfig, preparedGraves, preparedNbt);
+                            published = true;
+                            updateAdvancedCoreHook(); reloadAdvancedCore(false);
+                            for (Grave grave : activeGraveSnapshot()) getBukkitScheduler().runTask(this,
+                                    () -> grave.checkTimeLimit(getConfigFile().getGraveTimeLimit()), grave.getGravesConfig().getLocation());
+                            completion.complete(null);
+                        } catch (RuntimeException ownerFailure) {
+                            if (published) {
+                                runtimeConfiguration = previous;
+                                try { updateAdvancedCoreHook(); }
+                                catch (RuntimeException rollbackFailure) { ownerFailure.addSuppressed(rollbackFailure); }
+                            }
+                            getLogger().severe("Grave reload owner publication failed; inspect configuration before retrying.");
+                            completion.completeExceptionally(ownerFailure);
+                        }
+                    });
+                } catch (RuntimeException schedulingFailure) {
+                    completion.completeExceptionally(schedulingFailure);
+                }
+            });
+        } catch (RuntimeException admissionFailure) {
+            completion.completeExceptionally(admissionFailure);
+        }
+        // Observers cannot cancel or forge the internal publication boundary.
+        return completion.copy();
+    }
+
+    /** Read bytes only on I/O; Bukkit YAML deserialization runs on the publication owner. */
+    private static String readReloadFile(java.io.File file) {
+        final int limit = 16 * 1024 * 1024;
+        try (var input = java.nio.file.Files.newInputStream(file.toPath())) {
+            byte[] bytes = input.readNBytes(limit + 1);
+            if (bytes.length > limit) throw new IllegalStateException("Grave reload file exceeds capacity");
+            return new String(bytes, java.nio.charset.StandardCharsets.UTF_8);
+        } catch (java.io.IOException failure) {
+            throw new IllegalStateException("Grave configuration file cannot be read", failure);
+        }
+    }
+    private static org.bukkit.configuration.file.YamlConfiguration parseReloadFile(String text) {
+        var data = new org.bukkit.configuration.file.YamlConfiguration();
+        try { data.loadFromString(text); return data; }
+        catch (org.bukkit.configuration.InvalidConfigurationException failure) {
+            throw new IllegalStateException("Grave configuration file cannot be parsed", failure);
+        }
+    }
 
 	private void updateAdvancedCoreHook() {
 		getJavascriptEngine().put("GraveStonesPlus", this);
-		setConfigData(new YMLConfig(plugin, configFile.getData()) {
+		setConfigData(new YMLConfig(plugin, getConfigFile().getData()) {
 			@Override
 			public void setValue(String path, Object value) {
-				configFile.setValue(path, value);
+				getConfigFile().setValue(path, value);
 			}
 
 			@Override
 			public void saveData() {
-				configFile.saveData();
+				getConfigFile().saveData();
 			}
 
 			@Override
 			public void createSection(String key) {
-				configFile.createSection(key);
+				getConfigFile().createSection(key);
 			}
 		});
 		setLoadUserData(false);
 		setLoadVault(false);
 	}
 
-	@Getter
 	private Config configFile;
+    public Config getConfigFile() {
+        RuntimeConfiguration current = runtimeConfiguration;
+        return current == null ? configFile : current.config();
+    }
 
-	@Getter
 	private GraveLocations gravesConfig;
+    public GraveLocations getGravesConfig() {
+        RuntimeConfiguration current = runtimeConfiguration;
+        return current == null ? gravesConfig : current.graves();
+    }
 
+    private List<Grave> limitGraveSnapshot() {
+        List<Grave> result = activeGraveSnapshot();
+        if (getGraveRestoration() == null) return result;
+        java.util.Set<String> identities = new java.util.HashSet<>();
+        for (Grave grave : result) identities.add(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()));
+        for (Grave grave : getGraveRestoration().pendingActiveForLimits()) {
+            String identity = com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig());
+            if (identities.add(identity)) result.add(grave);
+        }
+        return result;
+    }
 	public int numberOfGraves(UUID uuid) {
 		int num = 0;
-		for (Grave grave : getGraves()) {
+		for (Grave grave : limitGraveSnapshot()) {
+            if (grave.isRemove() || grave.getGravesConfig().isDestroyed() || grave.isLimitPayoutPending()
+                    || (getGraveRestoration() != null && (getGraveRestoration().hasPendingLimitRemoval(grave)
+                        || getGraveRestoration().isCreationReplacement(grave)))) continue;
 			if (grave.getGravesConfig().getUuid().equals(uuid)) {
 				num++;
 			}
@@ -451,7 +629,10 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	public Grave getOldestGrave(UUID uuid) {
 		Grave oldest = null;
-		for (Grave grave : getGraves()) {
+		for (Grave grave : limitGraveSnapshot()) {
+            if (grave.isRemove() || grave.getGravesConfig().isDestroyed() || grave.isLimitPayoutPending()
+                    || (getGraveRestoration() != null && (getGraveRestoration().hasPendingLimitRemoval(grave)
+                        || getGraveRestoration().isCreationReplacement(grave)))) continue;
 			if (grave.getGravesConfig().getUuid().equals(uuid)) {
 				if (oldest == null) {
 					oldest = grave;
@@ -466,7 +647,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	public List<Grave> getGraves(Player player) {
 		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
-		for (Grave grave : getGraves()) {
+		for (Grave grave : activeGraveSnapshot()) {
 			if (grave.isOwner(player)) {
 				ownedGraves.add(grave);
 			}
@@ -474,9 +655,16 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		return ownedGraves;
 	}
 
+	/** Graves the player may navigate to; recovery is checked separately. */
+	public List<Grave> getAccessibleGraves(Player player) {
+		ArrayList<Grave> result = new ArrayList<Grave>();
+		for (Grave grave : activeGraveSnapshot()) if (canTrack(grave, player)) result.add(grave);
+		return result;
+	}
+
 	public List<Grave> getBrokenGraves(Player player) {
 		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
-		for (Grave grave : getBrokenGraves()) {
+		for (Grave grave : brokenGraveSnapshot()) {
 			if (grave.isOwner(player)) {
 				ownedGraves.add(grave);
 			}
@@ -486,7 +674,7 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 
 	public List<Grave> getGraves(String player) {
 		ArrayList<Grave> ownedGraves = new ArrayList<Grave>();
-		for (Grave grave : getGraves()) {
+		for (Grave grave : activeGraveSnapshot()) {
 			if (grave.isOwner(player)) {
 				ownedGraves.add(grave);
 			}
@@ -506,4 +694,37 @@ public class GraveStonesPlus extends AdvancedCorePlugin {
 		}
 		return cGrave;
 	}
+
+    private static List<Grave> snapshot(List<Grave> list) { synchronized (list) { return new ArrayList<>(list); } }
+    public List<Grave> activeGraveSnapshot() { synchronized (graves) { return new ArrayList<>(graves); } }
+    public List<Grave> brokenGraveSnapshot() { synchronized (brokenGraves) { return new ArrayList<>(brokenGraves); } }
+    /** Startup logical records may be unloaded; native glow/marker work stays on their region. */
+    public void refreshGraveGlow(Grave grave) {
+        org.bukkit.Location location = grave.getGravesConfig().getLocation();
+        if (location == null || location.getWorld() == null) return;
+        getBukkitScheduler().runTask(this, () -> {
+            if (!isEnabled() || grave.isRemove() || grave.getGravesConfig().isDestroyed()
+                    || !getConfigFile().isGlowingEffectNearGrave()
+                    || !location.getWorld().isChunkLoaded(location.getBlockX() >> 4, location.getBlockZ() >> 4)) return;
+            if (grave.isValid()) grave.checkGlowing();
+            else if (graveRestoration != null) graveRestoration.retainMarkerRepair(grave);
+        }, location);
+    }
+    /** Eligibility reads only stored state; never probes blocks or loads chunks. */
+    public boolean isLiveGrave(Grave grave) {
+        if (grave == null || grave.isRemove() || grave.getGravesConfig().isDestroyed()
+                || com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()) == null
+                || storageManager != null && storageManager.isRecreationPending(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()))) return false;
+        long deadline = grave.getExpiryDeadline();
+        if (deadline > 0 && deadline <= System.currentTimeMillis()) return false;
+        synchronized (graves) { return graves.contains(grave); }
+    }
+    public boolean canRecover(Grave grave, Player player) {
+        return isLiveGrave(grave) && player != null && (grave.isOwner(player)
+                || trustedGraveAccessStore.allows(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()), player.getUniqueId(), TrustedGraveAccess.Kind.RECOVER));
+    }
+    public boolean canTrack(Grave grave, Player player) {
+        return isLiveGrave(grave) && player != null && !graveClaimLedger.isBlocked(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()))
+                && (grave.isOwner(player) || trustedGraveAccessStore.allows(com.bencodez.gravestonesplus.graves.GraveIdentity.of(grave.getGravesConfig()), player.getUniqueId(), TrustedGraveAccess.Kind.TRACK));
+    }
 }

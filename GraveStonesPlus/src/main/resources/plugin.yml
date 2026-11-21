@@ -15,4 +15,15 @@ permissions:
   GraveStonesPlus.AllowGrave:
     description: Permission to have graves
     default: true
-    
+  GraveStonesPlus.Trust:
+    description: Grant bounded per-grave helper access
+    default: false
+  GraveStonesPlus.Trust.Revoke:
+    description: Revoke bounded per-grave helper access
+    default: false
+  GraveStonesPlus.Track:
+    description: Track an authorized grave
+    default: true
+  GraveStonesPlus.InspectItem:
+    description: Inspect held item rule context
+    default: false
